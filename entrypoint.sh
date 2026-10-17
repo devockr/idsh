@@ -147,21 +147,13 @@ for f in /home/app/* /home/app/.[!.]*; do
   chown -h "$PUID:$PGID" "$f" 2> /dev/null || true
 done
 
-# The state directory is a bind mount, so the loop above skips it — and this one file has to be
-# readable by the uid dsh drops to. It is named here on purpose: anything recursive would walk
-# everything cached beside it on every start, which is the whole reason `usermod -u` is gone.
-#
-# A symlink is an error rather than something to resolve: `chown` and `chmod` follow one named on the
-# command line, so a link planted in a mounted directory (to /etc/shadow, say) would be handed to PUID
-# — and a link is not a shape this file is meant to have.
+# The credentials file is the deployment's, not this script's: its owner and mode are whatever the
+# operator gave it, and dsh reads it as PUID or says why it cannot. Only a symlink is worth a line of
+# output — a credentials file linked to a mounted secret is a normal shape, and silence there would
+# look like a permission problem the script had chosen not to fix.
 CRED="$HOME/.dsh/.credentials.yaml"
 if [ -L "$CRED" ]; then
-  echo "entrypoint: $CRED is a symlink; it must be a regular file" >&2
-  exit 1
-fi
-if [ -f "$CRED" ]; then
-  chown "$PUID:$PGID" "$CRED" 2> /dev/null || true
-  chmod 600 "$CRED"
+  echo "entrypoint: $CRED is a symlink; leaving it to the deployment" >&2
 fi
 
 # @idsh/remote-access describes the reachability rules in its own README; with it absent — a
