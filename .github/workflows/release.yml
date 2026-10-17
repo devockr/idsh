@@ -25,13 +25,10 @@ jobs:
       contents: write
       id-token: write
       pull-requests: write
-    # `published`/`published-packages` are the action's npm result, reported in the job summary.
-    # `version` is the image's own version, read from the tree this job already checked out: `image/`
-    # is private, so an image-only release publishes nothing to npm, and whether that version needs
-    # building is the same step's answer — it needs the number, not the tree.
+    # `version` and `publish` are the image's own: read from the tree this job already checked out,
+    # and answered by asking the registry. `image/` is private, so an image-only release publishes
+    # nothing to npm.
     outputs:
-      published: ${{ steps.changesets.outputs.published }}
-      published-packages: ${{ steps.changesets.outputs.published-packages }}
       version: ${{ steps.image-version.outputs.version }}
       publish: ${{ steps.image-version.outputs.publish }}
     steps:
@@ -168,24 +165,6 @@ jobs:
             cat "$RUNNER_TEMP/tags"
             echo 'TAGS'
           } >> "$GITHUB_OUTPUT"
-
-      # `published` is the action's own switch; `published-packages` defaults to `[]`, so an
-      # image-only release would otherwise print an empty array instead of saying nothing shipped.
-      - name: Record what was published
-        env:
-          PUBLISHED: ${{ needs.release.outputs.published }}
-          PACKAGES: ${{ needs.release.outputs.published-packages }}
-        run: |
-          {
-            echo '### What this release published'
-            if [ "$PUBLISHED" = 'true' ]; then
-              echo '```json'
-              echo "$PACKAGES"
-              echo '```'
-            else
-              echo 'No packages — the image version moved.'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
 
       # The published image is `Dockerfile`'s final stage: the base plus the profile baked from the
       # registry. `:base` is a stage for this image and the dev one, not an image of its own.
