@@ -71,11 +71,15 @@ Markdown files are the source — there is nothing to keep in sync.
    #   the address when set, and then the logged URL is the one to open)
    ```
 
-4. Open it in your browser (note the host port is `15080`):
+4. Open it on the Docker host (the port is published on `15080`, on loopback):
 
    ```
-   http://<host>:15080/?token=<token>
+   http://127.0.0.1:15080/?token=<token>
    ```
+
+   It answers on the host only: the template binds the published port to `127.0.0.1`, so reach it
+   from a browser on that machine or through a reverse proxy there. Publishing it on every interface
+   is the one-line change described under Ports and volumes.
 
 The entrypoint decides what the server binds: it hands dsh this container's own address, which is
 the address a published port forwards to — a listener on `127.0.0.1` _inside_ the container cannot
@@ -104,7 +108,7 @@ Environment variables (see `docker-compose.example.yml`):
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
 | `PUID` / `PGID`                                         | uid/gid dsh runs as (and owns bind-mounted files as); compose forwards the host's `$UID`/`$GID`                                                                                                            | `$UID` / `$GID`                   |
 | `NPM_REGISTRY`                                          | npm/pnpm/yarn registry: the image build and the user-level configs use it (the release build on GitHub Actions passes the official one)                                                                    | `https://registry.npmmirror.com/` |
-| `DSH_TRUSTED_HOSTS`                                     | Space-separated host authorities allowed by dsh's browser-trust fence                                                                                                                                      | `dsh.example.com`                 |
+| `DSH_TRUSTED_HOSTS`                                     | Space-separated host authorities allowed by dsh's browser-trust fence                                                                                                                                      | —                                 |
 | `DSH_PUBLIC_URL`                                        | Public HTTP(S) root to advertise behind a prefix-stripping proxy; pair it with `DSH_TRUSTED_HOSTS`                                                                                                         | —                                 |
 | `DSH_BIND_HOST`                                         | Concrete address dsh binds, defaulting to the container's own (the wildcard is refused): set it to `127.0.0.1` to give up remote reach, or to one address when several networks make the default ambiguous | this container                    |
 | `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` | Outbound proxy for dsh's HTTP requests                                                                                                                                                                     | —                                 |
@@ -117,7 +121,9 @@ by name, so an unset one stays unset rather than becoming empty.
 
 Ports and volumes:
 
-- `15080:3080` — host port `15080` → dsh's internal web server (`3080`).
+- `127.0.0.1:15080:3080` — host port `15080` → dsh's internal web server (`3080`), bound to
+  loopback so only a reverse proxy on the host reaches it. Widen it to `15080:3080` to publish the
+  port itself; then whatever authority that port is reached on has to be trusted by the fence.
 - `./.dsh` → `/home/app/.dsh` — dsh state and credentials (persist). This is the
   template's only mount.
 - Add the rest yourself, for example `./workspace:/home/app/Workspaces` for a
