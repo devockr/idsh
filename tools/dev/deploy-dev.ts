@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
-const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+const repo = fileURLToPath(new URL('../../', import.meta.url))
 const dry = process.argv.includes('--dry')
 
 const die = (message: string): never => {
