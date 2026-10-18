@@ -147,13 +147,16 @@ for f in /home/app/* /home/app/.[!.]*; do
   chown -h "$PUID:$PGID" "$f" 2> /dev/null || true
 done
 
-# The credentials file is the deployment's, not this script's: its owner and mode are whatever the
-# operator gave it, and dsh reads it as PUID or says why it cannot. Only a symlink is worth a line of
-# output — a credentials file linked to a mounted secret is a normal shape, and silence there would
-# look like a permission problem the script had chosen not to fix.
+# Ownership of this file is the deployment's — dsh reads it as PUID or says why it cannot, and this
+# script never chowns it. The mode is not: dsh rewrites the file in place when the token changes and
+# that does not reset the mode, while `umask` only covers files dsh creates, so one that arrived
+# world-readable would stay that way for the life of the deployment.
 CRED="$HOME/.dsh/.credentials.yaml"
 if [ -L "$CRED" ]; then
+  # A secret mounted elsewhere is a normal shape; say so, rather than look like an unfixed permission.
   echo "entrypoint: $CRED is a symlink; leaving it to the deployment" >&2
+elif [ -f "$CRED" ]; then
+  chmod 600 "$CRED"
 fi
 
 # @idsh/remote-access describes the reachability rules in its own README; with it absent — a
