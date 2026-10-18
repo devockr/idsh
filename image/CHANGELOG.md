@@ -1,5 +1,11 @@
 # @idsh/image
 
+## 0.0.5
+
+### Patch Changes
+
+- [#50](https://github.com/devockr/idsh/pull/50) [`9393792`](https://github.com/devockr/idsh/commit/939379230422480492d925ce33de58a8ffb440a3) Thanks [@renovate](https://github.com/apps/renovate)! - chore(deps): update dependency @deepseek-ai/dsh to v0.2.1-rc.2
+
 ## 0.0.4
 
 ### Patch Changes
