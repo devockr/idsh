@@ -5,9 +5,9 @@ deploy it.
 
 **This file is public**: no hostnames, addresses, ports, ssh commands, no reference to a file
 that exists on one machine only, and none of _your own_ proxy or registry settings. Those go
-in untracked local notes — the tracked `.gitignore` already ignores `.tasks/`. A public mirror
-is not one of them: both Dockerfiles already default `NPM_REGISTRY` to the same npmmirror, so
-naming a public mirror here leaks nothing.
+in untracked local notes under `~/.dsh/tasks/`, outside every checkout. A public mirror is not
+one of them: both Dockerfiles already default `NPM_REGISTRY` to the same npmmirror, so naming a
+public mirror here leaks nothing.
 
 ## Invariants
 
@@ -45,9 +45,11 @@ naming a public mirror here leaks nothing.
 - **Alpine is blocked, not abandoned.** `node-addon-require-builtin` ships `linux-*-gnu` prebuilds
   only, so a musl base dies at boot; revisit when upstream ships one, and keep musl-compatible
   choices in `entrypoint.sh` until then.
-- **The state directory is runtime state**, bind-mounted and gitignored — not a place for scripts,
-  and neither is the image. Local helpers go in `.tasks/` (also gitignored); verification helpers
-  stay on the machine that runs them.
+- **The state directory is runtime state** and bind-mounted — but the one place local helpers
+  belong. They live under `~/.dsh/tasks/<workspace>/<task>/`, one directory per task, next to the
+  state they poke at rather than in the checkout: a per-repository `.tasks/` meant a gitignore entry
+  in every repository and a copy of the same scripts in each. Nothing there is committed, and
+  nothing in the image reads it.
 - **Machine specifics never get committed.** The real compose file is gitignored; what is tracked
   is `docker-compose.example.yml` for the deployment and `docker-compose.dev.yml` for the browser
   settings, which are a state-directory path and a public mirror and hold nothing personal.
