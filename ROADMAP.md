@@ -30,8 +30,10 @@ the operations take**.
 
 - The agent can answer "what is wrong with this host / LAN / router" and can deploy, from a
   phone as readily as from a desk.
-- No private key, token or password is readable inside the container. The agent can _request_
-  an operation; it cannot _hold_ the means to perform it.
+- No **host** credential — key, token or password — is readable inside the container. The agent
+  can _request_ an operation; it cannot _hold_ the means to perform it. The model's own
+  credentials stay in the state directory, which is mounted, and that is a separate problem
+  (see _what this does not solve_).
 - Every operation is enumerated and typed. There is no shell.
 - Reads are open; writes are closed by default and visible when opened.
 - Every call is audited, rate-limited and can be switched off.
@@ -64,6 +66,13 @@ host broker (on the host, as the deployment's user)
 - The socket is the only thing the container reaches. It sits in the state directory, which is
   already bound in, and the directory is mounted rather than the file because the socket only
   appears after the container has started.
+- **Who may call it.** The socket is owned by the deployment's user and group, mode `0660`, and
+  the state directory itself is owner-only. The broker can authenticate the peer by uid and by
+  nothing finer: every process the container runs shares that uid, so the plugin cannot be told
+  apart from anything else inside it. The broker therefore trusts nothing the plugin says — it
+  validates, authorizes, rate-limits and audits every request on its own, recording the peer uid
+  and the session the plugin names. The socket is a capability limiter, not an authenticator;
+  the uid boundary is what keeps every other host user out.
 - **Credentials, configuration, audit log and build clones live outside every mount.** A
   directory beside the deployment, owned by its user, is enough: the container cannot read it,
   and rebuilding the container cannot lose it.
@@ -100,7 +109,11 @@ question. The API is `source.query(...)`, not `command(args)`.
 | `disk`    | `df`, scrub status, SMART                         | volume, device                |
 | `router`  | the router's read-only operations (see below)     | key name, within an allowlist |
 
-Each source knows which files it reads, how to filter, and how much output it may return.
+Each source knows which files it reads, how to filter, and how much output it may return. It also
+knows what it must not return: `proc` exposes a fixed list of files and never a process's
+environment, `docker inspect` is projected onto the fields a diagnosis needs rather than passed
+through, and logs go through the same deny list. A cap bounds volume, and an audit entry assigns
+blame; neither is a disclosure control.
 
 ### The long tail: `run(binary, argv)`
 
@@ -111,9 +124,11 @@ Sources cannot cover everything — a one-off, a tool nobody anticipated. That c
   `setsid`, `nsenter`, `docker run`/`exec`.
 - **No writers:** `rm`, `mv`, `cp`, `dd`, `tee`, `truncate`, `chmod`, `chown`, `mkdir`, `ln`,
   `tar` (`tar cf -` is exfiltration with a friendly name).
-- **A path guard:** every path in the argv is resolved with `realpath` first; anything inside a
-  protected directory is refused, and a recursive tool may only walk an allowed root, never `/`
-  or a home directory.
+- **A race-safe path guard:** every path in the argv is resolved once and consumed through that
+  resolved object, so validation and use cannot be separated. A recursive tool may only walk an
+  allowed root, never `/` or a home directory, and an allowed root must itself be immutable to
+  the container's uid — a root the agent can write is refused rather than guarded, because a
+  writable root is one rename away from a protected path.
 - Caps, a timeout, process-group kill, audit. `run({argv, dryRun: true})` answers the policy
   verdict without executing, so the agent can plan before it acts.
 
@@ -155,11 +170,13 @@ checkout, so a working-tree path would mean deploying whatever the agent has jus
 remote commit at least ties every deployment to a commit anyone can read afterwards. A PR head
 must be reachable from a branch in the same repository; a fork's head is refused.
 
-**Confirmation happens inside the tool call.** Every deploy asks a question through the user
-question service — PR number, commit, a summary of the change — and the call blocks until it is
-answered. The model cannot answer it, and it cannot deploy and then ask: the deployment is
-inside the same call. Approval cannot do this job: under the `never` policy it is rejected
-before anyone is asked.
+**Confirmation happens inside the tool call.** Every deploy resolves its source to a commit SHA
+first, asks a question through the user question service — PR number, that SHA, a summary of the
+change — and blocks until it is answered. The build and the deploy use only the SHA that was
+shown, so a branch that moves while the question is open cannot change what was approved. The
+model cannot answer the question, and it cannot deploy and then ask: the deployment is inside the
+same call. Approval cannot do this job: under the `never` policy it is rejected before anyone is
+asked.
 
 **The files that run as root are pinned to main.** The image starts as root and drops to the
 deployment's uid; anything executed before that drop is root, and it can write the mounts. So
@@ -170,22 +187,33 @@ dev image copies that directory whole and links every package that declares itse
 **a new plugin needs no Dockerfile change and can be verified before it is merged**. Only a
 change to those six files must be merged first, because that is exactly the root surface.
 
-**The build runs in a container.** `pnpm install` and `pnpm build` execute scripts from
-`package.json`, and a pull request can change them — so they run in a container built from the
-base image this project already has, with a frozen lockfile, not on the host. Nothing about that
-grows the deployment image: it is a different image, removed afterwards, and the build context's
-ignore file already keeps `node_modules` out.
+**The build runs in a container, and it is a disposable one.** `pnpm install` and `pnpm build`
+execute scripts from `package.json`, and a pull request can change them — so they run in a
+container built from the base image this project already has, with a frozen lockfile, not on the
+host. That container gets the clone and nothing else: no Docker socket, no broker socket, no SSH
+agent, no host credential, no bind mount that outlives it. It keeps the network it needs to reach
+the registry, and it is removed when the build ends. Nothing about it grows the deployment image:
+it is a different image, and the build context's ignore file already keeps `node_modules` out.
+This is not a sandbox for the deployed image — that one runs with the deployment's mounts, as the
+next paragraph says.
 
 **The compose file belongs to the host.** It sits outside every mount, carries no `build:`
 section, and uses absolute bind sources — relative ones would resolve against the compose file's
 own directory. This is also what closes "edit the compose file and wait for the next rebuild".
 
-**A deployment that will not boot rolls itself back.** The previous image is tagged before the
-new one takes its place; after `up -d` the broker waits for the entrypoint's boot line, and if it
-does not appear within the window it restores the previous tag and starts that instead. The
-broker is not in the container, so it can watch the container die and bring it back. The recreate
-itself is detached and delayed, because it kills the session that asked for it; the next session
-asks `deploy.status`.
+**A deployment that will not come up rolls itself back.** Before the new image takes its place,
+the previous one is recorded by digest, not by tag. After `up -d` the broker keeps the new
+container's id, requires the compose health check to pass, and keeps watching for a stabilization
+window: the boot line alone proves nothing, because a container can print it and then exit. An
+exit, a failed health check, or an id that changed under it all mean rollback to the recorded
+digest. The broker is not in the container, so it can watch the container die and bring it back.
+The recreate itself is detached and delayed, because it kills the session that asked for it; the
+next session asks `deploy.status`.
+
+**One deployment at a time.** The rollback target is shared mutable state, so a single-flight lock
+covers the whole transition — build, `up -d`, health wait and any rollback — and a second request
+is refused rather than queued. Each deployment records its previous target as an image digest, so
+a later deploy cannot retag what an earlier one meant to restore.
 
 **The last resort is the host's own management UI.** If the broker is down and the container will
 not start, a pre-written rescue script — retag the previous image, `up -d`, log it — can be run
@@ -208,8 +236,10 @@ except through the broker's fixed operations.
 - The broker holds the router's key; the container never sees it, and the key is not shared with
   any other machine.
 - The router's `authorized_keys` carries a forced command: a dispatcher with no arguments, one
-  `case` branch per read-only operation, nothing that takes input. There is no shell to escape
-  into because there is no shell.
+  `case` branch per read-only operation, nothing that takes input. The key is stripped of every
+  other channel too — `no-pty`, `no-agent-forwarding`, `no-X11-forwarding`,
+  `no-port-forwarding` — because a forced command on its own leaves those open. There is no shell
+  to escape into because there is no shell.
 - A forced command runs when someone logs in, so no boot hook is needed, and a firmware that
   never executes a user script is not an obstacle.
 - The dispatcher's location must be proven persistent, not assumed: put it beside
@@ -219,13 +249,13 @@ except through the broker's fixed operations.
 
 ## Phases
 
-| phase | work                                                                                                                 |
-| ----- | -------------------------------------------------------------------------------------------------------------------- |
-| 1     | The broker, the socket and the plugin; two or three sources; `run` with its allowlist and path guard; audit; deploy. |
-| 2     | Move the keys out of the container, split the shared key, rotate, pin the known hosts.                               |
-| 3     | Router operations and the forced command.                                                                            |
-| 4     | Remaining sources, writes, rate limits, a `doctor` command.                                                          |
-| 5     | The remaining keys: out of the container, or behind an agent socket that cannot be read but can still sign.          |
+| phase | work                                                                                                                              |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | The broker, the socket and the plugin; two or three sources; `run` with its allowlist and path guard; rate limits; audit; deploy. |
+| 2     | Move the keys out of the container, split the shared key, rotate, pin the known hosts.                                            |
+| 3     | Router operations and the forced command.                                                                                         |
+| 4     | Remaining sources, writes, a `doctor` command.                                                                                    |
+| 5     | The remaining keys: out of the container, or behind an agent socket that cannot be read but can still sign.                       |
 
 Phase 1 has to land before phase 2: until deployment works without SSH, removing the keys
 strands the phone. While phase 1 is in progress the broker still reads the keys from the state
