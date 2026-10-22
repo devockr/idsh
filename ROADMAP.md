@@ -51,7 +51,7 @@ agent
 @idsh/host-ops (plugin, in the container)
   │  one JSON object per line
   ▼
-<state directory>/run/host.sock         (0660)
+<socket directory>/host.sock          (0660)
   │
   ▼
 host broker (on the host, as the deployment's user)
@@ -63,16 +63,21 @@ host broker (on the host, as the deployment's user)
 - The broker is a **host process**, started by the host's scheduler and kept alive by it. It
   must not live in a container: it exists to use the host's binaries and the host user's
   identity, and a container would have to mount both — a larger exposure, not a smaller one.
-- The socket is the only thing the container reaches. It sits in the state directory, which is
-  already bound in, and the directory is mounted rather than the file because the socket only
-  appears after the container has started.
+- The socket is the only thing the container reaches. It lives in a directory of its own — not the
+  state directory, which the container can write — and that directory is bound in **read-only**.
+  The directory rather than the file, because the socket only appears after the container starts;
+  read-only, so the container can connect but cannot unlink the socket and bind its own in its
+  place. If a kernel will not connect through a read-only mount, the host's scheduler hands the
+  broker a pre-opened socket instead (socket activation), which has the same property. A socket
+  that is replaced anyway costs a denial of service or a mocked answer to the plugin, not a
+  privilege: the replacement and the caller share the container's uid.
 - **Who may call it.** The socket is owned by the deployment's user and group, mode `0660`, and
-  the state directory itself is owner-only. The broker can authenticate the peer by uid and by
-  nothing finer: every process the container runs shares that uid, so the plugin cannot be told
-  apart from anything else inside it. The broker therefore trusts nothing the plugin says — it
-  validates, authorizes, rate-limits and audits every request on its own, recording the peer uid
-  and the session the plugin names. The socket is a capability limiter, not an authenticator;
-  the uid boundary is what keeps every other host user out.
+  its directory is owner-only. The broker can authenticate the peer by uid and by nothing finer:
+  every process the container runs shares that uid, so the plugin cannot be told apart from
+  anything else inside it. The broker therefore trusts nothing the plugin says — it validates,
+  authorizes, rate-limits and audits every request on its own, recording the peer uid and the
+  session the plugin names. The socket is a capability limiter, not an authenticator; the uid
+  boundary is what keeps every other host user out.
 - **Credentials, configuration, audit log and build clones live outside every mount.** A
   directory beside the deployment, owned by its user, is enough: the container cannot read it,
   and rebuilding the container cannot lose it.
@@ -182,10 +187,13 @@ asked.
 deployment's uid; anything executed before that drop is root, and it can write the mounts. So
 the build takes `entrypoint.sh`, the tools it runs, both Dockerfiles and both ignore files from
 main, never from the PR — `Dockerfile.dev` is included because one `RUN` in it could rewrite the
-tool the entrypoint runs as root. Everything else comes from the PR, including `packages/`: the
-dev image copies that directory whole and links every package that declares itself a plugin, so
-**a new plugin needs no Dockerfile change and can be verified before it is merged**. Only a
-change to those six files must be merged first, because that is exactly the root surface.
+tool the entrypoint runs as root. `main` is resolved to a SHA at the same moment as the source,
+both SHAs are shown in the confirmation, and the build checks out exactly those two snapshots —
+a `main` that advances while the question is open cannot change what was approved. Everything
+else comes from the PR, including `packages/`: the dev image copies that directory whole and
+links every package that declares itself a plugin, so **a new plugin needs no Dockerfile change
+and can be verified before it is merged**. Only a change to those six files must be merged first,
+because that is exactly the root surface.
 
 **The build runs in a container, and it is a disposable one.** `pnpm install` and `pnpm build`
 execute scripts from `package.json`, and a pull request can change them — so they run in a
@@ -235,11 +243,14 @@ except through the broker's fixed operations.
 
 - The broker holds the router's key; the container never sees it, and the key is not shared with
   any other machine.
-- The router's `authorized_keys` carries a forced command: a dispatcher with no arguments, one
-  `case` branch per read-only operation, nothing that takes input. The key is stripped of every
-  other channel too — `no-pty`, `no-agent-forwarding`, `no-X11-forwarding`,
-  `no-port-forwarding` — because a forced command on its own leaves those open. There is no shell
-  to escape into because there is no shell.
+- The router's `authorized_keys` carries a forced command: a dispatcher with no arguments of its
+  own, one `case` branch per read-only operation, nothing that takes input. The operation name
+  arrives as `SSH_ORIGINAL_COMMAND` and is matched against that exact list — the whole string, not
+  a prefix, and never handed to a shell; any other word, any argument, any empty command is
+  denied. (One key per operation is the alternative; one dispatcher is fewer keys and the same
+  allowlist.) The key is stripped of every other channel too — `no-pty`, `no-agent-forwarding`,
+  `no-X11-forwarding`, `no-port-forwarding` — because a forced command on its own leaves those
+  open. There is no shell to escape into because there is no shell.
 - A forced command runs when someone logs in, so no boot hook is needed, and a firmware that
   never executes a user script is not an obstacle.
 - The dispatcher's location must be proven persistent, not assumed: put it beside
