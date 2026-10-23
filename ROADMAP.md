@@ -67,10 +67,13 @@ host broker (on the host, as the deployment's user)
   state directory, which the container can write — and that directory is bound in **read-only**.
   The directory rather than the file, because the socket only appears after the container starts;
   read-only, so the container can connect but cannot unlink the socket and bind its own in its
-  place. If a kernel will not connect through a read-only mount, the host's scheduler hands the
-  broker a pre-opened socket instead (socket activation), which has the same property. A socket
-  that is replaced anyway costs a denial of service or a mocked answer to the plugin, not a
-  privilege: the replacement and the caller share the container's uid.
+  place. Connecting is not a write to the mount, so a read-only mount should not prevent it; phase
+  1 verifies that on the kernels the deployment targets before the mount is relied on. If one
+  refuses, the fallback is not socket activation — the client still connects to that path — but a
+  supervisor running as a different uid that owns the directory and hands the broker a pre-opened
+  listener, at the cost of one small host service. Without either, a socket that is replaced costs
+  a denial of service or a mocked answer to the plugin, not a privilege: the replacement and the
+  caller share the container's uid.
 - **Who may call it.** The socket is owned by the deployment's user and group, mode `0660`, and
   its directory is owner-only. The broker can authenticate the peer by uid and by nothing finer:
   every process the container runs shares that uid, so the plugin cannot be told apart from
