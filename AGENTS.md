@@ -261,3 +261,9 @@ Observe the running thing; do not reason from source.
 
 - Target `main`; a stacked PR uses the branch below as its base, and GitHub retargets it on merge.
 - Fetch before pushing; never force-push a branch you did not author.
+
+## The plan
+
+`ROADMAP.md` is the plan for the next version; its items are not implemented. A change that
+implements one updates that file, `README.md` and this one in the same pull request — the next
+session reads the repository, not the private notes the plan came from.

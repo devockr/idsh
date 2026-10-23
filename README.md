@@ -24,6 +24,9 @@
 
 ## Documentation
 
+The plan for the next version is in `ROADMAP.md`: reaching the host, the LAN and the router, and
+deploying through the same channel. Nothing in it is implemented yet.
+
 `pnpm docs:dev` serves this README, `CHANGELOG.md`, each package's `README.md` and
 `CHANGELOG.md`, and the image's changelog; `pnpm docs:build` writes a static copy to `dist/`. The
 Markdown files are the source — there is nothing to keep in sync.
