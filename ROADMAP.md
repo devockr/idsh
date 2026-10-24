@@ -223,32 +223,45 @@ own directory. This is also what closes "edit the compose file and wait for the 
 
 **The image is an input, not a constant.** `docker compose up -d` takes no image argument, so the
 host-owned file reads it from the environment — `image: ${DSH_IMAGE:?}` — and the broker supplies
-the digest it means to run. Rolling back is the same call with the previous digest; the broker
-never rewrites the file. The rescue script reads the recorded pair from the broker's state and
-passes the same variable, so it works when the broker does not.
+the reference it means to run. That reference is whatever the local daemon can resolve: a pulled
+image is `<repo>@sha256:<manifest digest>`, but an image built on this host has no repository
+digest, so it is the bare image ID, `sha256:<id>`; the `<repo>@sha256:<id>` form would send the
+daemon to the registry and fail exactly when a rollback is needed. Rolling back is the same call
+with the previous reference; the broker never rewrites the file. The rescue script reads the
+recorded pair from the broker's state and passes the same variable, so it works when the broker
+does not.
 
 **A deployment that will not come up rolls itself back.** Nothing declares a health check today,
 so the host-owned compose file has to: the image ships `curl` for this, and the probe targets the
-address the entrypoint binds — `DSH_BIND_HOST` when set, otherwise the container's own address,
-never `127.0.0.1`, which the entrypoint does not bind. Before the new image takes its place, the
-previous digest is recorded. After `up -d` the broker keeps the new container's id and requires
-that check, treating a container with **no health status at all as failed**, not as healthy — the
-boot line alone proves nothing, because a container can print it and then exit. An exit, a failed
-check, a missing check, or an id that changed under it all mean rollback to the recorded digest.
-The broker is not in the container, so it can watch the container die and bring it back. The
-recreate itself is detached and delayed, because it kills the session that asked for it; the next
-session asks `deploy.status`.
+address the entrypoint was given — `DSH_BIND_HOST` when set, otherwise the container's own
+address. It must not hard-code `127.0.0.1`, which is the right probe only for a deployment that
+actually handed the entrypoint loopback. Before the new image takes its place, the previous image
+is recorded by ID (or by manifest digest, when it came from a registry). After `up -d` the broker
+keeps the new container's id and requires that check, treating a container with **no health status
+at all as failed**, not as healthy — the boot line alone proves nothing, because a container can
+print it and then exit. An exit, a failed check, a missing check, or an id that changed under it
+all mean rollback to the recorded image. The broker is not in the container, so it can watch the
+container die and bring it back. The recreate itself is detached and delayed, because it kills the
+session that asked for it; the next session asks `deploy.status`.
+
+**The rollback target has to survive a prune.** A locally built image cannot be re-pulled, and
+`docker image rm` or `docker image prune -a` will take an untagged one. So the broker keeps a tag
+of its own pointing at the recorded image: the tag only keeps the image alive, the record is the
+ID, and before a rollback the broker checks that the tag still resolves to that ID and fails
+loudly if it does not, rather than starting something else. The host's cleanup must not `-a` prune
+without exempting it; the rescue script makes the same check, because it inherits the same
+requirement.
 
 **One deployment at a time.** The rollback target is shared mutable state, so a single-flight lock
 covers the whole transition — build, `up -d`, health wait and any rollback — and a second request
-is refused rather than queued. Each deployment records its previous target as an image digest, so
-a later deploy cannot retag what an earlier one meant to restore.
+is refused rather than queued. Each deployment records its previous target by image ID, so a later
+deploy cannot retag what an earlier one meant to restore.
 
 **The last resort is the host's own management UI.** If the broker is down and the container will
-not start, a pre-written rescue script — retag the previous image, `up -d`, log it — can be run
-from the host's task scheduler in a phone browser. The boot task runs the same script, so a
-reboot heals the common case. If the host itself is unreachable, no browser helps; that is the
-price of no longer holding host credentials.
+not start, a pre-written rescue script — start the recorded image, `up -d`, log it — can be run
+from the host's task scheduler in a phone browser. The boot task runs the same script, so a reboot
+heals the common case. If the host itself is unreachable, no browser helps; that is the price of
+no longer holding host credentials.
 
 **What this does not solve.** A malicious image still runs with the deployment's uid and the
 deployment's mounts, so it can read the state directory — including the model credentials — and
@@ -263,8 +276,8 @@ checked against the tree:
   the address above, absolute bind sources in the example.
 - `packages/host-ops` — the plugin, built and released like the other three. The published image
   needs its `dsh plugin add` line and an `image/` bump; the dev image picks it up from `packages/`.
-- a host broker package of its own, `@idsh/host-broker` — not in the image: installed on the host
-  and started by the host's scheduler.
+- `packages/host-broker` — the broker itself, published like the other three and installed on the
+  host (`npm i -g`), never baked into the image; it needs its own changeset.
 
 ## The router
 
