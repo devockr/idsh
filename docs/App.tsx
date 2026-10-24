@@ -56,9 +56,22 @@ const Changelog = () => {
   )
 }
 
+const Roadmap = () => {
+  const Page = useMemo(() => lazy(() => import('../ROADMAP.md')), [])
+  return (
+    <Suspense>
+      <Page />
+    </Suspense>
+  )
+}
+
 export const App = () => (
   <Router>
     <Routes>
+      <Route
+        path="/ROADMAP.md"
+        element={<Roadmap />}
+      />
       <Route
         path="/CHANGELOG.md"
         element={<Changelog />}
