@@ -245,12 +245,14 @@ container die and bring it back. The recreate itself is detached and delayed, be
 session that asked for it; the next session asks `deploy.status`.
 
 **The rollback target has to survive a prune.** A locally built image cannot be re-pulled, and
-`docker image rm` or `docker image prune -a` will take an untagged one. So the broker keeps a tag
-of its own pointing at the recorded image: the tag only keeps the image alive, the record is the
-ID, and before a rollback the broker checks that the tag still resolves to that ID and fails
-loudly if it does not, rather than starting something else. The host's cleanup must not `-a` prune
-without exempting it; the rescue script makes the same check, because it inherits the same
-requirement.
+`docker image prune -a` deletes a tagged image as readily as an untagged one — a tag is not
+retention. Two things are. The build labels every image it produces (`--label idsh.rollback=1`),
+and the host's cleanup carries the line that makes the label matter:
+`docker image prune -a --filter 'label!=idsh.rollback=1'`. The broker also keeps a readable tag on
+the recorded image, but only as a name for the operator. Before a rollback it checks that the
+reference still resolves and fails loudly if it does not, rather than starting something else; the
+rescue script makes the same check, because it inherits the same requirement. If the host's cleanup
+cannot be changed, the alternative is to `docker save` the recorded image into the broker's state.
 
 **One deployment at a time.** The rollback target is shared mutable state, so a single-flight lock
 covers the whole transition — build, `up -d`, health wait and any rollback — and a second request
