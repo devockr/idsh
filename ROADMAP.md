@@ -71,9 +71,12 @@ host broker (on the host, as the deployment's user)
   1 verifies that on the kernels the deployment targets before the mount is relied on. If one
   refuses, the fallback is not socket activation — the client still connects to that path — but a
   supervisor running as a different uid that owns the directory and hands the broker a pre-opened
-  listener, at the cost of one small host service. Without either, a socket that is replaced costs
-  a denial of service or a mocked answer to the plugin, not a privilege: the replacement and the
-  caller share the container's uid.
+  listener, at the cost of one small host service. Its permissions are the point: the directory is
+  that uid's, in the deployment user's group, mode `0750` — traverse and read, no write — and the
+  socket is `0660` with the same group. Connecting needs write on the socket, unlinking needs
+  write on the directory, and the deployment user is given only the first. Without either, a
+  socket that is replaced costs a denial of service or a mocked answer to the plugin, not a
+  privilege: the replacement and the caller share the container's uid.
 - **Who may call it.** The socket is owned by the deployment's user and group, mode `0660`, and
   its directory is owner-only. The broker can authenticate the peer by uid and by nothing finer:
   every process the container runs shares that uid, so the plugin cannot be told apart from
