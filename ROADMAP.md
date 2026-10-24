@@ -65,25 +65,29 @@ host broker (on the host, as the deployment's user)
   identity, and a container would have to mount both — a larger exposure, not a smaller one.
 - The socket is the only thing the container reaches. It lives in a directory of its own — not the
   state directory, which the container can write — and that directory is bound in **read-only**.
-  The directory rather than the file, because the socket only appears after the container starts;
-  read-only, so the container can connect but cannot unlink the socket and bind its own in its
-  place. Connecting is not a write to the mount, so a read-only mount should not prevent it; phase
-  1 verifies that on the kernels the deployment targets before the mount is relied on. If one
-  refuses, the fallback is not socket activation — the client still connects to that path — but a
-  supervisor running as a different uid that owns the directory and hands the broker a pre-opened
-  listener, at the cost of one small host service. Its permissions are the point: the directory is
-  that uid's, in the deployment user's group, mode `0750` — traverse and read, no write — and the
-  socket is `0660` with the same group. Connecting needs write on the socket, unlinking needs
-  write on the directory, and the deployment user is given only the first. Without either, a
-  socket that is replaced costs a denial of service or a mocked answer to the plugin, not a
-  privilege: the replacement and the caller share the container's uid.
-- **Who may call it.** The socket is owned by the deployment's user and group, mode `0660`, and
-  its directory is owner-only. The broker can authenticate the peer by uid and by nothing finer:
-  every process the container runs shares that uid, so the plugin cannot be told apart from
-  anything else inside it. The broker therefore trusts nothing the plugin says — it validates,
-  authorizes, rate-limits and audits every request on its own, recording the peer uid and the
-  session the plugin names. The socket is a capability limiter, not an authenticator; the uid
-  boundary is what keeps every other host user out.
+  The directory rather than the file, because a file bind pins the socket's inode: a broker restart
+  would leave the container talking to a dead socket until the container restarted too, while a
+  directory bind follows the new one. Read-only, so the container can connect but cannot unlink the
+  socket and bind its own in its place. Connecting is not a write to the mount, so a read-only
+  mount should not prevent it; phase 1 verifies that on the kernels the deployment targets before
+  the mount is relied on. If one refuses, the fallback is not socket activation — the client still
+  connects to that path — but a supervisor running as a different uid that owns the directory and
+  hands the broker a pre-opened listener, at the cost of one small host service. Its permissions
+  are the point: the directory is that uid's, in a group of the deployment user's own, mode `0750`
+  — traverse and read, no write — and the socket is `0660` with the same group. Connecting needs
+  write on the socket, unlinking needs write on the directory, and the deployment user is given
+  only the first. Without either, a socket that is replaced costs a denial of service or a mocked
+  answer to the plugin, not a privilege: the replacement and the caller share the container's uid.
+- **Who may call it.** In the primary arrangement the socket and its directory are the deployment
+  user's alone — `0700` directory, `0600` socket — so the only caller is that uid. The fallback
+  admits that uid through a group of its own, with one member; its primary group is not used,
+  because on these hosts it is often shared. Either way the broker can authenticate the peer by
+  uid and by nothing finer: every process the container runs shares that uid, so the plugin cannot
+  be told apart from anything else inside it. The broker therefore trusts nothing the plugin says —
+  it validates, authorizes, rate-limits and audits every request on its own, recording the peer
+  uid and the session the plugin names. The socket is a capability limiter, not an authenticator;
+  the uid boundary — and, in the fallback, the one-member group — is what keeps every other host
+  user out.
 - **Credentials, configuration, audit log and build clones live outside every mount.** A
   directory beside the deployment, owned by its user, is enough: the container cannot read it,
   and rebuilding the container cannot lose it.
@@ -92,15 +96,15 @@ host broker (on the host, as the deployment's user)
 
 **Why not MCP.** `dsh-mcp-client` can speak Streamable HTTP, but the token would have to live
 in the container (which is the thing being removed) or a bridging process would have to sit in
-front of the socket. The plugin is in this repository already, and it can ask the broker for its
-op list at load time, so the tool schema carries the real enumeration instead of a model
-guessing at strings.
+front of the socket. The plugin belongs in this repository, beside the other three, and it can ask
+the broker for its op list at load time, so the tool schema carries the real enumeration instead
+of a model guessing at strings.
 
 **Why not SSH with a forced command for the host.** A forced command needs a dispatcher, and a
-dispatcher is a shell script doing what the broker would do — with SSH's own surface (pty,
-forwarding, interactive auth) still in front of it. It is the right tool for the router
-(below), where the alternative is a shell on the LAN's root of trust; it is the wrong tool for
-the host, where the socket is a file permission instead of a network service.
+dispatcher is a shell script doing what the broker would do — and it puts an sshd endpoint in front
+of the operation. It is the right tool for the router (below), where the alternative is a shell on
+the LAN's root of trust; it is the wrong tool for the host, where the socket is a file permission
+instead of a network service.
 
 ## Host operations
 
@@ -134,7 +138,9 @@ Sources cannot cover everything — a one-off, a tool nobody anticipated. That c
 - **No executors:** `sh`, `bash`, a language runtime, `awk`, `find -exec`, `xargs`, `env`,
   `setsid`, `nsenter`, `docker run`/`exec`.
 - **No writers:** `rm`, `mv`, `cp`, `dd`, `tee`, `truncate`, `chmod`, `chown`, `mkdir`, `ln`,
-  `tar` (`tar cf -` is exfiltration with a friendly name).
+  `tar` (`tar cf -` is exfiltration with a friendly name). The binary list is examples; the flag
+  allowlist is the enforcement, because a binary kept for reading can still write through a flag —
+  `find -delete` and `-fprint`, `sed -i`, `sort -o` are denied by name.
 - **A race-safe path guard:** every path in the argv is resolved once and consumed through that
   resolved object, so validation and use cannot be separated. A recursive tool may only walk an
   allowed root, never `/` or a home directory, and an allowed root must itself be immutable to
@@ -215,14 +221,23 @@ next paragraph says.
 section, and uses absolute bind sources — relative ones would resolve against the compose file's
 own directory. This is also what closes "edit the compose file and wait for the next rebuild".
 
-**A deployment that will not come up rolls itself back.** Before the new image takes its place,
-the previous one is recorded by digest, not by tag. After `up -d` the broker keeps the new
-container's id, requires the compose health check to pass, and keeps watching for a stabilization
-window: the boot line alone proves nothing, because a container can print it and then exit. An
-exit, a failed health check, or an id that changed under it all mean rollback to the recorded
-digest. The broker is not in the container, so it can watch the container die and bring it back.
-The recreate itself is detached and delayed, because it kills the session that asked for it; the
-next session asks `deploy.status`.
+**The image is an input, not a constant.** `docker compose up -d` takes no image argument, so the
+host-owned file reads it from the environment — `image: ${DSH_IMAGE:?}` — and the broker supplies
+the digest it means to run. Rolling back is the same call with the previous digest; the broker
+never rewrites the file. The rescue script reads the recorded pair from the broker's state and
+passes the same variable, so it works when the broker does not.
+
+**A deployment that will not come up rolls itself back.** Nothing declares a health check today,
+so the host-owned compose file has to: the image ships `curl` for this, and the probe targets the
+address the entrypoint binds — `DSH_BIND_HOST` when set, otherwise the container's own address,
+never `127.0.0.1`, which the entrypoint does not bind. Before the new image takes its place, the
+previous digest is recorded. After `up -d` the broker keeps the new container's id and requires
+that check, treating a container with **no health status at all as failed**, not as healthy — the
+boot line alone proves nothing, because a container can print it and then exit. An exit, a failed
+check, a missing check, or an id that changed under it all mean rollback to the recorded digest.
+The broker is not in the container, so it can watch the container die and bring it back. The
+recreate itself is detached and delayed, because it kills the session that asked for it; the next
+session asks `deploy.status`.
 
 **One deployment at a time.** The rollback target is shared mutable state, so a single-flight lock
 covers the whole transition — build, `up -d`, health wait and any rollback — and a second request
@@ -240,6 +255,16 @@ deployment's mounts, so it can read the state directory — including the model 
 can write the checkout. The boundary bought here is that it cannot become root and cannot reach
 the host's own credentials. A pull request that changes a client plugin also runs that plugin in
 the reader's browser, which no deployment rule can prevent.
+
+**What this changes in the repository.** The tracked files the plan moves, so the contract can be
+checked against the tree:
+
+- `docker-compose.example.yml` — `image: ${DSH_IMAGE:?}` in place of `build:`, a `healthcheck:` on
+  the address above, absolute bind sources in the example.
+- `packages/host-ops` — the plugin, built and released like the other three. The published image
+  needs its `dsh plugin add` line and an `image/` bump; the dev image picks it up from `packages/`.
+- a host broker package of its own, `@idsh/host-broker` — not in the image: installed on the host
+  and started by the host's scheduler.
 
 ## The router
 
@@ -274,9 +299,10 @@ except through the broker's fixed operations.
 | 4     | Remaining sources, writes, a `doctor` command.                                                                                    |
 | 5     | The remaining keys: out of the container, or behind an agent socket that cannot be read but can still sign.                       |
 
-Phase 1 has to land before phase 2: until deployment works without SSH, removing the keys
-strands the phone. While phase 1 is in progress the broker still reads the keys from the state
-directory, so it is not yet a boundary — that is deliberate, not an oversight.
+Phase 1 has to land before phase 2: until deployment works without SSH, removing the keys strands
+the phone. Until phase 2 the **container** still holds the keys, so nothing the broker does is a
+boundary yet — that is deliberate, not an oversight. The broker itself needs none of them: every
+phase-1 operation is host-local, and the router hop is phase 3.
 
 ## Open questions
 
