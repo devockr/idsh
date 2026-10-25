@@ -13,12 +13,6 @@ export default [
     rules: { 'n/no-process-exit': 'off', 'n/hashbang': 'off' },
   },
   {
-    // The broker's tests import the compiled `lib/`, which `pnpm build` writes before `pnpm test`
-    // runs — lint happens before that build, so the resolver cannot see the files it is about.
-    files: ['packages/host-broker/test/**'],
-    rules: { 'import-x/no-unresolved': 'off' },
-  },
-  {
     // The client halves are plain scripts with no imports, so the one name they need must be
     // global; restricted-syntax forbids an alias that only renames a type, which is exactly the
     // shape that puts `Context` into that global scope. The alias is the point here.
