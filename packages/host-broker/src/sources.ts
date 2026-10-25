@@ -6,10 +6,9 @@
  * are unbounded, the places an answer can come from are not. Nothing here takes a path or an
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { promisify } from 'node:util'
 
 import {
   MAX_EXEC_BUFFER_BYTES,
@@ -17,8 +16,6 @@ import {
   TAIL_WINDOW_BYTES,
 } from './constants.ts'
 import { BrokerFault } from './protocol.ts'
-
-const run = promisify(execFile)
 
 /** Where an operation reads from, which container it drives, and how long a program may run. */
 export interface OpContext {
@@ -34,7 +31,83 @@ export interface OpDefinition {
   readonly name: string
   readonly summary: string
   readonly input: Record<string, unknown>
+  /** The end a cap keeps; a log wants its tail, everything else its head. */
+  readonly keep?: 'head' | 'tail'
   run(args: Record<string, unknown>, ctx: OpContext): Promise<string>
+}
+
+/**
+ * Run one fixed program with fixed arguments.
+ *
+ * No shell and no caller-supplied argv; both pipes are collected in arrival order, so a log that
+ * writes to stderr is not reordered or welded onto stdout. Past the buffer ceiling the oldest bytes
+ * are dropped — a tail reader wants the newest — and `capOutput` then trims to the answer size.
+ */
+function runFixed(
+  ctx: OpContext,
+  program: string,
+  args: readonly string[],
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(program, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const state: { settled: boolean; timer?: NodeJS.Timeout } = {
+      settled: false,
+    }
+    let buffer = Buffer.alloc(0)
+
+    const settle = (failure?: Error): void => {
+      if (state.settled) {
+        return
+      }
+      state.settled = true
+      if (state.timer !== undefined) {
+        clearTimeout(state.timer)
+      }
+      if (failure === undefined) {
+        resolve(buffer.toString('utf8'))
+      } else {
+        reject(failure)
+      }
+    }
+    const collect = (chunk: Buffer): void => {
+      buffer = Buffer.concat([buffer, chunk])
+      if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
+        buffer = buffer.subarray(buffer.length - MAX_EXEC_BUFFER_BYTES)
+      }
+    }
+
+    child.stdout.on('data', collect)
+    child.stderr.on('data', collect)
+    state.timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      settle(
+        new BrokerFault(
+          'timeout',
+          `no answer within ${String(ctx.execTimeoutMs)} ms`,
+        ),
+      )
+    }, ctx.execTimeoutMs)
+    child.once('error', (error: NodeJS.ErrnoException) => {
+      settle(
+        new BrokerFault(
+          'unavailable',
+          `${error.code ?? 'spawn failed'}: ${error.message}`,
+        ),
+      )
+    })
+    child.once('close', (code, signal) => {
+      if (code === 0) {
+        settle()
+      } else {
+        settle(
+          new BrokerFault(
+            'unavailable',
+            `${program} exited with ${code ?? signal ?? 'no status'}`,
+          ),
+        )
+      }
+    })
+  })
 }
 
 /* ------------------------------------------------------------------ argument checks */
@@ -200,23 +273,9 @@ async function readProc(file: ProcFile, ctx: OpContext): Promise<string> {
 
 /* ------------------------------------------------------------------ disk.usage */
 
-/** One fixed program with one fixed argument: the shape every `run` operation will take. */
-async function diskUsage(ctx: OpContext): Promise<string> {
-  try {
-    const { stdout } = await run('df', ['-h'], {
-      timeout: ctx.execTimeoutMs,
-      maxBuffer: MAX_EXEC_BUFFER_BYTES,
-      encoding: 'utf8',
-    })
-    return stdout
-  } catch (error) {
-    const stderr = (error as { stderr?: unknown }).stderr
-    const reason =
-      typeof stderr === 'string' && stderr.trim() !== ''
-        ? stderr.trim()
-        : 'df failed'
-    throw new BrokerFault('unavailable', reason)
-  }
+/** One fixed program with one fixed argument. */
+function diskUsage(ctx: OpContext): Promise<string> {
+  return runFixed(ctx, 'df', ['-h'])
 }
 
 /* ------------------------------------------------------------------ deploy.status / deploy.log */
@@ -225,44 +284,9 @@ async function diskUsage(ctx: OpContext): Promise<string> {
 const MAX_LOG_LINES = 1000
 const DEFAULT_LOG_LINES = 100
 
-/** One fixed program with fixed arguments: no shell, no caller-supplied argv. */
-async function docker(
-  ctx: OpContext,
-  args: readonly string[],
-): Promise<string> {
-  try {
-    const { stdout, stderr } = await run(ctx.dockerPath, args, {
-      timeout: ctx.execTimeoutMs,
-      maxBuffer: MAX_EXEC_BUFFER_BYTES,
-      encoding: 'utf8',
-    })
-    return `${stdout}${stderr}`
-  } catch (error) {
-    const failure = error as {
-      code?: unknown
-      killed?: unknown
-      stderr?: unknown
-    }
-    if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-      throw new BrokerFault(
-        'unavailable',
-        'the docker client wrote more than the broker reads',
-      )
-    }
-    if (failure.killed === true) {
-      throw new BrokerFault(
-        'timeout',
-        `the docker client did not answer within ${String(ctx.execTimeoutMs)} ms`,
-      )
-    }
-    const stderr = failure.stderr
-    throw new BrokerFault(
-      'unavailable',
-      typeof stderr === 'string' && stderr.trim() !== ''
-        ? stderr.trim()
-        : 'the docker client failed',
-    )
-  }
+/** The shape every `run` operation takes: one program, fixed argv. */
+function docker(ctx: OpContext, args: readonly string[]): Promise<string> {
+  return runFixed(ctx, ctx.dockerPath, args)
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -272,6 +296,7 @@ export const OPS: readonly OpDefinition[] = [
     name: 'log.tail',
     summary:
       'The last lines of a host log, optionally only the lines containing a literal string.',
+    keep: 'tail',
     input: {
       type: 'object',
       properties: {
@@ -330,7 +355,7 @@ export const OPS: readonly OpDefinition[] = [
       return docker(ctx, [
         'inspect',
         '--format',
-        '{{.Image}} {{.Created}} {{.State.Status}}',
+        '{{.Config.Image}} {{.Image}} {{.Created}} {{.State.Status}} {{.State.Health.Status}} {{.State.ExitCode}}',
         ctx.container,
       ])
     },
@@ -338,6 +363,7 @@ export const OPS: readonly OpDefinition[] = [
   {
     name: 'deploy.log',
     summary: 'The tail of the deployment container log.',
+    keep: 'tail',
     input: {
       type: 'object',
       properties: {

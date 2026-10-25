@@ -48,6 +48,10 @@ export const DEFAULT_DOCKER = 'docker'
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
 
+/** UTF-8 continuation byte: the top two bits are `10`. */
+export const UTF8_CONTINUATION_MASK = 0b1100_0000
+export const UTF8_CONTINUATION_PREFIX = 0b1000_0000
+
 /** The longest UTF-8 sequence, so a cut inside one backs off by at most this much. */
 export const MAX_UTF8_SEQUENCE = 4
 

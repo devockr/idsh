@@ -175,14 +175,14 @@ run anything" has no safe version, and the tiers are the honest decomposition of
 Removing the container's SSH keys removes the only way a phone can ask for a deployment. The
 channel has to carry deployment before the keys can go.
 
-| op                    | source                                           | purpose                       |
-| --------------------- | ------------------------------------------------ | ----------------------------- |
-| `deploy.build({pr})`  | the PR head, on the remote, from this repository | verify an unmerged change     |
-| `deploy.build({sha})` | any commit on a remote branch                    | verify a pushed branch        |
-| `deploy.main()`       | the main branch                                  | ship                          |
-| `deploy.recreate()`   | no build; the current image                      | profile-only changes          |
-| `deploy.rollback()`   | the previous image                               | a deploy that will not boot   |
-| `deploy.status()`     | —                                                | what is running, from a phone |
+| op                                 | source                                           | purpose                       |
+| ---------------------------------- | ------------------------------------------------ | ----------------------------- |
+| `deploy.build({pr})`               | the PR head, on the remote, from this repository | verify an unmerged change     |
+| `deploy.build({sha})`              | any commit on a remote branch                    | verify a pushed branch        |
+| `deploy.main()`                    | the main branch                                  | ship                          |
+| `deploy.recreate()`                | no build; the current image                      | profile-only changes          |
+| `deploy.rollback()`                | the previous image                               | a deploy that will not boot   |
+| `deploy.status()` / `deploy.log()` | —                                                | what is running, from a phone |
 
 **Source rule: deploy only code that exists on the remote.** The container can write the
 checkout, so a working-tree path would mean deploying whatever the agent has just typed. A

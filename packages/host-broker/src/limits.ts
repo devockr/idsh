@@ -8,6 +8,8 @@ import {
   DEFAULT_WINDOW_MS,
   MAX_OUTPUT_BYTES,
   MAX_UTF8_SEQUENCE,
+  UTF8_CONTINUATION_MASK,
+  UTF8_CONTINUATION_PREFIX,
 } from './constants.ts'
 
 export { MAX_OUTPUT_BYTES } from './constants.ts'
@@ -17,21 +19,45 @@ export interface Capped {
   readonly truncated: boolean
 }
 
+/** Which end of an answer a cap keeps: the first lines, or the last ones. */
+export type Keep = 'head' | 'tail'
+
 /**
  * Trim text to the output ceiling.
  *
  * Bytes are the limit, not characters: a cut is moved back to a character boundary (so no U+FFFD
  * appears and the result cannot re-encode past the ceiling) and then, when the text has one, back to
- * the last line boundary inside it.
+ * a line boundary. `tail` is for a log: the newest lines are the answer, and dropping them would
+ * report a stale window as the whole one.
  */
-export function capOutput(text: string): Capped {
+export function capOutput(text: string, keep: Keep = 'head'): Capped {
   const bytes = Buffer.from(text)
   if (bytes.length <= MAX_OUTPUT_BYTES) {
     return { text, truncated: false }
   }
+  if (keep === 'tail') {
+    const cut = decodeTail(bytes, MAX_OUTPUT_BYTES)
+    const boundary = cut.indexOf('\n')
+    return {
+      text: boundary === -1 ? cut : cut.slice(boundary + 1),
+      truncated: true,
+    }
+  }
   const cut = decodeAtMost(bytes, MAX_OUTPUT_BYTES)
   const boundary = cut.lastIndexOf('\n')
   return { text: boundary > 0 ? cut.slice(0, boundary) : cut, truncated: true }
+}
+
+/** Decode the last `limit` bytes, starting at a character boundary. */
+function decodeTail(bytes: Buffer, limit: number): string {
+  let start = bytes.length - limit
+  while (
+    start < bytes.length &&
+    (bytes[start] & UTF8_CONTINUATION_MASK) === UTF8_CONTINUATION_PREFIX
+  ) {
+    start += 1
+  }
+  return new TextDecoder('utf8').decode(bytes.subarray(start))
 }
 
 /**

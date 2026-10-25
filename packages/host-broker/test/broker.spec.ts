@@ -592,19 +592,21 @@ void test('deploy.status and deploy.log drive the docker client', async () => {
     auditPath: host.auditPath,
     logDir: host.logDir,
     procDir: host.procDir,
-    container: 'dsh',
+    container: 'web',
     dockerPath,
   })
   const connection = client(host.socketPath)
   try {
     const status = await connection.request({ op: 'deploy.status', args: {} })
     assert.equal(status.ok, true)
-    assert.match(status.result ?? '', /^inspect --format .* dsh$/mu)
+    assert.match(status.result ?? '', /^inspect --format .*web$/mu)
+    assert.match(status.result ?? '', /\{\{\.Config\.Image\}\}/u)
+    assert.match(status.result ?? '', /\{\{\.State\.ExitCode\}\}/u)
     const tail = await connection.request({
       op: 'deploy.log',
       args: { lines: 3 },
     })
-    assert.equal(tail.result, 'logs --tail 3 dsh\n')
+    assert.equal(tail.result, 'logs --tail 3 web\n')
     const bad = await connection.request({
       op: 'deploy.log',
       args: { lines: 0 },
@@ -637,4 +639,93 @@ void test('a docker call that exceeds the deadline answers timeout', async () =>
     connection.close()
     await broker.close()
   }
+})
+
+void test('docker streams merge in arrival order', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nprintf '1 stdout\\n'\nprintf '2 stderr\\n' >&2\nprintf '3 stdout\\n'\nprintf '4 stderr\\n' >&2\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.log', args: {} })
+    const lines = answer.result ?? ''
+    // Threads and pipes interleave nondeterministically, but each stream keeps its own order and
+    // no line is welded to the next: the old concatenation lost both.
+    assert.match(lines, /1 stdout[\s\S]*3 stdout/u)
+    assert.match(lines, /2 stderr[\s\S]*4 stderr/u)
+    assert.equal(lines.endsWith('\n'), true)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a log past the buffer ceiling keeps its newest lines', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nhead -c 1200000 /dev/zero | tr '\\0' 'x'\nprintf '\\nEND\\n'\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.log', args: {} })
+    assert.equal(answer.ok, true)
+    assert.equal(answer.truncated, true)
+    assert.match(answer.result ?? '', /END\n?$/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a missing docker client names the failure', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'no-docker'),
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /ENOENT/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a container name that is not one is refused', async () => {
+  const host = await fakeHost()
+  await assert.rejects(
+    startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      container: '-f',
+    }),
+    /container must be a docker container name/u,
+  )
 })

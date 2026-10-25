@@ -37,7 +37,8 @@ loginctl enable-linger "$USER" # keep it running without a login session
 ```
 
 A system unit would default to root, which changes both whose files it reads and who may open the
-socket; do not use one.
+socket; do not use one. The unit's user also needs to reach the docker daemon, and the broker runs
+`docker` from `PATH` — on DSM that is `/usr/local/bin/docker`, so pass `--docker /usr/local/bin/docker`.
 
 A directory the broker creates is `0700` and the socket is chmodded `0600`, so only the uid running
 the broker can open it. An existing directory is not narrowed — the read-only fallback in
@@ -87,7 +88,9 @@ to escape, nothing that can backtrack.
 - **Output** is capped at 64 KiB, trimmed back to the last line boundary inside it (or to a
   character boundary when the text has none), and a truncated answer says so.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
-- **Time**: 10 seconds per operation by default.
+- **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`.
+- **Buffer**: one program may write 1 MiB; past that the oldest bytes are dropped, and the answer
+  cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.
 - **Audit**: one JSON line per request — operation, outcome, duration, bytes, truncation, the
   arguments capped at 200 characters — written before the response. If the audit cannot be written,
   the response is an error, not a success. The file is append-only and unbounded; rotating it is the

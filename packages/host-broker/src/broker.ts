@@ -88,6 +88,11 @@ export async function startBroker(
   const logDir = options.logDir ?? DEFAULTS.logDir
   const procDir = options.procDir ?? DEFAULTS.procDir
   const container = options.container ?? DEFAULTS.container
+  if (!/^\w[\w.-]*$/u.test(container)) {
+    throw new Error(
+      `container must be a docker container name, got ${JSON.stringify(container)}`,
+    )
+  }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const rateLimitPerMinute =
     options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
@@ -350,7 +355,9 @@ async function execute(
     definition === undefined
       ? describeOps()
       : await runOp(definition, request.args, context)
-  return capOutput(result)
+  return definition === undefined
+    ? capOutput(result)
+    : capOutput(result, definition.keep)
 }
 
 function runOp(
