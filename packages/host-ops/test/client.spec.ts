@@ -103,3 +103,19 @@ void test('a capped answer keeps the flag', async () => {
     await broker.close()
   }
 })
+
+void test('a line past the ceiling is refused', async () => {
+  const broker = await fakeBroker(() => 'x'.repeat(1024 * 1024 + 1))
+  try {
+    await assert.rejects(
+      callBroker(
+        { socketPath: broker.socketPath, timeoutMs: 5000 },
+        'log.tail',
+        {},
+      ),
+      /past the line ceiling/u,
+    )
+  } finally {
+    await broker.close()
+  }
+})

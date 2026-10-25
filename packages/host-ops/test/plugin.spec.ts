@@ -166,3 +166,19 @@ void test('a registration that fails rolls back the ones already made', async ()
     await broker.close()
   }
 })
+
+void test('a table entry that is not an object rejects the table', async () => {
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify([null]) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    await assert.rejects(
+      registerTools(ctx, { socketPath: broker.socketPath }),
+      /not an object/u,
+    )
+    assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
