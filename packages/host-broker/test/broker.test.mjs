@@ -7,9 +7,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { startBroker } from '../lib/broker.js'
-import { capOutput, RateLimiter } from '../lib/limits.js'
-import { createLineReader, parseRequest } from '../lib/protocol.js'
+import { startBroker } from '../src/broker.ts'
+import { capOutput, RateLimiter } from '../src/limits.ts'
+import { createLineReader, parseRequest } from '../src/protocol.ts'
 
 const SMALL_LINE_LIMIT = 10
 const LONG_ROW_CHARS = 40_000

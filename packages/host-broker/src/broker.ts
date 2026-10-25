@@ -18,16 +18,16 @@ import {
   MAX_AUDIT_ARGS_CHARS,
   SOCKET_MODE,
   TIMEOUT_SLACK_MS,
-} from './constants.js'
-import { capOutput, RateLimiter } from './limits.js'
+} from './constants.ts'
+import { capOutput, RateLimiter } from './limits.ts'
 import {
   BrokerFault,
   createLineReader,
   encode,
   parseRequest,
   type BrokerResponse,
-} from './protocol.js'
-import { describeOps, findOp, type OpContext } from './sources.js'
+} from './protocol.ts'
+import { describeOps, findOp, type OpContext } from './sources.ts'
 
 /** The operation that answers with the table itself, so the plugin never hard-codes it. */
 export const DESCRIBE_OP = 'ops.describe'

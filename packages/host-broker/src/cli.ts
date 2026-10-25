@@ -9,8 +9,8 @@
  */
 import { parseArgs } from 'node:util'
 
-import { startBroker } from './broker.js'
-import { DEFAULT_EXEC_TIMEOUT_MS } from './constants.js'
+import { startBroker } from './broker.ts'
+import { DEFAULT_EXEC_TIMEOUT_MS } from './constants.ts'
 
 const USAGE = `Usage: idsh-host --socket <path> --audit <path> [options]
 

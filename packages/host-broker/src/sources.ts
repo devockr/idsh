@@ -11,8 +11,8 @@ import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
-import { MAX_PATTERN_CHARS, TAIL_WINDOW_BYTES } from './constants.js'
-import { BrokerFault } from './protocol.js'
+import { MAX_PATTERN_CHARS, TAIL_WINDOW_BYTES } from './constants.ts'
+import { BrokerFault } from './protocol.ts'
 
 const run = promisify(execFile)
 

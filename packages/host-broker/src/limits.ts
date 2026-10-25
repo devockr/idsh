@@ -4,9 +4,9 @@
  * refused one says which limit it hit.
  */
 
-import { DEFAULT_WINDOW_MS, MAX_OUTPUT_BYTES } from './constants.js'
+import { DEFAULT_WINDOW_MS, MAX_OUTPUT_BYTES } from './constants.ts'
 
-export { MAX_OUTPUT_BYTES } from './constants.js'
+export { MAX_OUTPUT_BYTES } from './constants.ts'
 
 export interface Capped {
   readonly text: string

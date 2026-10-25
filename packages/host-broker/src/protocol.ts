@@ -6,9 +6,9 @@
  * client's proxy environment — unlike the HTTP transports that were considered for this seam.
  */
 
-import { MAX_LINE_BYTES, NEWLINE_BYTE } from './constants.js'
+import { MAX_LINE_BYTES, NEWLINE_BYTE } from './constants.ts'
 
-export { MAX_LINE_BYTES } from './constants.js'
+export { MAX_LINE_BYTES } from './constants.ts'
 
 /** Stable error codes; a caller may branch on these, never on the message. */
 export type BrokerErrorCode =
