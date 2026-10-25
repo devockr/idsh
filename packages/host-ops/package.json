@@ -1,0 +1,54 @@
+{
+  "name": "@idsh/host-ops",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "dsh tools that ask the host broker over a unix socket — the container never holds a host credential",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devockr/idsh.git",
+    "directory": "packages/host-ops"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "lib"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "bundle",
+    "host",
+    "unix-socket"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
+    "test": "tsc -p tsconfig.json && node --test test/*.spec.ts"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4 || ^4.0.5-alpha.2",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1 || ^0.2.1-alpha.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

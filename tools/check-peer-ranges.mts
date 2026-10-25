@@ -35,7 +35,7 @@ const pinned =
     .find((version): version is string => version !== undefined) ??
   fail('no @deepseek-ai/dsh pin found in Dockerfile')
 
-const packages = ['mobile', 'privileged-ui', 'remote-access']
+const packages = ['mobile', 'privileged-ui', 'remote-access', 'host-ops']
 let checked = 0
 
 for (const directory of packages) {
