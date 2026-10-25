@@ -27,8 +27,9 @@
 ## Documentation
 
 The plan for the next version is in [`ROADMAP.md`](./ROADMAP.md): reaching the host, the LAN and
-the router, and deploying through the same channel. Phase 1 has started: [`@idsh/host-broker`](/packages/host-broker) is the host side, and
-[`@idsh/host-ops`](/packages/host-ops) turns its table into dsh tools.
+the router, and deploying through the same channel. Phase 1 has started:
+[`@idsh/host-broker`](/packages/host-broker) is the host side, and
+[`@idsh/host-ops`](/packages/host-ops) turns that table into dsh tools.
 
 `pnpm docs:dev` serves this README, `ROADMAP.md`, `CHANGELOG.md`, each package's `README.md` and
 `CHANGELOG.md`, and the image's changelog; `pnpm docs:build` writes a static copy to `dist/`. The

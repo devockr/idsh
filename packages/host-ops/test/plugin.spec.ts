@@ -123,3 +123,46 @@ void test('a bad entry rejects the whole table', async () => {
     await broker.close()
   }
 })
+
+void test('a bad config is refused before anything is discovered', () => {
+  const { ctx } = context()
+  assert.throws(
+    () => apply(ctx, { socketPath: {} as unknown as string }),
+    /socketPath must be a non-empty string/u,
+  )
+  assert.throws(
+    () => apply(ctx, { timeoutMs: 0 }),
+    /timeoutMs must be a positive integer/u,
+  )
+})
+
+void test('a registration that fails rolls back the ones already made', async () => {
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`
+  const broker = await fakeBroker(() => describe)
+  const disposed: string[] = []
+  const tools: string[] = []
+  const ctx: HostContext = {
+    tools: {
+      register(tool) {
+        if (tools.length === 1) {
+          throw new Error('registry is full')
+        }
+        tools.push(tool.name)
+        return () => {
+          disposed.push(tool.name)
+        }
+      },
+    },
+    logger: { warn: () => true },
+  }
+  try {
+    await assert.rejects(
+      registerTools(ctx, { socketPath: broker.socketPath }),
+      /registry is full/u,
+    )
+    assert.deepEqual(tools, ['log.tail'])
+    assert.deepEqual(disposed, ['log.tail'])
+  } finally {
+    await broker.close()
+  }
+})

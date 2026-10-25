@@ -124,7 +124,7 @@ function toolFor(endpoint: BrokerEndpoint, op: DescribedOp): HostTool {
           {
             type: 'text',
             text: answer.truncated
-              ? `${answer.text}\n[the host broker capped this answer at 64 KiB]`
+              ? `${answer.text}\n[the host broker capped this answer]`
               : answer.text,
           },
         ]
