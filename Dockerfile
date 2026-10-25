@@ -59,7 +59,7 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 ARG NPM_REGISTRY=https://registry.npmmirror.com/
 
 RUN --mount=type=cache,id=npm_cache,target=/root/.npm \
-  npm install -g --registry="$NPM_REGISTRY" @deepseek-ai/dsh@0.2.1-rc.2 pnpm@12.15.0
+  npm install -g --registry="$NPM_REGISTRY" @deepseek-ai/dsh@0.2.1-rc.3 pnpm@12.15.0
 
 # This image used to patch dsh's installed JavaScript here: the loopback gate the
 # settings page hides behind, the touch CSS, the home-screen icon, and the composer's
