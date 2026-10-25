@@ -4,8 +4,9 @@ This is the plan for letting the agent reach the machine it runs on — to diagn
 LAN and the router, and to deploy — without the credentials that make that reach possible ever
 living inside the container.
 
-Nothing here is implemented yet: the tree is at the last green baseline, and this file is the
-contract the implementation will be judged against.
+Phase 1 has started: `packages/host-broker` carries the socket, two read sources, the bounds and
+the audit log. Everything else below is still the plan, and this file is the contract the
+implementation is judged against.
 
 ## The problem
 
@@ -329,6 +330,10 @@ Phase 1 has to land before phase 2: until deployment works without SSH, removing
 the phone. Until phase 2 the **container** still holds the keys, so nothing the broker does is a
 boundary yet — that is deliberate, not an oversight. The broker itself needs none of them: every
 phase-1 operation is host-local, and the router hop is phase 3.
+
+Phase 1 is in progress: `packages/host-broker` has the protocol, `log.tail`, `proc.read`,
+`disk.usage`, the bounds and the audit; the plugin, `run(binary, argv)` and the deploy operations
+are not there yet.
 
 ## Open questions
 
