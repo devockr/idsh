@@ -16,16 +16,18 @@
 
 ## Packages
 
-| Package                                          | Description                                                                  | Version                                                                                                           |
-| ------------------------------------------------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| [`@idsh/mobile`](/packages/mobile)               | Touch CSS, Enter as a line break, and the home-screen icon                   | [![npm](https://img.shields.io/npm/v/@idsh/mobile.svg)](https://www.npmjs.com/package/@idsh/mobile)               |
-| [`@idsh/privileged-ui`](/packages/privileged-ui) | The settings page over a non-loopback origin, delegating the decision to dsh | [![npm](https://img.shields.io/npm/v/@idsh/privileged-ui.svg)](https://www.npmjs.com/package/@idsh/privileged-ui) |
-| [`@idsh/remote-access`](/packages/remote-access) | Keeps the UI's multiplexed WebSocket alive across a stalled connection       | [![npm](https://img.shields.io/npm/v/@idsh/remote-access.svg)](https://www.npmjs.com/package/@idsh/remote-access) |
+| Package                                          | Description                                                                   | Version                                                                                                           |
+| ------------------------------------------------ | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| [`@idsh/mobile`](/packages/mobile)               | Touch CSS, Enter as a line break, and the home-screen icon                    | [![npm](https://img.shields.io/npm/v/@idsh/mobile.svg)](https://www.npmjs.com/package/@idsh/mobile)               |
+| [`@idsh/privileged-ui`](/packages/privileged-ui) | The settings page over a non-loopback origin, delegating the decision to dsh  | [![npm](https://img.shields.io/npm/v/@idsh/privileged-ui.svg)](https://www.npmjs.com/package/@idsh/privileged-ui) |
+| [`@idsh/remote-access`](/packages/remote-access) | Keeps the UI's multiplexed WebSocket alive across a stalled connection        | [![npm](https://img.shields.io/npm/v/@idsh/remote-access.svg)](https://www.npmjs.com/package/@idsh/remote-access) |
+| [`@idsh/host-broker`](/packages/host-broker)     | The host side of `@idsh/host-ops`: a typed, audited socket (not a dsh plugin) | [![npm](https://img.shields.io/npm/v/@idsh/host-broker.svg)](https://www.npmjs.com/package/@idsh/host-broker)     |
 
 ## Documentation
 
 The plan for the next version is in [`ROADMAP.md`](./ROADMAP.md): reaching the host, the LAN and
-the router, and deploying through the same channel. Nothing in it is implemented yet.
+the router, and deploying through the same channel. Phase 1 has started — the broker's first slice
+is [`@idsh/host-broker`](/packages/host-broker).
 
 `pnpm docs:dev` serves this README, `ROADMAP.md`, `CHANGELOG.md`, each package's `README.md` and
 `CHANGELOG.md`, and the image's changelog; `pnpm docs:build` writes a static copy to `dist/`. The

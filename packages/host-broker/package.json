@@ -1,0 +1,46 @@
+{
+  "name": "@idsh/host-broker",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The host-side half of @idsh/host-ops: a typed, audited operation table on a unix socket, so the container never holds a host credential",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devockr/idsh.git",
+    "directory": "packages/host-broker"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "idsh-host": "lib/cli.js"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "host",
+    "broker",
+    "unix-socket",
+    "diagnostics"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
+    "test": "tsc -p tsconfig.json && node --test test/*.spec.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

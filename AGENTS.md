@@ -142,6 +142,10 @@ Observe the running thing; do not reason from source.
   — a plain script with no imports, because dsh serves exactly one file per package —
   compiled by `tsc` into `lib/`, which is what `main`/`exports`/`files` name and what ships;
   `cordis.patch.yml`, `README.md`; npm scope `@idsh`.
+- **A host program is the exception**: `packages/host-broker` has no `dsh` field and no client
+  half. Its `bin` is the program, its entry is `lib/index.js` like the others, and it is published
+  like the rest but never baked into the profile — the image's plugin set is the packages that
+  declare `dsh`.
 - **`lib/` is build output**, gitignored, produced by `pnpm --recursive build` _before_ the images
   are built — `Dockerfile.dev` ships those compiled files and refuses to build a package whose
   `lib/index.js` — or `lib/client.js`, when the package also has a browser half — is missing, or
@@ -265,6 +269,7 @@ Observe the running thing; do not reason from source.
 
 ## The plan
 
-`ROADMAP.md` is the plan for the next version; its items are not implemented. A change that
-implements one updates that file, `README.md` and this one in the same pull request — the next
-session reads the repository, not the private notes the plan came from.
+`ROADMAP.md` is the plan for the next version, and phase 1 is in progress: `packages/host-broker`
+holds the broker's first slice. A change that implements one updates that file, `README.md` and
+this one in the same pull request — the next session reads the repository, not the private notes
+the plan came from.
