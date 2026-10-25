@@ -115,6 +115,8 @@ function endpointOf(config: Config): BrokerEndpoint {
 /**
  * The model-facing tool name. Providers only accept `[a-zA-Z0-9_-]`, while an operation name is
  * the broker's own (`log.tail`); the tool calls the broker with the operation name it was given.
+ * The `idsh_` prefix namespaces them, so a sanitized name such as `read` or `bash` cannot collide
+ * with a built-in tool or another plugin's.
  */
 function toolName(op: string): string {
   return `idsh_${op.replaceAll(/[^\w-]/gu, '_')}`

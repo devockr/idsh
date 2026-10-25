@@ -83,7 +83,7 @@ RUN set -e; for d in /opt/dsh/packages/*/; do \
         || { echo "${d}src is newer than ${d}lib/index.js — run pnpm build" >&2; exit 1; }; \
     done
 
-RUN mkdir -p /opt/dsh/home \
+RUN set -e; mkdir -p /opt/dsh/home \
  && export HOME=/opt/dsh/home \
  && printf 'registry=%s\n' "$NPM_REGISTRY" > "$HOME/.npmrc" \
  && dsh web --dump-config >/dev/null \
