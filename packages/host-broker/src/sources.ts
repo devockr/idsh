@@ -238,7 +238,24 @@ async function docker(
     })
     return `${stdout}${stderr}`
   } catch (error) {
-    const stderr = (error as { stderr?: unknown }).stderr
+    const failure = error as {
+      code?: unknown
+      killed?: unknown
+      stderr?: unknown
+    }
+    if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      throw new BrokerFault(
+        'unavailable',
+        'the docker client wrote more than the broker reads',
+      )
+    }
+    if (failure.killed === true) {
+      throw new BrokerFault(
+        'timeout',
+        `the docker client did not answer within ${String(ctx.execTimeoutMs)} ms`,
+      )
+    }
+    const stderr = failure.stderr
     throw new BrokerFault(
       'unavailable',
       typeof stderr === 'string' && stderr.trim() !== ''

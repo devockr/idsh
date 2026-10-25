@@ -615,3 +615,26 @@ void test('deploy.status and deploy.log drive the docker client', async () => {
     await broker.close()
   }
 })
+
+void test('a docker call that exceeds the deadline answers timeout', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(dockerPath, '#!/bin/sh\nsleep 5\n', { mode: 0o755 })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    execTimeoutMs: 100,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'timeout')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
