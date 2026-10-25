@@ -808,3 +808,92 @@ void test('a tail window that is one long line is not emptied', () => {
   assert.ok(capped.text.length > 0)
   assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
 })
+
+void test('a timed-out program does not leave its child behind', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const pidFile = path.join(host.root, 'child.pid')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh\nsleep 5 &\necho $! > '${pidFile}'\nwait\n`,
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    execTimeoutMs: 200,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.error?.code, 'timeout')
+    const pidText = await readFile(pidFile, 'utf8')
+    const pid = Number(pidText.trim())
+    assert.ok(Number.isInteger(pid) && pid > 0)
+    // The group is killed before the answer; let the signal land.
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.throws(() => process.kill(pid, 0), /ESRCH/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a head op keeps the opening of a large program output', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nprintf 'FIRST\\n'\nhead -c 1200000 /dev/zero | tr '\\0' 'x'\nprintf '\\n'\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, true)
+    assert.equal(answer.truncated, true)
+    // A head cap keeps whole lines: the first row survives, the huge second one does not.
+    assert.equal(answer.result, 'FIRST')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a retained tail never starts inside a character', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const lead = 'x'.repeat(1_000_000 - 2)
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh\nprintf '%s' '${lead}'&\nprintf '😀'\nprintf '%s' '${'y'.repeat(200_000)}'\n`,
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.log', args: {} })
+    assert.equal(answer.ok, true)
+    assert.equal(answer.truncated, true)
+    assert.ok(!(answer.result ?? '').includes('\uFFFD'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})

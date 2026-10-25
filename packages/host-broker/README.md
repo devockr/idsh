@@ -88,7 +88,8 @@ to escape, nothing that can backtrack.
 - **Output** is capped at 64 KiB, trimmed back to the last line boundary inside it (or to a
   character boundary when the text has none), and a truncated answer says so.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
-- **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`.
+- **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`, and
+  its process group is stopped with it, so whatever it started goes too.
 - **Buffer**: one program may write 1 MiB; past that the oldest bytes are dropped, and the answer
   cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.
 - **Audit**: one JSON line per request — operation, outcome, duration, bytes, truncation, the
