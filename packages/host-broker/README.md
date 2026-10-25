@@ -10,8 +10,8 @@ with a small set of validated arguments.
 
 ## Run it
 
-```sh
-idsh-host --socket [--proc-dir < path > --audit < path > [--log-dir < dir > ] < dir > ]
+```text
+idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -30,6 +30,7 @@ WantedBy=default.target
 ```
 
 ```sh
+npm i -g --prefix ~/.local @idsh/host-broker
 systemctl --user enable --now idsh-host
 loginctl enable-linger "$USER" # keep it running without a login session
 ```

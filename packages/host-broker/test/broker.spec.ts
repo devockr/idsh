@@ -376,7 +376,7 @@ function bigLog(
   rowLength = 32,
 ): { content: string; last: string } {
   const row = (index: number) =>
-    `${String(index).padStart(rowLength - 1, '0')}\n`
+    `R${String(index).padStart(7, '0')}-${'x'.repeat(rowLength - 10)}\n`
   const content =
     head + Array.from({ length: rowCount }, (_, i) => row(i)).join('')
   return { content, last: row(rowCount - 1).trimEnd() }
@@ -384,8 +384,9 @@ function bigLog(
 
 void test('log.tail keeps the first whole row when the window starts on a boundary', async () => {
   const host = await fakeHost()
-  const { content, last } = bigLog(9000, '')
-  // The file, the window and its one extra byte line up, so the window starts at a row start.
+  const { content } = bigLog(9000, '')
+  // The window starts at row 808. Only that row matches the pattern, so it is exactly the row the
+  // off-by-one used to drop — a test that read the last rows would pass either way.
   assert.equal(content.length % 32, 0)
   assert.equal((content.length - TAIL_WINDOW_BYTES) % 32, 0)
   await writeFile(path.join(host.logDir, 'syslog'), content)
@@ -400,14 +401,9 @@ void test('log.tail keeps the first whole row when the window starts on a bounda
   try {
     const answer = await connection.request({
       op: 'log.tail',
-      args: { file: 'syslog', lines: 3 },
+      args: { file: 'syslog', lines: 2, pattern: 'R0000808-' },
     })
-    const rows = (answer.result ?? '').split('\n')
-    assert.equal(rows.length, 3)
-    assert.equal(rows[2], last)
-    for (const row of rows) {
-      assert.match(row, /^\d+$/u)
-    }
+    assert.match(answer.result ?? '', /^R0000808-/u)
   } finally {
     connection.close()
     await broker.close()
@@ -436,9 +432,9 @@ void test('log.tail drops the partial first row when the window starts inside on
     const rows = (answer.result ?? '').split('\n')
     assert.equal(rows.length, 3)
     assert.equal(rows[2], last)
-    // No row may start with the head's filler: a partial row is dropped, not returned.
+    // No row may be a partial one: every returned row is whole.
     for (const row of rows) {
-      assert.match(row, /^\d+$/u)
+      assert.match(row, /^R\d{7}-x+$/u)
     }
   } finally {
     connection.close()
@@ -448,11 +444,13 @@ void test('log.tail drops the partial first row when the window starts inside on
 
 void test('a request whose audit cannot be written answers internal', async () => {
   const host = await fakeHost()
+  // The directory itself as the log: appendFile answers EISDIR for every uid, unlike a 0500
+  // directory, which root can still write into.
   const locked = path.join(host.root, 'locked')
-  await mkdir(locked, 0o500)
+  await mkdir(locked)
   const broker = await startBroker({
     socketPath: host.socketPath,
-    auditPath: path.join(locked, 'audit.jsonl'),
+    auditPath: locked,
     logDir: host.logDir,
     procDir: host.procDir,
   })

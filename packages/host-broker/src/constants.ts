@@ -45,6 +45,9 @@ export const MAX_UTF8_SEQUENCE = 4
 /** One operation may buffer this much program output before failing. */
 export const MAX_EXEC_BUFFER_BYTES = 1024 * BYTES_PER_KIB
 
+/** How many requests may be queued on one connection before reading pauses. */
+export const INTAKE_QUEUE_LIMIT = 16
+
 /** Directory permission bits that let someone else replace what is inside. */
 export const FORBIDDEN_DIRECTORY_BITS = 0o022
 

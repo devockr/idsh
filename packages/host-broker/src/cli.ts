@@ -24,8 +24,9 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
 
-The socket's directory is created 0700 and the socket is chmodded 0600, so only the uid running
-this process can open it. There is no shell here: see the operation table in the README.
+A directory this process creates is 0700 and the socket is chmodded 0600, so only the uid running
+this process can open it. An existing directory is left as it is, but one that is group- or
+world-writable is refused. There is no shell here: see the operation table in the README.
 `
 
 function number(

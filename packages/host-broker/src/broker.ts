@@ -15,6 +15,7 @@ import {
   DIRECTORY_MODE,
   FILE_MODE,
   FORBIDDEN_DIRECTORY_BITS,
+  INTAKE_QUEUE_LIMIT,
   LIVENESS_TIMEOUT_MS,
   MAX_AUDIT_ARGS_CHARS,
   MAX_LINE_BYTES,
@@ -129,14 +130,27 @@ function serve(
   }
 
   let queue: Promise<void> = Promise.resolve()
+  let pending = 0
   const reader = createLineReader({
     onLine(line) {
+      pending += 1
+      // A client that pipelines faster than the broker answers is a buffer with no ceiling;
+      // pause the socket until the queue drains instead.
+      if (pending >= INTAKE_QUEUE_LIMIT) {
+        socket.pause()
+      }
       queue = queue
         .then(() =>
           answer(line, send, context, limiter, auditPath, execTimeoutMs, now),
         )
         .catch(() => {
           // One broken request must not stall every later one on this connection.
+        })
+        .finally(() => {
+          pending -= 1
+          if (pending < INTAKE_QUEUE_LIMIT) {
+            socket.resume()
+          }
         })
     },
     onOverflow() {
@@ -258,7 +272,9 @@ async function execute(
   if (!limiter.take(bucket, started)) {
     throw new BrokerFault(
       'too-many-requests',
-      `${bucket} is rate-limited; wait a minute`,
+      bucket === UNKNOWN_BUCKET
+        ? 'unknown operations are rate-limited; wait a minute'
+        : `${bucket} is rate-limited; wait a minute`,
     )
   }
   if (request.op !== DESCRIBE_OP && definition === undefined) {
