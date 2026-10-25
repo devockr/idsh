@@ -88,7 +88,7 @@ RUN mkdir -p /opt/dsh/home \
  && printf 'registry=%s\n' "$NPM_REGISTRY" > "$HOME/.npmrc" \
  && dsh web --dump-config >/dev/null \
  && for d in /opt/dsh/packages/*/; do \
-      [ -f "${d}package.json" ] && grep -q '"dsh"' "${d}package.json" || continue; \
+      [ -f "${d}package.json" ] && node -e "process.exit(require('${d}package.json').dsh ? 0 : 1)" || continue; \
       dsh plugin --profile web add "link:${d%/}"; \
     done \
  && test -f /opt/dsh/home/.dsh/profiles/web/package.json

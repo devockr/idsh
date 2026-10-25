@@ -66,7 +66,7 @@ void test('the broker table becomes one tool per operation', async () => {
     await registerTools(ctx, { socketPath: broker.socketPath })
     assert.deepEqual(
       tools.map(tool => tool.name),
-      ['log_tail', 'disk_usage'],
+      ['idsh_log_tail', 'idsh_disk_usage'],
     )
     assert.deepEqual(tools[0]?.parameters, TABLE[0]?.input)
     const result = await tools[0]?.execute(
@@ -160,8 +160,8 @@ void test('a registration that fails rolls back the ones already made', async ()
       registerTools(ctx, { socketPath: broker.socketPath }),
       /registry is full/u,
     )
-    assert.deepEqual(tools, ['log_tail'])
-    assert.deepEqual(disposed, ['log_tail'])
+    assert.deepEqual(tools, ['idsh_log_tail'])
+    assert.deepEqual(disposed, ['idsh_log_tail'])
   } finally {
     await broker.close()
   }

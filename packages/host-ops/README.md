@@ -3,7 +3,7 @@
 The agent-facing half of the host broker: the container holds a socket path, never a host
 credential. On load the plugin asks `@idsh/host-broker` for its operation table and registers one
 dsh tool per operation, so the model sees the broker's summaries and JSON Schemas under a
-tool-safe name (`log.tail` becomes `log_tail`; the call still goes to the broker as `log.tail`).
+tool-safe name (`log.tail` becomes `idsh_log_tail`; the call still goes to the broker as `log.tail`).
 
 ## Configure
 

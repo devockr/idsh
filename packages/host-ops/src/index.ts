@@ -117,7 +117,7 @@ function endpointOf(config: Config): BrokerEndpoint {
  * the broker's own (`log.tail`); the tool calls the broker with the operation name it was given.
  */
 function toolName(op: string): string {
-  return op.replaceAll(/[^\w-]/gu, '_')
+  return `idsh_${op.replaceAll(/[^\w-]/gu, '_')}`
 }
 
 function toolFor(endpoint: BrokerEndpoint, op: DescribedOp): HostTool {
