@@ -6,7 +6,7 @@
  * program. The socket's permissions are the other half — `0600` in a directory only its owner may
  * write means only that uid can open it at all.
  */
-import { chmod, lstat, mkdir, open, stat, unlink } from 'node:fs/promises'
+import { appendFile, chmod, lstat, mkdir, stat, unlink } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
@@ -100,6 +100,8 @@ export async function startBroker(
     recursive: true,
     mode: DIRECTORY_MODE,
   })
+  // A file left by rotation may be wider than FILE_MODE; narrow it before the first record.
+  await chmod(auditPath, FILE_MODE).catch(() => null)
   await prepareSocketDirectory(options.socketPath)
   const server = net.createServer(socket => {
     sockets.add(socket)
@@ -167,17 +169,15 @@ function serve(
           pending -= 1
           if (pending < INTAKE_QUEUE_LIMIT) {
             socket.resume()
-            reader.resume()
           }
         })
       pending += 1
+      // A client that pipelines faster than the broker answers is a buffer with no ceiling; pause
+      // the socket until the queue drains. One chunk is already parsed, so the queue can overshoot
+      // this by that chunk's lines — bounded by one read, not by the client.
       if (pending >= INTAKE_QUEUE_LIMIT) {
-        // Stop framing this chunk: the rest waits in the reader, not in the queue. Pausing the
-        // socket alone would only affect the next chunk.
         socket.pause()
-        return false
       }
-      return true
     },
     onOverflow() {
       if (closed) {
@@ -220,7 +220,7 @@ function serve(
     },
   })
 
-  socket.on('data', (chunk: Buffer) => reader.write(chunk))
+  socket.on('data', reader)
   socket.on('error', () => socket.destroy())
 }
 
@@ -356,11 +356,10 @@ function runOp(
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    // Node fires a delay above 2^31 - 1 ms at 1 ms instead; clamp rather than overflow.
-    const delay = Math.min(ms, MAX_TIMER_MS)
+    // The context clamps the operation timeout, so `ms` stays under Node's ceiling here.
     const timer = setTimeout(() => {
       reject(new BrokerFault('timeout', `no answer within ${ms} ms`))
-    }, delay)
+    }, ms)
     work.then(
       value => {
         clearTimeout(timer)
@@ -382,27 +381,13 @@ function boundedArgs(args: Record<string, unknown>): string {
     : `${encoded.slice(0, MAX_AUDIT_ARGS_CHARS)}…`
 }
 
-async function appendAudit(
+function appendAudit(
   file: string,
   record: Record<string, unknown>,
 ): Promise<void> {
-  const handle = await open(file, 'a', FILE_MODE)
-  try {
-    // `mode` on open applies only when the file is created, and rotation can install a wider one;
-    // set it on the descriptor before the record goes in.
-    await handle.chmod(FILE_MODE)
-    const line = Buffer.from(`${JSON.stringify(record)}\n`, 'utf8')
-    // One `write` can stop short; a torn line is the one thing this path must not produce.
-    for (let written = 0; written < line.length;) {
-      const { bytesWritten } = await handle.write(line, written)
-      if (bytesWritten <= 0) {
-        throw new Error('the audit write made no progress')
-      }
-      written += bytesWritten
-    }
-  } finally {
-    await handle.close()
-  }
+  // `appendFile` writes the whole line (looping over partial writes) and creates the file with
+  // `FILE_MODE`; the startup chmod covers a file that rotation installed.
+  return appendFile(file, `${JSON.stringify(record)}\n`, { mode: FILE_MODE })
 }
 
 /**
