@@ -1,0 +1,5 @@
+# The agent-facing row. The tools themselves are the broker's table, asked for at load time, so
+# nothing here lists them; the deployment points `socketPath` at where it mounts the socket.
+- insert:
+    - id: host-ops
+      name: '@idsh/host-ops'
