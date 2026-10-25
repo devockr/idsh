@@ -11,10 +11,12 @@ import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
+  MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
 } from './constants.ts'
+import type { Keep } from './limits.ts'
 import { BrokerFault } from './protocol.ts'
 
 /** Where an operation reads from, which container it drives, and how long a program may run. */
@@ -32,7 +34,7 @@ export interface OpDefinition {
   readonly summary: string
   readonly input: Record<string, unknown>
   /** The end a cap keeps; a log wants its tail, everything else its head. */
-  readonly keep?: 'head' | 'tail'
+  readonly keep?: Keep
   run(args: Record<string, unknown>, ctx: OpContext): Promise<string>
 }
 
@@ -47,6 +49,7 @@ function runFixed(
   ctx: OpContext,
   program: string,
   args: readonly string[],
+  keep: Keep = 'head',
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -72,7 +75,10 @@ function runFixed(
     const collect = (chunk: Buffer): void => {
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
-        buffer = buffer.subarray(buffer.length - MAX_EXEC_BUFFER_BYTES)
+        buffer =
+          keep === 'tail'
+            ? buffer.subarray(buffer.length - MAX_EXEC_BUFFER_BYTES)
+            : buffer.subarray(0, MAX_EXEC_BUFFER_BYTES)
       }
     }
 
@@ -98,14 +104,18 @@ function runFixed(
     child.once('close', (code, signal) => {
       if (code === 0) {
         settle()
-      } else {
-        settle(
-          new BrokerFault(
-            'unavailable',
-            `${program} exited with ${code ?? signal ?? 'no status'}`,
-          ),
-        )
+        return
       }
+      // The program's own message is the useful part: "No such container" beats "exited with 1".
+      const text = buffer.toString('utf8').trim().slice(0, MAX_ERROR_CHARS)
+      settle(
+        new BrokerFault(
+          'unavailable',
+          text === ''
+            ? `${program} exited with ${code ?? signal ?? 'no status'}`
+            : text,
+        ),
+      )
     })
   })
 }
@@ -285,8 +295,12 @@ const MAX_LOG_LINES = 1000
 const DEFAULT_LOG_LINES = 100
 
 /** The shape every `run` operation takes: one program, fixed argv. */
-function docker(ctx: OpContext, args: readonly string[]): Promise<string> {
-  return runFixed(ctx, ctx.dockerPath, args)
+function docker(
+  ctx: OpContext,
+  args: readonly string[],
+  keep: Keep = 'head',
+): Promise<string> {
+  return runFixed(ctx, ctx.dockerPath, args, keep)
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -355,7 +369,7 @@ export const OPS: readonly OpDefinition[] = [
       return docker(ctx, [
         'inspect',
         '--format',
-        '{{.Config.Image}} {{.Image}} {{.Created}} {{.State.Status}} {{.State.Health.Status}} {{.State.ExitCode}}',
+        'image={{.Config.Image}} id={{.Image}} created={{.Created}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} exit={{.State.ExitCode}}',
         ctx.container,
       ])
     },
@@ -377,7 +391,11 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, ['lines'])
       const lines = integer(args, 'lines', 1, MAX_LOG_LINES, DEFAULT_LOG_LINES)
-      return docker(ctx, ['logs', '--tail', String(lines), ctx.container])
+      return docker(
+        ctx,
+        ['logs', '--tail', String(lines), ctx.container],
+        'tail',
+      )
     },
   },
   {

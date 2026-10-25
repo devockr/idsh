@@ -27,6 +27,9 @@ export const TAIL_WINDOW_BYTES = 256 * BYTES_PER_KIB
 /** The longest `log.tail` pattern, in characters. */
 export const MAX_PATTERN_CHARS = 200
 
+/** A failure message carries at most this many characters of the program output. */
+export const MAX_ERROR_CHARS = 500
+
 /** Arguments are capped to this many characters in the audit log. */
 export const MAX_AUDIT_ARGS_CHARS = 200
 

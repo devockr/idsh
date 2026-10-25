@@ -96,7 +96,7 @@ export async function startBroker(
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const rateLimitPerMinute =
     options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
-  // Clamp where the context is built, not only in the wrapper: the same value reaches `execFile`,
+  // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,
   // and a program started with a delay past Node's ceiling is killed at 1 ms.
   const execTimeoutMs = Math.min(
     options.execTimeoutMs ?? DEFAULTS.execTimeoutMs,

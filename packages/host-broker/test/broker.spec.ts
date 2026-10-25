@@ -671,6 +671,32 @@ void test('docker streams merge in arrival order', async () => {
   }
 })
 
+void test('a program that exits non-zero carries its own message', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nprintf 'Error response from daemon: No such container: dsh\\n' >&2\nexit 1\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /No such container: dsh/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('a log past the buffer ceiling keeps its newest lines', async () => {
   const host = await fakeHost()
   const dockerPath = path.join(host.root, 'docker')
@@ -728,4 +754,14 @@ void test('a container name that is not one is refused', async () => {
     }),
     /container must be a docker container name/u,
   )
+})
+
+void test('capOutput keeps a tail of whole rows, never half a character', () => {
+  const row = `${'x'.repeat(199)}😀\n`
+  const text = row.repeat(400)
+  const capped = capOutput(text, 'tail')
+  assert.equal(capped.truncated, true)
+  assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
+  assert.ok(!capped.text.includes('\uFFFD'))
+  assert.ok(capped.text.endsWith(`${'x'.repeat(199)}😀\n`))
 })
