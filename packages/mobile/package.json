@@ -10,8 +10,10 @@
   },
   "license": "MIT",
   "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "exports": {
     ".": {
+      "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": {
@@ -23,6 +25,7 @@
   "files": [
     "cordis.patch.yml",
     "lib/client.js",
+    "lib/index.d.ts",
     "lib/index.js"
   ],
   "keywords": [
