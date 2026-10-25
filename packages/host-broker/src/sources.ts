@@ -11,7 +11,11 @@ import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
-import { MAX_PATTERN_CHARS, TAIL_WINDOW_BYTES } from './constants.ts'
+import {
+  MAX_EXEC_BUFFER_BYTES,
+  MAX_PATTERN_CHARS,
+  TAIL_WINDOW_BYTES,
+} from './constants.ts'
 import { BrokerFault } from './protocol.ts'
 
 const run = promisify(execFile)
@@ -108,20 +112,23 @@ function text(
 /* ------------------------------------------------------------------ log.tail */
 
 /** The one directory `log.tail` reads, and the only three names it knows inside it. */
-const LOG_FILES = {
+const LOG_TARGETS = ['messages', 'syslog', 'kern'] as const
+
+type LogFile = (typeof LOG_TARGETS)[number]
+
+const LOG_FILES: Record<LogFile, string> = {
   messages: 'messages',
   syslog: 'syslog',
   kern: 'kern.log',
-} as const
-
-type LogFile = keyof typeof LOG_FILES
+}
 
 /**
  * The last `lines` rows of one log.
  *
  * A window is read from the end rather than the whole file: a log can be gigabytes, and the answer
- * is bounded anyway. When the window does not start at a line boundary the partial first row is
- * dropped, so a caller never sees half a line.
+ * is bounded anyway. One byte before the window is read as well, so the first row is dropped only
+ * when the window really starts inside it — a window that starts on a line boundary keeps its first
+ * whole row.
  */
 async function tail(
   file: LogFile,
@@ -143,10 +150,10 @@ async function tail(
     throw new BrokerFault('unavailable', `${file} is not a regular file`)
   }
 
-  const offset = Math.max(0, info.size - TAIL_WINDOW_BYTES)
+  const offset = Math.max(0, info.size - TAIL_WINDOW_BYTES - 1)
   const handle = await open(filePath, 'r')
   try {
-    const buffer = Buffer.alloc(Math.min(info.size, TAIL_WINDOW_BYTES))
+    const buffer = Buffer.alloc(Math.min(info.size, TAIL_WINDOW_BYTES + 1))
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset)
     let body = buffer.subarray(0, bytesRead).toString('utf8')
     if (offset > 0) {
@@ -167,19 +174,19 @@ async function tail(
 /* ------------------------------------------------------------------ proc.read */
 
 /** The fixed set `proc.read` can answer from. */
-const PROC_FILES = {
-  mdstat: 'mdstat',
-  loadavg: 'loadavg',
-  meminfo: 'meminfo',
-  uptime: 'uptime',
-  vmstat: 'vmstat',
-} as const
+const PROC_TARGETS = [
+  'mdstat',
+  'loadavg',
+  'meminfo',
+  'uptime',
+  'vmstat',
+] as const
 
-type ProcFile = keyof typeof PROC_FILES
+type ProcFile = (typeof PROC_TARGETS)[number]
 
 async function readProc(file: ProcFile, ctx: OpContext): Promise<string> {
   try {
-    return await readFile(path.join(ctx.procDir, PROC_FILES[file]), 'utf8')
+    return await readFile(path.join(ctx.procDir, file), 'utf8')
   } catch {
     throw new BrokerFault('unavailable', `${file} is not readable on this host`)
   }
@@ -192,7 +199,7 @@ async function diskUsage(ctx: OpContext): Promise<string> {
   try {
     const { stdout } = await run('df', ['-h'], {
       timeout: ctx.execTimeoutMs,
-      maxBuffer: 1024 * 1024,
+      maxBuffer: MAX_EXEC_BUFFER_BYTES,
       encoding: 'utf8',
     })
     return stdout
@@ -218,7 +225,7 @@ export const OPS: readonly OpDefinition[] = [
       properties: {
         file: {
           type: 'string',
-          enum: ['messages', 'syslog', 'kern'],
+          enum: [...LOG_TARGETS],
           description: 'Which host log to read.',
         },
         lines: {
@@ -239,7 +246,7 @@ export const OPS: readonly OpDefinition[] = [
     },
     async run(args, ctx) {
       rejectUnknown(args, ['file', 'lines', 'pattern'])
-      const file = choice(args, 'file', ['messages', 'syslog', 'kern'])
+      const file = choice(args, 'file', LOG_TARGETS)
       const lines = integer(args, 'lines', 1, 500, 100)
       return tail(file, lines, text(args, 'pattern', MAX_PATTERN_CHARS), ctx)
     },
@@ -253,7 +260,7 @@ export const OPS: readonly OpDefinition[] = [
       properties: {
         file: {
           type: 'string',
-          enum: ['mdstat', 'loadavg', 'meminfo', 'uptime', 'vmstat'],
+          enum: [...PROC_TARGETS],
         },
       },
       required: ['file'],
@@ -261,13 +268,7 @@ export const OPS: readonly OpDefinition[] = [
     },
     async run(args, ctx) {
       rejectUnknown(args, ['file'])
-      const file = choice(args, 'file', [
-        'mdstat',
-        'loadavg',
-        'meminfo',
-        'uptime',
-        'vmstat',
-      ])
+      const file = choice(args, 'file', PROC_TARGETS)
       return readProc(file, ctx)
     },
   },

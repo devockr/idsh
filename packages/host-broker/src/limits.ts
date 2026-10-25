@@ -4,7 +4,11 @@
  * refused one says which limit it hit.
  */
 
-import { DEFAULT_WINDOW_MS, MAX_OUTPUT_BYTES } from './constants.ts'
+import {
+  DEFAULT_WINDOW_MS,
+  MAX_OUTPUT_BYTES,
+  MAX_UTF8_SEQUENCE,
+} from './constants.ts'
 
 export { MAX_OUTPUT_BYTES } from './constants.ts'
 
@@ -14,18 +18,39 @@ export interface Capped {
 }
 
 /**
- * Trim text to the output ceiling on a line boundary.
+ * Trim text to the output ceiling.
  *
- * Bytes are the limit, not characters: a line is dropped only when it cannot fit, so a multi-byte
- * character is never split in half.
+ * Bytes are the limit, not characters: a cut is moved back to a character boundary (so no U+FFFD
+ * appears and the result cannot re-encode past the ceiling) and then, when the text has one, back to
+ * the last line boundary inside it.
  */
 export function capOutput(text: string): Capped {
-  if (Buffer.byteLength(text) <= MAX_OUTPUT_BYTES) {
+  const bytes = Buffer.from(text)
+  if (bytes.length <= MAX_OUTPUT_BYTES) {
     return { text, truncated: false }
   }
-  const cut = Buffer.from(text).subarray(0, MAX_OUTPUT_BYTES).toString('utf8')
+  const cut = decodeAtMost(bytes, MAX_OUTPUT_BYTES)
   const boundary = cut.lastIndexOf('\n')
   return { text: boundary > 0 ? cut.slice(0, boundary) : cut, truncated: true }
+}
+
+/**
+ * Decode at most `limit` bytes of a UTF-8 buffer, backing off to a character boundary.
+ *
+ * A plain `subarray(0, limit).toString()` replaces a half-cut character with U+FFFD, which both
+ * splits one character and re-encodes to more bytes than the ceiling allows.
+ */
+function decodeAtMost(bytes: Buffer, limit: number): string {
+  for (let end = limit; end > limit - MAX_UTF8_SEQUENCE && end > 0; end -= 1) {
+    try {
+      return new TextDecoder('utf8', { fatal: true }).decode(
+        bytes.subarray(0, end),
+      )
+    } catch {
+      // The cut landed inside a sequence; one byte shorter may be a boundary.
+    }
+  }
+  return new TextDecoder('utf8').decode(bytes.subarray(0, limit))
 }
 
 /**

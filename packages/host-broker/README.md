@@ -17,14 +17,29 @@ idsh-host --socket [--proc-dir < path > --audit < path > [--log-dir < dir > ] < 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
 alive:
 
+A user unit, so the broker runs as the same uid the socket is for:
+
 ```ini
+# ~/.config/systemd/user/idsh-host.service
 [Service]
-ExecStart=/usr/local/bin/idsh-host --socket /srv/idsh-host/host.sock --audit /srv/idsh-host/audit.jsonl
+ExecStart=%h/.local/bin/idsh-host --socket %h/.local/state/idsh-host/host.sock --audit %h/.local/state/idsh-host/audit.jsonl
 Restart=always
+
+[Install]
+WantedBy=default.target
 ```
 
-The socket's directory is created `0700` and the socket is chmodded `0600`, so only the uid running
-the broker can open it. No credentials are read: the operations are host-local, and the router hop
+```sh
+systemctl --user enable --now idsh-host
+loginctl enable-linger "$USER" # keep it running without a login session
+```
+
+A system unit would default to root, which changes both whose files it reads and who may open the
+socket; do not use one.
+
+A directory the broker creates is `0700` and the socket is chmodded `0600`, so only the uid running
+the broker can open it. An existing directory is not narrowed — the read-only fallback in
+`ROADMAP.md` uses `0750` — but one that the container could write to is refused. No credentials are read: the operations are host-local, and the router hop
 (phase 3) will take its key from the same directory.
 
 ## The protocol
@@ -34,7 +49,7 @@ pipelined. A line is capped at 16 KiB.
 
 ```json
 {"id":"1","op":"log.tail","args":{"file":"messages","lines":50,"pattern":"error"}}
-{"id":"1","ok":true,"result":"…","truncated":false}
+{"id":"1","ok":true,"result":"…"}
 ```
 
 ```json
@@ -42,6 +57,7 @@ pipelined. A line is capped at 16 KiB.
 {"ok":false,"error":{"code":"bad-argument","message":"file must be one of \"mdstat\", …"}}
 ```
 
+A `truncated` field appears only when it is `true`, so a normal answer is exactly `{id, ok, result}`.
 Error codes are stable: `bad-json`, `bad-request`, `unknown-op`, `bad-argument`, `unavailable`,
 `timeout`, `too-many-requests`, `line-too-long`, `internal`. A refusal is audited like any other
 request.
@@ -66,13 +82,14 @@ to escape, nothing that can backtrack.
 - **Time**: 10 seconds per operation by default.
 - **Audit**: one JSON line per request — operation, outcome, duration, bytes, truncation, the
   arguments capped at 200 characters — written before the response. If the audit cannot be written,
-  the response is an error, not a success.
+  the response is an error, not a success. The file is append-only and unbounded; rotating it is the
+  host's job, with the same log rotation everything else on that machine gets.
 
 ## What is not here yet
 
 `run(binary, argv)` with its allowlist and path guard, the deploy operations and the router
 operations are all phase‑1/phase‑3 work in `ROADMAP.md`. This package is deliberately only the
-socket, two read sources, the bounds and the audit — the parts the rest is built on.
+socket, three read sources, the bounds and the audit — the parts the rest is built on.
 
 ## Not in the image
 

@@ -4,7 +4,7 @@ This is the plan for letting the agent reach the machine it runs on — to diagn
 LAN and the router, and to deploy — without the credentials that make that reach possible ever
 living inside the container.
 
-Phase 1 has started: `packages/host-broker` carries the socket, two read sources, the bounds and
+Phase 1 has started: `packages/host-broker` carries the socket, three read sources, the bounds and
 the audit log. Everything else below is still the plan, and this file is the contract the
 implementation is judged against.
 

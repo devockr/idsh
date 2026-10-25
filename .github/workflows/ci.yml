@@ -61,7 +61,7 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # No package has tests yet: the recursive `test` script skips a package without one, so this
-      # step starts covering a package the day it gains a test script.
+      # The recursive `test` script skips a package without one, so the reach of this step grows as
+      # packages gain tests — the host broker is the first.
       - name: Test
         run: pnpm test

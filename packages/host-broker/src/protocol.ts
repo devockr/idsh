@@ -124,10 +124,16 @@ export function createLineReader(
     ])
     let newline = buffer.indexOf(NEWLINE_BYTE)
     while (newline >= 0) {
-      const line = buffer.subarray(0, newline).toString('utf8')
+      const line = buffer.subarray(0, newline)
       buffer = buffer.subarray(newline + 1)
-      if (line.trim() !== '') {
-        options.onLine(line)
+      if (line.length > maxBytes) {
+        // A terminated line gets the same ceiling as an unterminated one.
+        options.onOverflow?.()
+      } else {
+        const text = line.toString('utf8')
+        if (text.trim() !== '') {
+          options.onLine(text)
+        }
       }
       newline = buffer.indexOf(NEWLINE_BYTE)
     }

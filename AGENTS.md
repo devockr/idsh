@@ -142,11 +142,15 @@ Observe the running thing; do not reason from source.
   — a plain script with no imports, because dsh serves exactly one file per package —
   compiled by `tsc` into `lib/`, which is what `main`/`exports`/`files` name and what ships;
   `cordis.patch.yml`, `README.md`; npm scope `@idsh`.
+- **A host program is the exception**: `packages/host-broker` has no `dsh` field and no client
+  half. Its `bin` is the program, its `main` names the entry, and it is published like the rest
+  but never baked into the profile — the image's plugin set is the packages that declare `dsh`.
 - **`lib/` is build output**, gitignored, produced by `pnpm --recursive build` _before_ the images
   are built — `Dockerfile.dev` ships those compiled files and refuses to build a package whose
-  `lib/index.js` — or `lib/client.js`, when the package also has a browser half — is missing, or
+  `main` entry — or `lib/client.js`, when the package also has a browser half — is missing, or
   older than its `src/`, so a forgotten rebuild fails the build instead of shipping a `link:`
-  target with nothing to load.
+  target with nothing to load. The check reads `main`, so a host program with a different entry is
+  covered by the same rule.
 - **A package has no URL.** Its browser half arrives through the bundle endpoint
   (`plugins/??<pkg>/client.js,…&rev=…`), and nothing else under the package is reachable — on a
   deployment the app's own `/favicon.svg` answers 200 while every `/plugins/…` path answers 404.

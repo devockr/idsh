@@ -8,6 +8,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 
 import { startBroker } from '../src/broker.ts'
+import { TAIL_WINDOW_BYTES } from '../src/constants.ts'
 import { capOutput, RateLimiter } from '../src/limits.ts'
 import type { BrokerResponse } from '../src/protocol.ts'
 import { createLineReader, parseRequest } from '../src/protocol.ts'
@@ -163,6 +164,19 @@ void test('the line reader splits, skips blank lines and reports an overrun', ()
   assert.deepEqual(lines, ['{"a":1}', '{"b":2}', '{"c":3}'])
 })
 
+void test('a terminated line over the ceiling is dropped too', () => {
+  const lines: string[] = []
+  const overflow: Array<true> = []
+  const read = createLineReader({
+    onLine: line => lines.push(line),
+    onOverflow: () => overflow.push(true),
+    maxBytes: SMALL_LINE_LIMIT,
+  })
+  read(`${'x'.repeat(SMALL_LINE_LIMIT + 1)}\n`)
+  assert.deepEqual(lines, [])
+  assert.deepEqual(overflow, [true])
+})
+
 void test('capOutput trims to the ceiling on a line boundary', () => {
   const short = 'one\ntwo\n'
   assert.deepEqual(capOutput(short), { text: short, truncated: false })
@@ -235,9 +249,15 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     )
     assert.equal(ops[0].input.required?.[0], 'file')
 
-    const unknown = await connection.request({ op: 'nope', args: {} })
+    const unknown = await connection.request({
+      id: 'b',
+      op: 'nope',
+      args: {},
+    })
     assert.equal(unknown.ok, false)
     assert.equal(unknown.error?.code, 'unknown-op')
+    // A refusal is matchable to its request too.
+    assert.equal(unknown.id, 'b')
 
     const badArg = await connection.request({
       op: 'log.tail',
@@ -339,4 +359,113 @@ void test('a stale socket, left by a killed broker, is replaced', async () => {
   assert.equal(answer.ok, true)
   connection.close()
   await broker.close()
+})
+
+void test('capOutput never splits a character or passes its ceiling', () => {
+  const text = `${'a'.repeat(OUTPUT_CAP_BYTES - 1)}😀${'b'.repeat(10)}`
+  const capped = capOutput(text)
+  assert.equal(capped.truncated, true)
+  assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
+  assert.ok(!capped.text.includes('\uFFFD'))
+})
+
+/** A log big enough to exercise the tail window; each row is exactly `rowLength` bytes. */
+function bigLog(
+  rowCount: number,
+  head: string,
+  rowLength = 32,
+): { content: string; last: string } {
+  const row = (index: number) =>
+    `${String(index).padStart(rowLength - 1, '0')}\n`
+  const content =
+    head + Array.from({ length: rowCount }, (_, i) => row(i)).join('')
+  return { content, last: row(rowCount - 1).trimEnd() }
+}
+
+void test('log.tail keeps the first whole row when the window starts on a boundary', async () => {
+  const host = await fakeHost()
+  const { content, last } = bigLog(9000, '')
+  // The file, the window and its one extra byte line up, so the window starts at a row start.
+  assert.equal(content.length % 32, 0)
+  assert.equal((content.length - TAIL_WINDOW_BYTES) % 32, 0)
+  await writeFile(path.join(host.logDir, 'syslog'), content)
+
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'log.tail',
+      args: { file: 'syslog', lines: 3 },
+    })
+    const rows = (answer.result ?? '').split('\n')
+    assert.equal(rows.length, 3)
+    assert.equal(rows[2], last)
+    for (const row of rows) {
+      assert.match(row, /^\d+$/u)
+    }
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('log.tail drops the partial first row when the window starts inside one', async () => {
+  const host = await fakeHost()
+  // 33-byte rows put the window start inside a row rather than on one of its boundaries.
+  const { content, last } = bigLog(8000, '', 33)
+  assert.notEqual((content.length - TAIL_WINDOW_BYTES) % 33, 0)
+  await writeFile(path.join(host.logDir, 'syslog'), content)
+
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'log.tail',
+      args: { file: 'syslog', lines: 3 },
+    })
+    const rows = (answer.result ?? '').split('\n')
+    assert.equal(rows.length, 3)
+    assert.equal(rows[2], last)
+    // No row may start with the head's filler: a partial row is dropped, not returned.
+    for (const row of rows) {
+      assert.match(row, /^\d+$/u)
+    }
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a request whose audit cannot be written answers internal', async () => {
+  const host = await fakeHost()
+  const locked = path.join(host.root, 'locked')
+  await mkdir(locked, 0o500)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: path.join(locked, 'audit.jsonl'),
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'proc.read',
+      args: { file: 'mdstat' },
+    })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'internal')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
 })

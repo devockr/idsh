@@ -39,6 +39,15 @@ export const TIMEOUT_SLACK_MS = 1000
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
 
+/** The longest UTF-8 sequence, so a cut inside one backs off by at most this much. */
+export const MAX_UTF8_SEQUENCE = 4
+
+/** One operation may buffer this much program output before failing. */
+export const MAX_EXEC_BUFFER_BYTES = 1024 * BYTES_PER_KIB
+
+/** Directory permission bits that let someone else replace what is inside. */
+export const FORBIDDEN_DIRECTORY_BITS = 0o022
+
 /** Files the broker writes — the audit log — are readable by their owner only. */
 export const FILE_MODE = 0o600
 
