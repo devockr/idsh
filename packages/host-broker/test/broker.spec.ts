@@ -261,7 +261,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
     assert.deepEqual(
       ops.map(op => op.name),
-      ['log.tail', 'proc.read', 'disk.usage'],
+      ['log.tail', 'proc.read', 'deploy.status', 'deploy.log', 'disk.usage'],
     )
     assert.equal(ops[0].input.required?.[0], 'file')
 
@@ -579,4 +579,39 @@ void test('an exec timeout past the timer ceiling is clamped where it is used', 
     process.off('warning', onWarning)
   }
   assert.ok(!warnings.includes('TimeoutOverflowWarning'))
+})
+
+void test('deploy.status and deploy.log drive the docker client', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(dockerPath, '#!/bin/sh\nprintf "%s\\n" "$*"\n', {
+    mode: 0o755,
+  })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    container: 'dsh',
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const status = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(status.ok, true)
+    assert.match(status.result ?? '', /^inspect --format .* dsh$/mu)
+    const tail = await connection.request({
+      op: 'deploy.log',
+      args: { lines: 3 },
+    })
+    assert.equal(tail.result, 'logs --tail 3 dsh\n')
+    const bad = await connection.request({
+      op: 'deploy.log',
+      args: { lines: 0 },
+    })
+    assert.equal(bad.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
 })

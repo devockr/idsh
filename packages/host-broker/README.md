@@ -12,6 +12,7 @@ with a small set of validated arguments.
 
 ```text
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
+         [--container <name>] [--docker <path>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -68,12 +69,14 @@ request.
 
 ## Operations (first slice)
 
-| op             | reads                                                                                         |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| `log.tail`     | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string |
-| `proc.read`    | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                          |
-| `disk.usage`   | `df -h`                                                                                       |
-| `ops.describe` | the table itself: names, summaries and each operation's schema                                |
+| op              | reads                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `log.tail`      | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string |
+| `proc.read`     | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                          |
+| `disk.usage`    | `df -h`                                                                                       |
+| `deploy.status` | the deployment container: image, creation time and state                                      |
+| `deploy.log`    | the tail of the deployment container log                                                      |
+| `ops.describe`  | the table itself: names, summaries and each operation's schema                                |
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing
@@ -92,9 +95,10 @@ to escape, nothing that can backtrack.
 
 ## What is not here yet
 
-`run(binary, argv)` with its allowlist and path guard, the deploy operations and the router
-operations are all phase‑1/phase‑3 work in `ROADMAP.md`. This package is deliberately only the
-socket, three read sources, the bounds and the audit — the parts the rest is built on.
+`deploy.build`, `deploy.recreate`, `deploy.rollback`, the router operations and the `run` allowlist
+are phase‑1/phase‑3 work in `ROADMAP.md`. The two deploy operations here are read-only: they inspect
+the container through one fixed `docker` invocation, and `--container`/`--docker` name what the host
+actually runs.
 
 ## Not in the image
 

@@ -20,11 +20,13 @@ import { BrokerFault } from './protocol.ts'
 
 const run = promisify(execFile)
 
-/** Where an operation reads from, and how long a program it starts may run. */
+/** Where an operation reads from, which container it drives, and how long a program may run. */
 export interface OpContext {
   readonly logDir: string
   readonly procDir: string
   readonly execTimeoutMs: number
+  readonly container: string
+  readonly dockerPath: string
 }
 
 /** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
@@ -217,6 +219,35 @@ async function diskUsage(ctx: OpContext): Promise<string> {
   }
 }
 
+/* ------------------------------------------------------------------ deploy.status / deploy.log */
+
+/** The most lines one log answer may ask for, and the default. */
+const MAX_LOG_LINES = 1000
+const DEFAULT_LOG_LINES = 100
+
+/** One fixed program with fixed arguments: no shell, no caller-supplied argv. */
+async function docker(
+  ctx: OpContext,
+  args: readonly string[],
+): Promise<string> {
+  try {
+    const { stdout, stderr } = await run(ctx.dockerPath, args, {
+      timeout: ctx.execTimeoutMs,
+      maxBuffer: MAX_EXEC_BUFFER_BYTES,
+      encoding: 'utf8',
+    })
+    return `${stdout}${stderr}`
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown }).stderr
+    throw new BrokerFault(
+      'unavailable',
+      typeof stderr === 'string' && stderr.trim() !== ''
+        ? stderr.trim()
+        : 'the docker client failed',
+    )
+  }
+}
+
 /* ------------------------------------------------------------------ the table */
 
 export const OPS: readonly OpDefinition[] = [
@@ -270,6 +301,40 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['file'])
       const file = choice(args, 'file', PROC_TARGETS)
       return readProc(file, ctx)
+    },
+  },
+  {
+    name: 'deploy.status',
+    summary:
+      'The deployment container: its image, creation time and state, straight from docker.',
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      return docker(ctx, [
+        'inspect',
+        '--format',
+        '{{.Image}} {{.Created}} {{.State.Status}}',
+        ctx.container,
+      ])
+    },
+  },
+  {
+    name: 'deploy.log',
+    summary: 'The tail of the deployment container log.',
+    input: {
+      type: 'object',
+      properties: {
+        lines: {
+          type: 'integer',
+          description: `How many trailing lines to return, 1 to ${String(MAX_LOG_LINES)}. Default ${String(DEFAULT_LOG_LINES)}.`,
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['lines'])
+      const lines = integer(args, 'lines', 1, MAX_LOG_LINES, DEFAULT_LOG_LINES)
+      return docker(ctx, ['logs', '--tail', String(lines), ctx.container])
     },
   },
   {
