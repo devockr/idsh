@@ -40,8 +40,10 @@ socket; do not use one.
 
 A directory the broker creates is `0700` and the socket is chmodded `0600`, so only the uid running
 the broker can open it. An existing directory is not narrowed — the read-only fallback in
-`ROADMAP.md` uses `0750` — but one that the container could write to is refused. No credentials are read: the operations are host-local, and the router hop
-(phase 3) will take its key from the same directory.
+`ROADMAP.md` uses `0750` — but one that the container could write to is refused.
+
+No credentials are read: the operations are host-local, and the router hop (phase 3) will take its
+key from the same directory.
 
 ## The protocol
 
