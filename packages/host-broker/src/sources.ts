@@ -15,6 +15,8 @@ import {
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
+  UTF8_CONTINUATION_MASK,
+  UTF8_CONTINUATION_PREFIX,
 } from './constants.ts'
 import type { Keep } from './limits.ts'
 import { BrokerFault } from './protocol.ts'
@@ -52,7 +54,11 @@ function runFixed(
   keep: Keep = 'head',
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(program, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(program, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Its own group, so a timeout can stop whatever the program started too.
+      detached: true,
+    })
     const state: { settled: boolean; timer?: NodeJS.Timeout } = {
       settled: false,
     }
@@ -75,17 +81,33 @@ function runFixed(
     const collect = (chunk: Buffer): void => {
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
-        buffer =
-          keep === 'tail'
-            ? buffer.subarray(buffer.length - MAX_EXEC_BUFFER_BYTES)
-            : buffer.subarray(0, MAX_EXEC_BUFFER_BYTES)
+        if (keep === 'head') {
+          buffer = buffer.subarray(0, MAX_EXEC_BUFFER_BYTES)
+        } else {
+          // Do not start a retained tail inside a character: back off to its lead byte.
+          let start = buffer.length - MAX_EXEC_BUFFER_BYTES
+          while (
+            start < buffer.length &&
+            (buffer[start] & UTF8_CONTINUATION_MASK) ===
+              UTF8_CONTINUATION_PREFIX
+          ) {
+            start += 1
+          }
+          buffer = buffer.subarray(start)
+        }
       }
     }
 
     child.stdout.on('data', collect)
     child.stderr.on('data', collect)
     state.timer = setTimeout(() => {
-      child.kill('SIGKILL')
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL')
+        } catch {
+          child.kill('SIGKILL')
+        }
+      }
       settle(
         new BrokerFault(
           'timeout',
