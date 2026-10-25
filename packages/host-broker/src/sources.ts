@@ -111,6 +111,10 @@ function text(
 
 /* ------------------------------------------------------------------ log.tail */
 
+/** The most rows `log.tail` returns, and the default when the caller does not ask. */
+const MAX_LINES = 500
+const DEFAULT_LINES = 100
+
 /** The one directory `log.tail` reads, and the only three names it knows inside it. */
 const LOG_TARGETS = ['messages', 'syslog', 'kern'] as const
 
@@ -231,8 +235,8 @@ export const OPS: readonly OpDefinition[] = [
         lines: {
           type: 'integer',
           minimum: 1,
-          maximum: 500,
-          description: 'How many trailing lines to return. Default 100.',
+          maximum: MAX_LINES,
+          description: `How many trailing lines to return. Default ${String(DEFAULT_LINES)}.`,
         },
         pattern: {
           type: 'string',
@@ -247,7 +251,7 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, ['file', 'lines', 'pattern'])
       const file = choice(args, 'file', LOG_TARGETS)
-      const lines = integer(args, 'lines', 1, 500, 100)
+      const lines = integer(args, 'lines', 1, MAX_LINES, DEFAULT_LINES)
       return tail(file, lines, text(args, 'pattern', MAX_PATTERN_CHARS), ctx)
     },
   },

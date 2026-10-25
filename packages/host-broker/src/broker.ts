@@ -46,7 +46,7 @@ export const DESCRIBE_OP = 'ops.describe'
 const UNKNOWN_BUCKET = 'unknown'
 
 export interface BrokerOptions {
-  /** The socket to create. Its directory is created `0700`, the socket is made `0600`. */
+  /** The socket to create. A missing directory is made `0700`; the socket is made `0600`. */
   readonly socketPath: string
   /** Append-only JSON Lines; one line per request, refused ones included. */
   readonly auditPath: string
@@ -101,12 +101,15 @@ export async function startBroker(
     mode: DIRECTORY_MODE,
   })
   // A file left by rotation may be wider than FILE_MODE; narrow it before the first record.
-  await chmod(auditPath, FILE_MODE).catch(() => null)
+  const audit = await stat(auditPath).catch(() => null)
+  if (audit?.isFile() === true) {
+    await chmod(auditPath, FILE_MODE).catch(() => null)
+  }
   await prepareSocketDirectory(options.socketPath)
   const server = net.createServer(socket => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
-    serve(socket, context, limiter, auditPath, execTimeoutMs, now)
+    serve(socket, context, limiter, auditPath, now)
   })
   await listen(server, options.socketPath)
   try {
@@ -138,7 +141,6 @@ function serve(
   context: OpContext,
   limiter: RateLimiter,
   auditPath: string,
-  execTimeoutMs: number,
   now: () => number,
 ): void {
   let closed = false
@@ -159,9 +161,7 @@ function serve(
   const reader = createLineReader({
     onLine(line) {
       queue = queue
-        .then(() =>
-          answer(line, send, context, limiter, auditPath, execTimeoutMs, now),
-        )
+        .then(() => answer(line, send, context, limiter, auditPath, now))
         .catch(() => {
           // One broken request must not stall every later one on this connection.
         })
@@ -230,7 +230,6 @@ async function answer(
   context: OpContext,
   limiter: RateLimiter,
   auditPath: string,
-  execTimeoutMs: number,
   now: () => number,
 ): Promise<void> {
   const started = now()
@@ -273,13 +272,7 @@ async function answer(
     op = request.op
     requestId = request.id
     args = request.args
-    const capped = await execute(
-      request,
-      context,
-      limiter,
-      execTimeoutMs,
-      started,
-    )
+    const capped = await execute(request, context, limiter, started)
     await finish(
       {
         ...(requestId === undefined ? {} : { id: requestId }),
@@ -314,7 +307,6 @@ async function execute(
   request: BrokerRequest,
   context: OpContext,
   limiter: RateLimiter,
-  execTimeoutMs: number,
   started: number,
 ): Promise<Capped> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
@@ -341,7 +333,7 @@ async function execute(
   const result =
     definition === undefined
       ? describeOps()
-      : await runOp(definition, request.args, context, execTimeoutMs)
+      : await runOp(definition, request.args, context)
   return capOutput(result)
 }
 
@@ -349,9 +341,11 @@ function runOp(
   op: OpDefinition,
   args: Record<string, unknown>,
   context: OpContext,
-  timeoutMs: number,
 ): Promise<string> {
-  return withTimeout(op.run(args, context), timeoutMs + TIMEOUT_SLACK_MS)
+  return withTimeout(
+    op.run(args, context),
+    context.execTimeoutMs + TIMEOUT_SLACK_MS,
+  )
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {

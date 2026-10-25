@@ -331,10 +331,6 @@ the phone. Until phase 2 the **container** still holds the keys, so nothing the 
 boundary yet — that is deliberate, not an oversight. The broker itself needs none of them: every
 phase-1 operation is host-local, and the router hop is phase 3.
 
-Phase 1 is in progress: `packages/host-broker` has the protocol, `log.tail`, `proc.read`,
-`disk.usage`, the bounds and the audit; the plugin, `run(binary, argv)` and the deploy operations
-are not there yet.
-
 ## Open questions
 
 - Whether the deployment confirmation should also require an action outside the container — a

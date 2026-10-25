@@ -47,8 +47,9 @@ key from the same directory.
 
 ## The protocol
 
-Newline-delimited JSON over a unix stream socket; one request in, one response out, nothing
-pipelined. A line is capped at 16 KiB.
+Newline-delimited JSON over a unix stream socket; one request per line, one response per line, in
+request order. A line is capped at 16 KiB. A client should send one request at a time; the broker
+tolerates a pipeline but pauses reading once sixteen answers are queued.
 
 ```json
 {"id":"1","op":"log.tail","args":{"file":"messages","lines":50,"pattern":"error"}}
@@ -80,7 +81,8 @@ to escape, nothing that can backtrack.
 
 ## Bounds
 
-- **Output** is capped at 64 KiB, trimmed on a line boundary, and a truncated answer says so.
+- **Output** is capped at 64 KiB, trimmed back to the last line boundary inside it (or to a
+  character boundary when the text has none), and a truncated answer says so.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
 - **Time**: 10 seconds per operation by default.
 - **Audit**: one JSON line per request — operation, outcome, duration, bytes, truncation, the
