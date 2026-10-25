@@ -250,13 +250,15 @@ one — a tag is not retention. The build labels every image it produces `idsh.k
 cleanup carries the line that makes the label matter: `docker image prune -a --filter
 'label!=idsh.keep=1'`. Labels are immutable and land at build time, so that label means "built by
 the broker, kept until superseded", not "this is the rollback target" — it is on every build, and
-the exemption is only bounded because the broker also deletes: once a deployment has stabilised, the
-image that is neither running nor the recorded target is removed, so the host holds at most two.
-The broker's tag on the recorded image is a name for the operator, not retention. Before a rollback
-it checks that the reference still resolves and fails loudly if it does not, rather than starting
-something else; the rescue script makes the same check. If the host's cleanup cannot be changed,
-`docker save` of the recorded image into the broker's state is the alternative — under the same
-lifetime rule, one tarball, replaced when the target moves.
+the exemption is only bounded because the broker also deletes: when a deployment ends, whether it
+stabilised or rolled back, every image it built that is neither running nor the recorded target is
+removed. A failed candidate therefore goes as soon as its rollback finishes, and repeated failures
+cannot accumulate. The running image and the recorded target are never removed, on any path, so the
+host holds at most two. The broker's tag on the recorded image is a name for the operator, not
+retention. Before a rollback it checks that the reference still resolves and fails loudly if it does
+not, rather than starting something else; the rescue script makes the same check. If the host's
+cleanup cannot be changed, `docker save` of the recorded image into the broker's state is the
+alternative — under the same lifetime rule, one tarball, replaced when the target moves.
 
 **One deployment at a time.** The rollback target is shared mutable state, so a single-flight lock
 covers the whole transition — build, `up -d`, health wait and any rollback — and a second request
