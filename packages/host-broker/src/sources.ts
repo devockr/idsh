@@ -106,14 +106,23 @@ function runFixed(
         settle()
         return
       }
-      // The program's own message is the useful part: "No such container" beats "exited with 1".
-      const text = buffer.toString('utf8').trim().slice(0, MAX_ERROR_CHARS)
+      // The program's own message is the useful part, and docker/df put the cause last: keep the
+      // tail of the output, from a line boundary, rather than its opening lines.
+      const text = buffer.toString('utf8').trim()
+      let tail =
+        text.length > MAX_ERROR_CHARS ? text.slice(-MAX_ERROR_CHARS) : text
+      // A slice can start on the low half of a surrogate pair.
+      if (/^[\uDC00-\uDFFF]/u.test(tail)) {
+        tail = tail.slice(1)
+      }
+      const boundary = tail.indexOf('\n')
+      const message = (boundary === -1 ? tail : tail.slice(boundary + 1)).trim()
       settle(
         new BrokerFault(
           'unavailable',
-          text === ''
+          message === ''
             ? `${program} exited with ${code ?? signal ?? 'no status'}`
-            : text,
+            : message,
         ),
       )
     })

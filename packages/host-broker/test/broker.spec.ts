@@ -676,7 +676,7 @@ void test('a program that exits non-zero carries its own message', async () => {
   const dockerPath = path.join(host.root, 'docker')
   await writeFile(
     dockerPath,
-    "#!/bin/sh\nprintf 'Error response from daemon: No such container: dsh\\n' >&2\nexit 1\n",
+    "#!/bin/sh\nfor i in $(seq 1 40); do printf 'line %d: explaining the failure\\n' \"$i\"; done\nprintf 'FINAL: the actual cause\\n' >&2\nexit 1\n",
     { mode: 0o755 },
   )
   const broker = await startBroker({
@@ -690,7 +690,7 @@ void test('a program that exits non-zero carries its own message', async () => {
   try {
     const answer = await connection.request({ op: 'deploy.status', args: {} })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /No such container: dsh/u)
+    assert.match(JSON.stringify(answer.error), /FINAL: the actual cause/u)
   } finally {
     connection.close()
     await broker.close()
@@ -764,4 +764,14 @@ void test('capOutput keeps a tail of whole rows, never half a character', () => 
   assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
   assert.ok(!capped.text.includes('\uFFFD'))
   assert.ok(capped.text.endsWith(`${'x'.repeat(199)}😀\n`))
+})
+
+void test('capOutput backs off a cut that lands inside a character', () => {
+  // 65 536 bytes back from the end falls on the emoji's third byte.
+  const text = `${'x'.repeat(100)}😀${'x'.repeat(65_534)}`
+  const capped = capOutput(text, 'tail')
+  assert.equal(capped.truncated, true)
+  assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
+  assert.ok(!capped.text.includes('\uFFFD'))
+  assert.equal(capped.text, 'x'.repeat(Buffer.byteLength(capped.text)))
 })
