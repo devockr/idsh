@@ -10,7 +10,11 @@
 import { parseArgs } from 'node:util'
 
 import { startBroker } from './broker.ts'
-import { DEFAULT_EXEC_TIMEOUT_MS } from './constants.ts'
+import {
+  DEFAULT_EXEC_TIMEOUT_MS,
+  MAX_TIMER_MS,
+  TIMEOUT_SLACK_MS,
+} from './constants.ts'
 
 const USAGE = `Usage: idsh-host --socket <path> --audit <path> [options]
 
@@ -33,6 +37,7 @@ function number(
   value: string | undefined,
   fallback: number,
   name: string,
+  max = Number.POSITIVE_INFINITY,
 ): number {
   if (value === undefined) {
     return fallback
@@ -41,6 +46,11 @@ function number(
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new Error(
       `${name} must be a positive integer, got ${JSON.stringify(value)}`,
+    )
+  }
+  if (parsed > max) {
+    throw new Error(
+      `${name} must be at most ${String(max)}, got ${JSON.stringify(value)}`,
     )
   }
   return parsed
@@ -81,6 +91,8 @@ async function main(): Promise<void> {
       values['exec-timeout'],
       DEFAULT_EXEC_TIMEOUT_MS,
       '--exec-timeout',
+      // The wrapper schedules a timer this much later; past Node's ceiling it fires at 1 ms.
+      MAX_TIMER_MS - TIMEOUT_SLACK_MS,
     ),
   })
 

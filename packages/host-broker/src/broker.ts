@@ -6,7 +6,7 @@
  * program. The socket's permissions are the other half — `0600` in a directory only its owner may
  * write means only that uid can open it at all.
  */
-import { appendFile, chmod, lstat, mkdir, stat, unlink } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, stat, unlink } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
@@ -123,8 +123,10 @@ function serve(
   execTimeoutMs: number,
   now: () => number,
 ): void {
+  let closed = false
   const send = (response: BrokerResponse): void => {
-    if (!socket.destroyed) {
+    // Nothing may be written after the overflow answer has ended the socket.
+    if (!closed && !socket.destroyed) {
       socket.write(encode(response))
     }
   }
@@ -154,14 +156,20 @@ function serve(
         })
     },
     onOverflow() {
-      send({
-        ok: false,
-        error: {
-          code: 'line-too-long',
-          message: `a request line is limited to ${String(MAX_LINE_BYTES)} bytes`,
-        },
-      })
-      socket.destroy()
+      if (closed) {
+        return
+      }
+      closed = true
+      // `end` flushes the answer before the FIN; `destroy` in the same tick can drop it.
+      socket.end(
+        encode({
+          ok: false,
+          error: {
+            code: 'line-too-long',
+            message: `a request line is limited to ${String(MAX_LINE_BYTES)} bytes`,
+          },
+        }),
+      )
     },
   })
 
@@ -325,11 +333,19 @@ function boundedArgs(args: Record<string, unknown>): string {
     : `${encoded.slice(0, MAX_AUDIT_ARGS_CHARS)}…`
 }
 
-function appendAudit(
+async function appendAudit(
   file: string,
   record: Record<string, unknown>,
 ): Promise<void> {
-  return appendFile(file, `${JSON.stringify(record)}\n`, { mode: FILE_MODE })
+  const handle = await open(file, 'a', FILE_MODE)
+  try {
+    // `mode` on open applies only when the file is created, and rotation can install a wider one;
+    // set it on the descriptor before the record goes in.
+    await handle.chmod(FILE_MODE)
+    await handle.write(`${JSON.stringify(record)}\n`)
+  } finally {
+    await handle.close()
+  }
 }
 
 /**

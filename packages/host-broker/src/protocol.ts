@@ -109,15 +109,22 @@ export interface LineReaderOptions {
  * Turn a byte stream into protocol lines.
  *
  * A line that overruns the ceiling is dropped whole and reported, rather than delivered truncated:
- * a cut-off request is not a request.
+ * a cut-off request is not a request, and the reader stops — the rest of the stream cannot be
+ * re-framed.
  */
 export function createLineReader(
   options: LineReaderOptions,
 ): (chunk: Buffer | string) => void {
   const maxBytes = options.maxBytes ?? MAX_LINE_BYTES
   let buffer = Buffer.alloc(0)
+  let overflowed = false
 
   return (chunk: Buffer | string): void => {
+    // Once a line is too long the stream has lost its framing: where that line ends is unknown, so
+    // nothing after it is a request any more.
+    if (overflowed) {
+      return
+    }
     buffer = Buffer.concat([
       buffer,
       Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
@@ -128,16 +135,19 @@ export function createLineReader(
       buffer = buffer.subarray(newline + 1)
       if (line.length > maxBytes) {
         // A terminated line gets the same ceiling as an unterminated one.
+        overflowed = true
         options.onOverflow?.()
-      } else {
-        const text = line.toString('utf8')
-        if (text.trim() !== '') {
-          options.onLine(text)
-        }
+        return
       }
+      const text = line.toString('utf8')
+      if (text.trim() !== '') {
+        options.onLine(text)
+      }
+
       newline = buffer.indexOf(NEWLINE_BYTE)
     }
     if (buffer.length > maxBytes) {
+      overflowed = true
       buffer = Buffer.alloc(0)
       options.onOverflow?.()
     }

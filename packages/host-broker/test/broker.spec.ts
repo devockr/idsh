@@ -1,7 +1,14 @@
 /* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -10,6 +17,7 @@ import { test } from 'node:test'
 import {
   capOutput,
   createLineReader,
+  MAX_LINE_BYTES,
   parseRequest,
   RateLimiter,
   startBroker,
@@ -163,9 +171,9 @@ void test('the line reader splits, skips blank lines and reports an overrun', ()
   assert.deepEqual(overflow, [])
   read('x'.repeat(SMALL_LINE_LIMIT + 1))
   assert.deepEqual(overflow, [true])
-  // The oversized line is dropped whole; the reader is usable afterwards.
+  // The stream has lost its framing: nothing after the overflow is delivered.
   read('{"c":3}\n')
-  assert.deepEqual(lines, ['{"a":1}', '{"b":2}', '{"c":3}'])
+  assert.deepEqual(lines, ['{"a":1}', '{"b":2}'])
 })
 
 void test('a terminated line over the ceiling is dropped too', () => {
@@ -470,4 +478,63 @@ void test('a request whose audit cannot be written answers internal', async () =
     connection.close()
     await broker.close()
   }
+})
+
+void test('an over-long line is answered before the connection closes', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const socket = net.connect(host.socketPath)
+  const closed = new Promise<void>(resolve =>
+    socket.once('close', () => resolve()),
+  )
+  const answer = await new Promise<BrokerResponse>((resolve, reject) => {
+    let buffer = ''
+    socket.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8')
+      const newline = buffer.indexOf('\n')
+      if (newline !== -1) {
+        resolve(JSON.parse(buffer.slice(0, newline)) as BrokerResponse)
+      }
+    })
+    socket.once('error', reject)
+    socket.once('connect', () => {
+      // Both in one write: the answer must be flushed before the server closes.
+      socket.write(
+        `${'x'.repeat(MAX_LINE_BYTES + 1)}\n{"op":"proc.read","args":{"file":"mdstat"}}\n`,
+      )
+    })
+  })
+  assert.equal(answer.error?.code, 'line-too-long')
+  await closed
+  await broker.close()
+})
+
+void test('an existing audit file is narrowed to 0600', async () => {
+  const host = await fakeHost()
+  await writeFile(host.auditPath, '')
+  await chmod(host.auditPath, 0o644)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'proc.read',
+      args: { file: 'mdstat' },
+    })
+    assert.equal(answer.ok, true)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+  const stats = await stat(host.auditPath)
+  assert.equal(stats.mode & MODE_MASK, 0o600)
 })

@@ -36,6 +36,9 @@ export const LIVENESS_TIMEOUT_MS = 200
 /** How much longer than an operation's own deadline the wrapper waits. */
 export const TIMEOUT_SLACK_MS = 1000
 
+/** The largest delay Node's timers accept (2^31 - 1 ms). */
+export const MAX_TIMER_MS = 2_147_483_647
+
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
 
