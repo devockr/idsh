@@ -99,10 +99,17 @@ export function parseRequest(line: string): BrokerRequest {
 export interface LineReaderOptions {
   /** Ceiling for one line, in bytes. Default {@link MAX_LINE_BYTES}. */
   maxBytes?: number
-  /** Called once per complete, non-empty line. */
-  onLine(line: string): void
+  /** Called once per complete, non-empty line; `false` stops the reader until `resume()`. */
+  onLine(line: string): boolean | void
   /** Called once when a line exceeds `maxBytes`; the reader stops, because the stream can no longer be framed. */
   onOverflow?(): void
+}
+
+/** A reader that can be paused by its consumer and drained later. */
+export interface LineReader {
+  write(chunk: Buffer | string): void
+  /** Frame what was left buffered when {@link LineReaderOptions.onLine} returned `false`. */
+  resume(): void
 }
 
 /**
@@ -113,25 +120,25 @@ export interface LineReaderOptions {
  * stream's framing is gone, and after a terminated one the caller's answer is to close the
  * connection, so nothing later would be read anyway.
  */
-export function createLineReader(
-  options: LineReaderOptions,
-): (chunk: Buffer | string) => void {
+export function createLineReader(options: LineReaderOptions): LineReader {
   const maxBytes = options.maxBytes ?? MAX_LINE_BYTES
   let buffer = Buffer.alloc(0)
   let overflowed = false
+  let paused = false
 
-  return (chunk: Buffer | string): void => {
-    // Once a line is too long the stream has lost its framing: where that line ends is unknown, so
-    // nothing after it is a request any more.
-    if (overflowed) {
-      return
-    }
-    buffer = Buffer.concat([
-      buffer,
-      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
-    ])
-    let newline = buffer.indexOf(NEWLINE_BYTE)
-    while (newline >= 0) {
+  const pump = (): void => {
+    // One chunk may hold more lines than the consumer can take; the rest stays in `buffer` until
+    // `resume()` is called, rather than piling up in the consumer's queue.
+    while (!overflowed && !paused) {
+      const newline = buffer.indexOf(NEWLINE_BYTE)
+      if (newline === -1) {
+        if (buffer.length > maxBytes) {
+          overflowed = true
+          buffer = Buffer.alloc(0)
+          options.onOverflow?.()
+        }
+        return
+      }
       const line = buffer.subarray(0, newline)
       buffer = buffer.subarray(newline + 1)
       if (line.length > maxBytes) {
@@ -141,16 +148,30 @@ export function createLineReader(
         return
       }
       const text = line.toString('utf8')
-      if (text.trim() !== '') {
-        options.onLine(text)
+      if (text.trim() !== '' && options.onLine(text) === false) {
+        paused = true
       }
+    }
+  }
 
-      newline = buffer.indexOf(NEWLINE_BYTE)
-    }
-    if (buffer.length > maxBytes) {
-      overflowed = true
-      buffer = Buffer.alloc(0)
-      options.onOverflow?.()
-    }
+  return {
+    write(chunk: Buffer | string) {
+      // Once a line is too long the stream has lost its framing: where that line ends is unknown,
+      // so nothing after it is a request any more.
+      if (overflowed || paused) {
+        return
+      }
+      buffer = Buffer.concat([
+        buffer,
+        Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+      ])
+      pump()
+    },
+    resume() {
+      if (paused) {
+        paused = false
+        pump()
+      }
+    },
   }
 }

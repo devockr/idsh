@@ -107,7 +107,17 @@ export async function startBroker(
     serve(socket, context, limiter, auditPath, execTimeoutMs, now)
   })
   await listen(server, options.socketPath)
-  await chmod(options.socketPath, SOCKET_MODE)
+  try {
+    await chmod(options.socketPath, SOCKET_MODE)
+  } catch (error) {
+    // The socket may be reachable to someone else; do not leave it listening behind a failure.
+    for (const socket of sockets) {
+      socket.destroy()
+    }
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await unlink(options.socketPath).catch(() => null)
+    throw error
+  }
 
   return {
     async close() {
@@ -146,12 +156,6 @@ function serve(
   let pending = 0
   const reader = createLineReader({
     onLine(line) {
-      pending += 1
-      // A client that pipelines faster than the broker answers is a buffer with no ceiling;
-      // pause the socket until the queue drains instead.
-      if (pending >= INTAKE_QUEUE_LIMIT) {
-        socket.pause()
-      }
       queue = queue
         .then(() =>
           answer(line, send, context, limiter, auditPath, execTimeoutMs, now),
@@ -163,8 +167,17 @@ function serve(
           pending -= 1
           if (pending < INTAKE_QUEUE_LIMIT) {
             socket.resume()
+            reader.resume()
           }
         })
+      pending += 1
+      if (pending >= INTAKE_QUEUE_LIMIT) {
+        // Stop framing this chunk: the rest waits in the reader, not in the queue. Pausing the
+        // socket alone would only affect the next chunk.
+        socket.pause()
+        return false
+      }
+      return true
     },
     onOverflow() {
       if (closed) {
@@ -207,7 +220,7 @@ function serve(
     },
   })
 
-  socket.on('data', reader)
+  socket.on('data', (chunk: Buffer) => reader.write(chunk))
   socket.on('error', () => socket.destroy())
 }
 

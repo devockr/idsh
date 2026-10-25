@@ -160,31 +160,35 @@ void test('parseRequest refuses what it cannot interpret', () => {
 void test('the line reader splits, skips blank lines and reports an overrun', () => {
   const lines: string[] = []
   const overflow: Array<true> = []
-  const read = createLineReader({
-    onLine: line => lines.push(line),
+  const reader = createLineReader({
+    onLine: line => {
+      lines.push(line)
+    },
     onOverflow: () => overflow.push(true),
     maxBytes: SMALL_LINE_LIMIT,
   })
-  read('{"a":1}\n{"b"')
-  read(':2}\n\n')
+  reader.write('{"a":1}\n{"b"')
+  reader.write(':2}\n\n')
   assert.deepEqual(lines, ['{"a":1}', '{"b":2}'])
   assert.deepEqual(overflow, [])
-  read('x'.repeat(SMALL_LINE_LIMIT + 1))
+  reader.write('x'.repeat(SMALL_LINE_LIMIT + 1))
   assert.deepEqual(overflow, [true])
   // The stream has lost its framing: nothing after the overflow is delivered.
-  read('{"c":3}\n')
+  reader.write('{"c":3}\n')
   assert.deepEqual(lines, ['{"a":1}', '{"b":2}'])
 })
 
 void test('a terminated line over the ceiling is dropped too', () => {
   const lines: string[] = []
   const overflow: Array<true> = []
-  const read = createLineReader({
-    onLine: line => lines.push(line),
+  const reader = createLineReader({
+    onLine: line => {
+      lines.push(line)
+    },
     onOverflow: () => overflow.push(true),
     maxBytes: SMALL_LINE_LIMIT,
   })
-  read(`${'x'.repeat(SMALL_LINE_LIMIT + 1)}\n`)
+  reader.write(`${'x'.repeat(SMALL_LINE_LIMIT + 1)}\n`)
   assert.deepEqual(lines, [])
   assert.deepEqual(overflow, [true])
 })
@@ -575,4 +579,20 @@ void test('an exec timeout past the timer ceiling is clamped where it is used', 
     process.off('warning', onWarning)
   }
   assert.ok(!warnings.includes('TimeoutOverflowWarning'))
+})
+
+void test('a full consumer stops the reader and resume drains the rest', () => {
+  const lines: string[] = []
+  const reader = createLineReader({
+    onLine: line => {
+      lines.push(line)
+      return lines.length < 2
+    },
+    maxBytes: 100,
+  })
+  reader.write('{"a":1}\n{"b":2}\n{"c":3}\n')
+  // The second line filled the consumer; the third is still framed but not delivered.
+  assert.deepEqual(lines, ['{"a":1}', '{"b":2}'])
+  reader.resume()
+  assert.deepEqual(lines, ['{"a":1}', '{"b":2}', '{"c":3}'])
 })
