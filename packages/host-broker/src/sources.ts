@@ -393,6 +393,8 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, [])
       return docker(ctx, [
         'inspect',
+        '--type',
+        'container',
         '--format',
         'image={{.Config.Image}} id={{.Image}} created={{.Created}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} exit={{.State.ExitCode}}',
         ctx.container,

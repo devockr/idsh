@@ -599,7 +599,10 @@ void test('deploy.status and deploy.log drive the docker client', async () => {
   try {
     const status = await connection.request({ op: 'deploy.status', args: {} })
     assert.equal(status.ok, true)
-    assert.match(status.result ?? '', /^inspect --format .*web$/mu)
+    assert.match(
+      status.result ?? '',
+      /^inspect --type container --format .*web$/mu,
+    )
     assert.match(status.result ?? '', /\{\{\.Config\.Image\}\}/u)
     assert.match(status.result ?? '', /\{\{\.State\.ExitCode\}\}/u)
     const tail = await connection.request({
