@@ -76,12 +76,11 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 COPY --chmod=755 packages/ /opt/dsh/packages/
 RUN set -e; for d in /opt/dsh/packages/*/; do \
       [ -f "${d}package.json" ] || continue; \
-      main=$(node -p "require('${d}package.json').main || ''") || continue; \
-      [ -n "$main" ] || continue; \
-      [ -f "${d}${main}" ] || { echo "no ${d}${main} — run pnpm build first" >&2; exit 1; }; \
+      grep -q '"main"' "${d}package.json" || continue; \
+      [ -f "${d}lib/index.js" ] || { echo "no ${d}lib/index.js — run pnpm build first" >&2; exit 1; }; \
       [ -f "${d}src/client.ts" ] && [ ! -f "${d}lib/client.js" ] && { echo "no ${d}lib/client.js — run pnpm build first" >&2; exit 1; }; \
-      [ -z "$(find "${d}src" -name '*.ts' -newer "${d}${main}" -print -quit)" ] \
-        || { echo "${d}src is newer than ${d}${main} — run pnpm build" >&2; exit 1; }; \
+      [ -z "$(find "${d}src" -name '*.ts' -newer "${d}lib/index.js" -print -quit)" ] \
+        || { echo "${d}src is newer than ${d}lib/index.js — run pnpm build" >&2; exit 1; }; \
     done
 
 RUN mkdir -p /opt/dsh/home \

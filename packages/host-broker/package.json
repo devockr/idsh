@@ -15,10 +15,10 @@
   "bin": {
     "idsh-host": "lib/cli.js"
   },
-  "main": "lib/broker.js",
+  "main": "lib/index.js",
   "exports": {
     ".": {
-      "default": "./lib/broker.js"
+      "default": "./lib/index.js"
     },
     "./package.json": "./package.json"
   },
