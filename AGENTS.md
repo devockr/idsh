@@ -192,10 +192,11 @@ Observe the running thing; do not reason from source.
 
 ## Docs site
 
-- `pnpm docs:dev` / `pnpm docs:build` render `README.md` and each package's `CHANGELOG.md` as a
-  small site (`docs/`, `index.html`, `vite.config.ts`). It has no content of its own: the Markdown
-  files are the source, and `dist/` is build output and gitignored. `@vitejs/plugin-react` is used
-  rather than the SWC one because `@swc/core` needs a build script, which `allowBuilds` refuses.
+- `pnpm docs:dev` / `pnpm docs:build` render `README.md`, `ROADMAP.md` and each package's
+  `CHANGELOG.md` as a small site (`docs/`, `index.html`, `vite.config.ts`). It has no content of
+  its own: the Markdown files are the source, and `dist/` is build output and gitignored.
+  `@vitejs/plugin-react` is used rather than the SWC one because `@swc/core` needs a build script,
+  which `allowBuilds` refuses.
 
 ## Releasing and CI
 
@@ -261,3 +262,9 @@ Observe the running thing; do not reason from source.
 
 - Target `main`; a stacked PR uses the branch below as its base, and GitHub retargets it on merge.
 - Fetch before pushing; never force-push a branch you did not author.
+
+## The plan
+
+`ROADMAP.md` is the plan for the next version; its items are not implemented. A change that
+implements one updates that file, `README.md` and this one in the same pull request — the next
+session reads the repository, not the private notes the plan came from.
