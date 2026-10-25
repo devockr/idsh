@@ -109,14 +109,18 @@ function runFixed(
       // The program's own message is the useful part, and docker/df put the cause last: keep the
       // tail of the output, from a line boundary, rather than its opening lines.
       const text = buffer.toString('utf8').trim()
-      let tail =
-        text.length > MAX_ERROR_CHARS ? text.slice(-MAX_ERROR_CHARS) : text
-      // A slice can start on the low half of a surrogate pair.
-      if (/^[\uDC00-\uDFFF]/u.test(tail)) {
-        tail = tail.slice(1)
+      // Only a cut needs a boundary repair: a short message is complete as it stands.
+      const cut = text.length > MAX_ERROR_CHARS
+      let tail = cut ? text.slice(-MAX_ERROR_CHARS) : text
+      if (cut) {
+        // A slice can start on the low half of a surrogate pair.
+        if (/^[\uDC00-\uDFFF]/u.test(tail)) {
+          tail = tail.slice(1)
+        }
+        const boundary = tail.indexOf('\n')
+        tail = boundary === -1 ? tail : tail.slice(boundary + 1)
       }
-      const boundary = tail.indexOf('\n')
-      const message = (boundary === -1 ? tail : tail.slice(boundary + 1)).trim()
+      const message = tail.trim()
       settle(
         new BrokerFault(
           'unavailable',

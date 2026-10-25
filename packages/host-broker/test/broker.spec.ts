@@ -775,3 +775,28 @@ void test('capOutput backs off a cut that lands inside a character', () => {
   assert.ok(!capped.text.includes('\uFFFD'))
   assert.equal(capped.text, 'x'.repeat(Buffer.byteLength(capped.text)))
 })
+
+void test('a window that starts on a surrogate half drops it, not the character', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const line = `${'x'.repeat(60)}😀${'y'.repeat(499)}`
+  await writeFile(dockerPath, `#!/bin/sh\nprintf '%s\\n' '${line}'\nexit 1\n`, {
+    mode: 0o755,
+  })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.message, 'y'.repeat(499))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
