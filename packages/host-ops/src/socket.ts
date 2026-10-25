@@ -10,6 +10,7 @@ import net from 'node:net'
 import {
   DEFAULT_TIMEOUT_MS,
   MAX_RESPONSE_BYTES,
+  MAX_TIMER_MS,
   NEWLINE_BYTE,
 } from './constants.ts'
 
@@ -19,25 +20,36 @@ export interface BrokerEndpoint {
   readonly timeoutMs?: number
 }
 
+/** One answer: the broker's text, and whether it was capped on the way out. */
+export interface BrokerAnswer {
+  readonly text: string
+  readonly truncated: boolean
+}
+
 interface BrokerResponse {
   readonly ok?: unknown
   readonly result?: unknown
+  readonly truncated?: unknown
   readonly error?: { readonly code?: unknown; readonly message?: unknown }
 }
 
 /**
- * Run one operation and return its text.
+ * Run one operation and return its answer.
  *
  * A transport failure says what the caller can do about it (start the broker, wait, raise the
- * timeout); a refusal keeps the broker's message, which is written for the caller.
+ * timeout); a refusal keeps the broker's message, which is written for the caller. The timeout is
+ * clamped to Node's timer ceiling, so a profile cannot ask for a deadline that fires at 1 ms.
  */
 export function callBroker(
   endpoint: BrokerEndpoint,
   op: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
-): Promise<string> {
-  const timeoutMs = endpoint.timeoutMs ?? DEFAULT_TIMEOUT_MS
+): Promise<BrokerAnswer> {
+  const timeoutMs = Math.min(
+    endpoint.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    MAX_TIMER_MS,
+  )
   return new Promise((resolve, reject) => {
     const socket = net.connect(endpoint.socketPath)
     let buffer = Buffer.alloc(0)
@@ -47,7 +59,7 @@ export function callBroker(
       onAbort?: () => void
     } = { settled: false }
 
-    const finish = (error: Error | null, result?: string): void => {
+    const finish = (error: Error | null, answer?: BrokerAnswer): void => {
       if (state.settled) {
         return
       }
@@ -59,10 +71,10 @@ export function callBroker(
         signal?.removeEventListener('abort', state.onAbort)
       }
       socket.destroy()
-      if (error === null) {
-        resolve(result ?? '')
+      if (error === null && answer !== undefined) {
+        resolve(answer)
       } else {
-        reject(error)
+        reject(error ?? new Error('the host broker gave no answer'))
       }
     }
 
@@ -113,19 +125,27 @@ export function callBroker(
   })
 }
 
-function answer(line: string): [Error | null, string?] {
-  let response: BrokerResponse
+function answer(line: string): [Error | null, BrokerAnswer?] {
+  let value: unknown
   try {
-    response = JSON.parse(line) as BrokerResponse
+    value = JSON.parse(line) as unknown
   } catch {
     return [
       new TypeError('the host broker answered with a line that is not JSON'),
     ]
   }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return [new TypeError('the host broker answered without an object')]
+  }
+  const response = value as BrokerResponse
   if (response.ok === true) {
-    return typeof response.result === 'string'
-      ? [null, response.result]
-      : [new Error('the host broker answered without a result')]
+    if (typeof response.result !== 'string') {
+      return [new Error('the host broker answered without a result')]
+    }
+    return [
+      null,
+      { text: response.result, truncated: response.truncated === true },
+    ]
   }
   return [new Error(refusal(response))]
 }

@@ -234,15 +234,11 @@ export const OPS: readonly OpDefinition[] = [
         },
         lines: {
           type: 'integer',
-          minimum: 1,
-          maximum: MAX_LINES,
-          description: `How many trailing lines to return. Default ${String(DEFAULT_LINES)}.`,
+          description: `How many trailing lines to return, 1 to ${String(MAX_LINES)}. Default ${String(DEFAULT_LINES)}.`,
         },
         pattern: {
           type: 'string',
-          maxLength: MAX_PATTERN_CHARS,
-          description:
-            'Keep only rows containing this literal text (not a regular expression).',
+          description: `Keep only rows containing this literal text (at most ${String(MAX_PATTERN_CHARS)} characters; not a regular expression).`,
         },
       },
       required: ['file'],

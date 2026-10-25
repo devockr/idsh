@@ -5,7 +5,7 @@ LAN and the router, and to deploy — without the credentials that make that rea
 living inside the container.
 
 Phase 1 has started: `packages/host-broker` carries the socket, three read sources, the bounds and
-the audit log. Everything else below is still the plan, and this file is the contract the
+the audit log, and `packages/host-ops` turns that table into dsh tools. Everything else below is still the plan, and this file is the contract the
 implementation is judged against.
 
 ## The problem

@@ -73,7 +73,12 @@ void test('the broker table becomes one tool per operation', async () => {
       { file: 'messages' },
       { signal: new AbortController().signal },
     )
-    assert.equal(result, 'answer')
+    assert.deepEqual(result, { text: 'answer', truncated: false })
+    const rendered = tools[0].output.render(
+      {},
+      { text: 'answer', truncated: true },
+    )
+    assert.match(rendered[0].text, /capped this answer/u)
     assert.deepEqual(broker.requests.at(-1), {
       op: 'log.tail',
       args: { file: 'messages' },
@@ -86,7 +91,35 @@ void test('the broker table becomes one tool per operation', async () => {
 void test('a broker that is down warns and registers no tools', async () => {
   const { ctx, tools, warnings } = context()
   await apply(ctx, { socketPath: '/nonexistent/idsh-host/host.sock' })
-  await new Promise(resolve => setTimeout(resolve, 50))
   assert.deepEqual(tools, [])
   assert.equal(warnings.length, 1)
+})
+
+void test('a table that is not an array registers nothing', async () => {
+  const broker = await fakeBroker(
+    () =>
+      `${JSON.stringify({ ok: true, result: JSON.stringify({ nope: true }) })}\n`,
+  )
+  try {
+    const { ctx, tools, warnings } = context()
+    await apply(ctx, { socketPath: broker.socketPath })
+    assert.deepEqual(tools, [])
+    assert.match(warnings[0] ?? '', /did not describe a table/u)
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a bad entry rejects the whole table', async () => {
+  const table = [TABLE[0], { name: 'broken' }]
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }))
+    assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
 })

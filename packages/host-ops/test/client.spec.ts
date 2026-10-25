@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 
-import { callBroker } from '../src/client.ts'
+import { callBroker } from '../src/socket.ts'
 
 import { fakeBroker } from './server.ts'
 
@@ -15,7 +15,7 @@ void test('a call goes out as one line and comes back as its result', async () =
       'log.tail',
       { file: 'messages' },
     )
-    assert.equal(result, 'boot ok')
+    assert.deepEqual(result, { text: 'boot ok', truncated: false })
     assert.deepEqual(broker.requests, [
       { op: 'log.tail', args: { file: 'messages' } },
     ])
@@ -83,6 +83,22 @@ void test('an aborted call settles without waiting for the broker', async () => 
       ),
       /cancelled/u,
     )
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a capped answer keeps the flag', async () => {
+  const broker = await fakeBroker(() =>
+    answer({ ok: true, result: 'x', truncated: true }),
+  )
+  try {
+    const result = await callBroker(
+      { socketPath: broker.socketPath },
+      'log.tail',
+      {},
+    )
+    assert.deepEqual(result, { text: 'x', truncated: true })
   } finally {
     await broker.close()
   }

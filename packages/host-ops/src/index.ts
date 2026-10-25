@@ -5,10 +5,10 @@
  * There is no shell here either: a tool call is one request to the broker, which validates the
  * arguments against the same schema and owns the audit line.
  */
-import { callBroker, type BrokerEndpoint } from './client.ts'
 import { DEFAULT_SOCKET_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
+import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 
-export const name = 'host-ops'
+export const name = '@idsh/host-ops'
 export const inject = ['tools']
 
 export interface Config {
@@ -53,12 +53,12 @@ interface DescribedOp {
 /**
  * Load the table and register its tools.
  *
- * A broker that is down does not fail the profile: the plugin logs and registers nothing, so the
- * delegation still boots and the tools appear on the next reload, when the broker is up.
+ * An arrow, so the loader keeps the returned promise: the tools exist when loading finishes. A
+ * broker that is down does not fail the profile — the plugin logs and registers nothing, so the
+ * delegation still boots and the tools appear on the next reload.
  */
 export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
   const endpoint = endpointOf(config)
-  // An arrow, so the loader keeps the returned promise: tools exist when loading finishes.
   return registerTools(ctx, endpoint).catch((error: unknown) => {
     ctx.logger.warn(
       `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
@@ -72,24 +72,35 @@ export async function registerTools(
   endpoint: BrokerEndpoint,
 ): Promise<void> {
   const described = await callBroker(endpoint, 'ops.describe', {})
-  const ops = JSON.parse(described) as unknown
+  const ops = JSON.parse(described.text) as unknown
   if (!Array.isArray(ops)) {
     throw new TypeError('the broker did not describe a table of operations')
   }
-  for (const value of ops) {
-    ctx.tools.register(toolFor(endpoint, asOp(value)))
+  // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
+  const tools = ops.map(value => toolFor(endpoint, asOp(value)))
+  const dispose: Array<() => void> = []
+  try {
+    for (const tool of tools) {
+      dispose.push(ctx.tools.register(tool))
+    }
+  } catch (error) {
+    for (const drop of dispose) {
+      drop()
+    }
+    throw error
   }
 }
 
 function endpointOf(config: Config): BrokerEndpoint {
+  const socketPath: unknown = config.socketPath ?? DEFAULT_SOCKET_PATH
+  if (typeof socketPath !== 'string' || socketPath === '') {
+    throw new Error('host-ops: socketPath must be a non-empty string')
+  }
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error('host-ops: timeoutMs must be a positive integer')
   }
-  return {
-    socketPath: config.socketPath ?? DEFAULT_SOCKET_PATH,
-    timeoutMs,
-  }
+  return { socketPath, timeoutMs }
 }
 
 function toolFor(endpoint: BrokerEndpoint, op: DescribedOp): HostTool {
@@ -98,8 +109,26 @@ function toolFor(endpoint: BrokerEndpoint, op: DescribedOp): HostTool {
     description: op.summary,
     parameters: op.input,
     output: {
-      schema: { type: 'string' },
-      render: (_args, value) => [{ type: 'text', text: String(value) }],
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          text: { type: 'string' },
+          truncated: { type: 'boolean' },
+        },
+        required: ['text', 'truncated'],
+      },
+      render: (_args, value) => {
+        const answer = value as BrokerAnswer
+        return [
+          {
+            type: 'text',
+            text: answer.truncated
+              ? `${answer.text}\n[the host broker capped this answer at 64 KiB]`
+              : answer.text,
+          },
+        ]
+      },
     },
     execute: (args, exec) =>
       callBroker(
@@ -120,10 +149,11 @@ function asOp(value: unknown): DescribedOp {
     typeof name !== 'string' ||
     typeof summary !== 'string' ||
     input === null ||
-    typeof input !== 'object'
+    typeof input !== 'object' ||
+    Array.isArray(input)
   ) {
     throw new Error(
-      'the broker described an operation without a name, summary or input',
+      'the broker described an operation without a name, summary or object input',
     )
   }
   return { name, summary, input: input as Record<string, unknown> }
