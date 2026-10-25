@@ -56,7 +56,7 @@ export interface BrokerOptions {
   readonly procDir?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
-  /** How long one operation may take. Default 10s. */
+  /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
   readonly execTimeoutMs?: number
   /** Injectable clock, so the rate limiter is testable without sleeping. */
   readonly now?: () => number
@@ -81,7 +81,12 @@ export async function startBroker(
   const procDir = options.procDir ?? DEFAULTS.procDir
   const rateLimitPerMinute =
     options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
-  const execTimeoutMs = options.execTimeoutMs ?? DEFAULTS.execTimeoutMs
+  // Clamp where the context is built, not only in the wrapper: the same value reaches `execFile`,
+  // and a program started with a delay past Node's ceiling is killed at 1 ms.
+  const execTimeoutMs = Math.min(
+    options.execTimeoutMs ?? DEFAULTS.execTimeoutMs,
+    MAX_TIMER_MS - TIMEOUT_SLACK_MS,
+  )
   const auditPath = options.auditPath
   const now = options.now ?? Date.now
 

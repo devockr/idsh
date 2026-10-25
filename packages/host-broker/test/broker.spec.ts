@@ -547,3 +547,32 @@ void test('an existing audit file is narrowed to 0600', async () => {
   const stats = await stat(host.auditPath)
   assert.equal(stats.mode & MODE_MASK, 0o600)
 })
+
+void test('an exec timeout past the timer ceiling is clamped where it is used', async () => {
+  const host = await fakeHost()
+  const warnings: string[] = []
+  const onWarning = (warning: Error) => warnings.push(warning.name)
+  process.on('warning', onWarning)
+  try {
+    const broker = await startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      logDir: host.logDir,
+      procDir: host.procDir,
+      execTimeoutMs: 3_000_000_000,
+    })
+    const connection = client(host.socketPath)
+    try {
+      const answer = await connection.request({ op: 'disk.usage', args: {} })
+      assert.equal(answer.ok, true)
+    } finally {
+      connection.close()
+      await broker.close()
+    }
+    // Warnings are delivered on a later tick than the call that raised them.
+    await new Promise(resolve => setImmediate(resolve))
+  } finally {
+    process.off('warning', onWarning)
+  }
+  assert.ok(!warnings.includes('TimeoutOverflowWarning'))
+})
