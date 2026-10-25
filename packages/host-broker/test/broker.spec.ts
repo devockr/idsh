@@ -800,3 +800,11 @@ void test('a window that starts on a surrogate half drops it, not the character'
     await broker.close()
   }
 })
+
+void test('a tail window that is one long line is not emptied', () => {
+  const text = `${'x'.repeat(70_000)}\n`
+  const capped = capOutput(text, 'tail')
+  assert.equal(capped.truncated, true)
+  assert.ok(capped.text.length > 0)
+  assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
+})

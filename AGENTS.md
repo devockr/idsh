@@ -270,6 +270,7 @@ Observe the running thing; do not reason from source.
 ## The plan
 
 `ROADMAP.md` is the plan for the next version, and phase 1 is in progress: `packages/host-broker`
-holds the broker's first slice. A change that implements one updates that file, `README.md` and
-this one in the same pull request — the next session reads the repository, not the private notes
-the plan came from.
+holds the broker's first slice and the two read-only deploy operations (`deploy.status`,
+`deploy.log`), and `packages/host-ops` turns that table into dsh tools. A change that implements one
+updates that file, `README.md` and this one in the same pull request — the next session reads the
+repository, not the private notes the plan came from.

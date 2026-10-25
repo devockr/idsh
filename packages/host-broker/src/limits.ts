@@ -39,7 +39,10 @@ export function capOutput(text: string, keep: Keep = 'head'): Capped {
     const cut = decodeTail(bytes, MAX_OUTPUT_BYTES)
     const boundary = cut.indexOf('\n')
     return {
-      text: boundary === -1 ? cut : cut.slice(boundary + 1),
+      text:
+        boundary === -1 || boundary + 1 >= cut.length
+          ? cut
+          : cut.slice(boundary + 1),
       truncated: true,
     }
   }
