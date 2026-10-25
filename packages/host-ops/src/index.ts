@@ -78,6 +78,15 @@ export async function registerTools(
   }
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
   const tools = ops.map(value => toolFor(endpoint, asOp(value)))
+  const names = new Set<string>()
+  for (const tool of tools) {
+    if (names.has(tool.name)) {
+      throw new Error(
+        `host-ops: two operations map to the same tool name ${JSON.stringify(tool.name)}`,
+      )
+    }
+    names.add(tool.name)
+  }
   const dispose: Array<() => void> = []
   try {
     for (const tool of tools) {
@@ -103,9 +112,17 @@ function endpointOf(config: Config): BrokerEndpoint {
   return { socketPath, timeoutMs }
 }
 
+/**
+ * The model-facing tool name. Providers only accept `[a-zA-Z0-9_-]`, while an operation name is
+ * the broker's own (`log.tail`); the tool calls the broker with the operation name it was given.
+ */
+function toolName(op: string): string {
+  return op.replaceAll(/[^\w-]/gu, '_')
+}
+
 function toolFor(endpoint: BrokerEndpoint, op: DescribedOp): HostTool {
   return {
-    name: op.name,
+    name: toolName(op.name),
     description: op.summary,
     parameters: op.input,
     output: {

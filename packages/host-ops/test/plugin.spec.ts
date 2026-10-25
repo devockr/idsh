@@ -66,7 +66,7 @@ void test('the broker table becomes one tool per operation', async () => {
     await registerTools(ctx, { socketPath: broker.socketPath })
     assert.deepEqual(
       tools.map(tool => tool.name),
-      ['log.tail', 'disk.usage'],
+      ['log_tail', 'disk_usage'],
     )
     assert.deepEqual(tools[0]?.parameters, TABLE[0]?.input)
     const result = await tools[0]?.execute(
@@ -160,8 +160,25 @@ void test('a registration that fails rolls back the ones already made', async ()
       registerTools(ctx, { socketPath: broker.socketPath }),
       /registry is full/u,
     )
-    assert.deepEqual(tools, ['log.tail'])
-    assert.deepEqual(disposed, ['log.tail'])
+    assert.deepEqual(tools, ['log_tail'])
+    assert.deepEqual(disposed, ['log_tail'])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('two operations that map to the same tool name register nothing', async () => {
+  const table = [TABLE[0], { ...TABLE[1], name: 'log/tail' }]
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    await assert.rejects(
+      registerTools(ctx, { socketPath: broker.socketPath }),
+      /same tool name/u,
+    )
+    assert.deepEqual(tools, [])
   } finally {
     await broker.close()
   }
