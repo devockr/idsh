@@ -511,6 +511,15 @@ void test('an over-long line is answered before the connection closes', async ()
   })
   assert.equal(answer.error?.code, 'line-too-long')
   await closed
+  // The refusal that never reaches `answer` is still audited.
+  const auditText = await readFile(host.auditPath, 'utf8')
+  const audit = auditText
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line) as AuditEntry)
+  assert.equal(audit.length, 1)
+  assert.equal(audit[0].op, '?')
+  assert.equal(audit[0].error, 'line-too-long')
   await broker.close()
 })
 

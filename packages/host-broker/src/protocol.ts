@@ -101,7 +101,7 @@ export interface LineReaderOptions {
   maxBytes?: number
   /** Called once per complete, non-empty line. */
   onLine(line: string): void
-  /** Called once when a line exceeds `maxBytes`; the reader resets. */
+  /** Called once when a line exceeds `maxBytes`; the reader stops, because the stream can no longer be framed. */
   onOverflow?(): void
 }
 
@@ -109,8 +109,9 @@ export interface LineReaderOptions {
  * Turn a byte stream into protocol lines.
  *
  * A line that overruns the ceiling is dropped whole and reported, rather than delivered truncated:
- * a cut-off request is not a request, and the reader stops — the rest of the stream cannot be
- * re-framed.
+ * a cut-off request is not a request. The reader then stops: after an unterminated overrun the
+ * stream's framing is gone, and after a terminated one the caller's answer is to close the
+ * connection, so nothing later would be read anyway.
  */
 export function createLineReader(
   options: LineReaderOptions,

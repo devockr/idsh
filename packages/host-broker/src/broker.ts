@@ -19,6 +19,7 @@ import {
   LIVENESS_TIMEOUT_MS,
   MAX_AUDIT_ARGS_CHARS,
   MAX_LINE_BYTES,
+  MAX_TIMER_MS,
   SOCKET_MODE,
   TIMEOUT_SLACK_MS,
 } from './constants.ts'
@@ -124,6 +125,11 @@ function serve(
   now: () => number,
 ): void {
   let closed = false
+  const endWith = (response: BrokerResponse): void => {
+    // `end` flushes the answer; destroying in its callback closes the readable side too, so a client
+    // that never closes cannot keep the descriptor.
+    socket.end(encode(response), () => socket.destroy())
+  }
   const send = (response: BrokerResponse): void => {
     // Nothing may be written after the overflow answer has ended the socket.
     if (!closed && !socket.destroyed) {
@@ -160,15 +166,38 @@ function serve(
         return
       }
       closed = true
-      // `end` flushes the answer before the FIN; `destroy` in the same tick can drop it.
-      socket.end(
-        encode({
-          ok: false,
-          error: {
-            code: 'line-too-long',
-            message: `a request line is limited to ${String(MAX_LINE_BYTES)} bytes`,
-          },
-        }),
+      // The one refusal that never reaches `answer` still leaves its audit line, with the shape a
+      // `bad-json` refusal gets: no operation, and the error code as the outcome.
+      const record = {
+        time: new Date(now()).toISOString(),
+        op: '?',
+        ok: false,
+        durationMs: 0,
+        bytes: 0,
+        truncated: false,
+        args: '{}',
+        error: 'line-too-long',
+      }
+      void appendAudit(auditPath, record).then(
+        () => {
+          endWith({
+            ok: false,
+            error: {
+              code: 'line-too-long',
+              message: `a request line is limited to ${String(MAX_LINE_BYTES)} bytes`,
+            },
+          })
+        },
+        () => {
+          // An unaudited refusal must not look like a refusal that got away with it.
+          endWith({
+            ok: false,
+            error: {
+              code: 'internal',
+              message: 'the audit log could not be written',
+            },
+          })
+        },
       )
     },
   })
@@ -309,9 +338,11 @@ function runOp(
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
+    // Node fires a delay above 2^31 - 1 ms at 1 ms instead; clamp rather than overflow.
+    const delay = Math.min(ms, MAX_TIMER_MS)
     const timer = setTimeout(() => {
       reject(new BrokerFault('timeout', `no answer within ${ms} ms`))
-    }, ms)
+    }, delay)
     work.then(
       value => {
         clearTimeout(timer)
@@ -342,7 +373,15 @@ async function appendAudit(
     // `mode` on open applies only when the file is created, and rotation can install a wider one;
     // set it on the descriptor before the record goes in.
     await handle.chmod(FILE_MODE)
-    await handle.write(`${JSON.stringify(record)}\n`)
+    const line = Buffer.from(`${JSON.stringify(record)}\n`, 'utf8')
+    // One `write` can stop short; a torn line is the one thing this path must not produce.
+    for (let written = 0; written < line.length;) {
+      const { bytesWritten } = await handle.write(line, written)
+      if (bytesWritten <= 0) {
+        throw new Error('the audit write made no progress')
+      }
+      written += bytesWritten
+    }
   } finally {
     await handle.close()
   }
