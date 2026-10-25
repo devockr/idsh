@@ -85,7 +85,7 @@ void test('the broker table becomes one tool per operation', async () => {
 
 void test('a broker that is down warns and registers no tools', async () => {
   const { ctx, tools, warnings } = context()
-  apply(ctx, { socketPath: '/nonexistent/idsh-host/host.sock' })
+  await apply(ctx, { socketPath: '/nonexistent/idsh-host/host.sock' })
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.deepEqual(tools, [])
   assert.equal(warnings.length, 1)

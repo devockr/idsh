@@ -56,9 +56,10 @@ interface DescribedOp {
  * A broker that is down does not fail the profile: the plugin logs and registers nothing, so the
  * delegation still boots and the tools appear on the next reload, when the broker is up.
  */
-export function apply(ctx: HostContext, config: Config = {}): void {
+export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
   const endpoint = endpointOf(config)
-  void registerTools(ctx, endpoint).catch((error: unknown) => {
+  // An arrow, so the loader keeps the returned promise: tools exist when loading finishes.
+  return registerTools(ctx, endpoint).catch((error: unknown) => {
     ctx.logger.warn(
       `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
     )
