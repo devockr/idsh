@@ -20,6 +20,8 @@ export async function fakeBroker(
 ): Promise<FakeBroker> {
   const requests: BrokerRequest[] = []
   const server = net.createServer(socket => {
+    // A client that hangs up mid-write must not become an uncaught error in the harness.
+    socket.on('error', () => socket.destroy())
     let buffer = ''
     socket.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8')
