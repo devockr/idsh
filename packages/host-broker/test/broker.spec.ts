@@ -1,14 +1,15 @@
-/* eslint-disable no-magic-numbers -- the inputs of these tests are numbers */
-import assert from 'node:assert/strict'
+/* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
+import { strict as assert } from 'node:assert'
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import test from 'node:test'
+import { test } from 'node:test'
 
 import { startBroker } from '../src/broker.ts'
 import { capOutput, RateLimiter } from '../src/limits.ts'
+import type { BrokerResponse } from '../src/protocol.ts'
 import { createLineReader, parseRequest } from '../src/protocol.ts'
 
 const SMALL_LINE_LIMIT = 10
@@ -19,19 +20,20 @@ const MODE_MASK = 0o777
 const SOCKET_MODE = 0o600
 const DIRECTORY_MODE = 0o700
 
+interface FakeHost {
+  root: string
+  logDir: string
+  procDir: string
+  socketPath: string
+  auditPath: string
+}
+
 /**
  * A throwaway host: a log directory, a proc directory, a socket and an audit log.
  *
- * @returns {Promise<{
- *   root: string
- *   logDir: string
- *   procDir: string
- *   socketPath: string
- *   auditPath: string
- * }>}
- *   the paths the broker is started with.
+ * @returns the paths the broker is started with.
  */
-async function fakeHost() {
+async function fakeHost(): Promise<FakeHost> {
   const root = await mkdtemp(path.join(tmpdir(), 'idsh-host-'))
   const logDir = path.join(root, 'log')
   const procDir = path.join(root, 'proc')
@@ -59,23 +61,32 @@ async function fakeHost() {
   }
 }
 
+interface Client {
+  request(message: {
+    id?: string
+    op: string
+    args?: Record<string, unknown>
+  }): Promise<BrokerResponse>
+  close(): void
+}
+
 /**
  * A line-oriented client: send one request, await the next response.
  *
- * @param {string} socketPath the broker's socket.
- * @returns {{ request: (message: object) => Promise<object>; close: () => void }} the client.
+ * @param socketPath the broker's socket.
+ * @returns the client.
  */
-function client(socketPath) {
+function client(socketPath: string): Client {
   const socket = net.connect(socketPath)
   let buffer = ''
-  let waiting
-  const ready = new Promise((resolve, reject) => {
-    socket.once('connect', resolve)
+  let waiting: ((response: BrokerResponse) => void) | undefined
+  const ready = new Promise<void>((resolve, reject) => {
+    socket.once('connect', () => resolve())
     socket.once('error', reject)
   })
-  socket.on('data', chunk => {
+  socket.on('data', (chunk: Buffer) => {
     buffer += chunk.toString('utf8')
-    let newline
+    let newline: number
     while ((newline = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, newline)
       buffer = buffer.slice(newline + 1)
@@ -84,13 +95,13 @@ function client(socketPath) {
       }
       const resolve = waiting
       waiting = undefined
-      resolve?.(JSON.parse(line))
+      resolve?.(JSON.parse(line) as BrokerResponse)
     }
   })
   return {
     async request(message) {
       await ready
-      return new Promise(resolve => {
+      return new Promise<BrokerResponse>(resolve => {
         waiting = resolve
         socket.write(`${JSON.stringify(message)}\n`)
       })
@@ -101,7 +112,7 @@ function client(socketPath) {
   }
 }
 
-test('parseRequest accepts the shape it documents', () => {
+void test('parseRequest accepts the shape it documents', () => {
   assert.deepEqual(
     parseRequest('{"op":"proc.read","args":{"file":"mdstat"}}'),
     {
@@ -118,7 +129,7 @@ test('parseRequest accepts the shape it documents', () => {
   assert.deepEqual(parseRequest('{"op":"x"}'), { op: 'x', args: {} })
 })
 
-test('parseRequest refuses what it cannot interpret', () => {
+void test('parseRequest refuses what it cannot interpret', () => {
   const cases = [
     'not json',
     '[]',
@@ -129,13 +140,13 @@ test('parseRequest refuses what it cannot interpret', () => {
     '{"op":"x","id":2}',
   ]
   for (const line of cases) {
-    assert.throws(() => parseRequest(line), undefined, line)
+    assert.throws(() => parseRequest(line), Error, line)
   }
 })
 
-test('the line reader splits, skips blank lines and reports an overrun', () => {
-  const lines = []
-  const overflow = []
+void test('the line reader splits, skips blank lines and reports an overrun', () => {
+  const lines: string[] = []
+  const overflow: Array<true> = []
   const read = createLineReader({
     onLine: line => lines.push(line),
     onOverflow: () => overflow.push(true),
@@ -152,7 +163,7 @@ test('the line reader splits, skips blank lines and reports an overrun', () => {
   assert.deepEqual(lines, ['{"a":1}', '{"b":2}', '{"c":3}'])
 })
 
-test('capOutput trims to the ceiling on a line boundary', () => {
+void test('capOutput trims to the ceiling on a line boundary', () => {
   const short = 'one\ntwo\n'
   assert.deepEqual(capOutput(short), { text: short, truncated: false })
 
@@ -163,7 +174,7 @@ test('capOutput trims to the ceiling on a line boundary', () => {
   assert.ok(!capped.text.endsWith('\n'))
 })
 
-test('the rate limiter opens a window per key and refills', () => {
+void test('the rate limiter opens a window per key and refills', () => {
   const limiter = new RateLimiter(2, 1000)
   assert.equal(limiter.take('a', 0), true)
   assert.equal(limiter.take('a', 1), true)
@@ -172,7 +183,18 @@ test('the rate limiter opens a window per key and refills', () => {
   assert.equal(limiter.take('a', 1000), true)
 })
 
-test('the broker answers, audits, and keeps its socket private', async () => {
+interface DescribedOp {
+  name: string
+  input: { required?: string[] }
+}
+
+interface AuditEntry {
+  op: string
+  ok: boolean
+  error?: string
+}
+
+void test('the broker answers, audits, and keeps its socket private', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
     socketPath: host.socketPath,
@@ -200,26 +222,29 @@ test('the broker answers, audits, and keeps its socket private', async () => {
       op: 'proc.read',
       args: { file: 'mdstat' },
     })
-    assert.match(proc.result, /raid1/)
+    assert.match(proc.result ?? '', /raid1/)
 
-    const described = await connection.request({ op: 'ops.describe', args: {} })
-    const ops = JSON.parse(described.result)
+    const described = await connection.request({
+      op: 'ops.describe',
+      args: {},
+    })
+    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
     assert.deepEqual(
       ops.map(op => op.name),
       ['log.tail', 'proc.read', 'disk.usage'],
     )
-    assert.equal(ops[0].input.required[0], 'file')
+    assert.equal(ops[0].input.required?.[0], 'file')
 
     const unknown = await connection.request({ op: 'nope', args: {} })
     assert.equal(unknown.ok, false)
-    assert.equal(unknown.error.code, 'unknown-op')
+    assert.equal(unknown.error?.code, 'unknown-op')
 
     const badArg = await connection.request({
       op: 'log.tail',
       args: { file: '../etc/passwd' },
     })
     assert.equal(badArg.ok, false)
-    assert.equal(badArg.error.code, 'bad-argument')
+    assert.equal(badArg.error?.code, 'bad-argument')
   } finally {
     connection.close()
     await broker.close()
@@ -229,7 +254,7 @@ test('the broker answers, audits, and keeps its socket private', async () => {
   const audit = auditText
     .trim()
     .split('\n')
-    .map(line => JSON.parse(line))
+    .map(line => JSON.parse(line) as AuditEntry)
   assert.equal(audit.length, 5)
   assert.deepEqual(
     audit.map(entry => entry.op),
@@ -241,7 +266,7 @@ test('the broker answers, audits, and keeps its socket private', async () => {
   assert.equal(audit[4].ok, false)
 })
 
-test('a live socket is not taken over, and a non-socket path is refused', async () => {
+void test('a live socket is not taken over, and a non-socket path is refused', async () => {
   const host = await fakeHost()
   const first = await startBroker({
     socketPath: host.socketPath,
@@ -256,7 +281,7 @@ test('a live socket is not taken over, and a non-socket path is refused', async 
       logDir: host.logDir,
       procDir: host.procDir,
     }),
-    /already listening/,
+    /already listening/u,
   )
   await first.close()
 
@@ -269,11 +294,11 @@ test('a live socket is not taken over, and a non-socket path is refused', async 
       logDir: host.logDir,
       procDir: host.procDir,
     }),
-    /is not a socket/,
+    /is not a socket/u,
   )
 })
 
-test('a stale socket, left by a killed broker, is replaced', async () => {
+void test('a stale socket, left by a killed broker, is replaced', async () => {
   const host = await fakeHost()
   await mkdir(path.join(host.root, 'sock'))
   // Node unlinks its own socket on a clean close; only a killed process leaves one behind.
@@ -286,16 +311,16 @@ test('a stale socket, left by a killed broker, is replaced', async () => {
     { stdio: ['ignore', 'pipe', 'inherit'] },
   )
   try {
-    await new Promise((resolve, reject) => {
-      child.stdout.once('data', resolve)
+    await new Promise<void>((resolve, reject) => {
+      child.stdout.once('data', () => resolve())
       child.once('error', reject)
       child.once('exit', code =>
-        reject(new Error(`the socket holder exited early (${code})`)),
+        reject(new Error(`the socket holder exited early (${String(code)})`)),
       )
     })
   } finally {
     child.kill('SIGKILL')
-    await new Promise(resolve => child.once('exit', resolve))
+    await new Promise<void>(resolve => child.once('exit', () => resolve()))
   }
   const stale = await stat(host.socketPath)
   assert.equal(stale.isSocket(), true)

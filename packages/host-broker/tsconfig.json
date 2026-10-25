@@ -7,14 +7,10 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
     "types": ["node"],
-    "rootDir": "src",
-    "outDir": "lib",
     "strict": true,
-    "noEmitOnError": true,
-    "declaration": true,
-    "sourceMap": false,
+    "noEmit": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }

@@ -34,9 +34,9 @@
     "diagnostics"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm run build",
-    "test": "node --test test/*.test.mjs"
+    "test": "tsc -p tsconfig.json && node --test test/*.spec.ts"
   },
   "publishConfig": {
     "access": "public"
