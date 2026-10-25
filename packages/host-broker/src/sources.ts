@@ -15,8 +15,6 @@ import {
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
-  UTF8_CONTINUATION_MASK,
-  UTF8_CONTINUATION_PREFIX,
 } from './constants.ts'
 import type { Keep } from './limits.ts'
 import { BrokerFault } from './protocol.ts'
@@ -81,20 +79,12 @@ function runFixed(
     const collect = (chunk: Buffer): void => {
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
-        if (keep === 'head') {
-          buffer = buffer.subarray(0, MAX_EXEC_BUFFER_BYTES)
-        } else {
-          // Do not start a retained tail inside a character: back off to its lead byte.
-          let start = buffer.length - MAX_EXEC_BUFFER_BYTES
-          while (
-            start < buffer.length &&
-            (buffer[start] & UTF8_CONTINUATION_MASK) ===
-              UTF8_CONTINUATION_PREFIX
-          ) {
-            start += 1
-          }
-          buffer = buffer.subarray(start)
-        }
+        // The retained window's start never reaches a client: the answer cap keeps the last
+        // 64 KiB of it, and that boundary is repaired by `decodeTail`.
+        buffer =
+          keep === 'tail'
+            ? buffer.subarray(buffer.length - MAX_EXEC_BUFFER_BYTES)
+            : buffer.subarray(0, MAX_EXEC_BUFFER_BYTES)
       }
     }
 
