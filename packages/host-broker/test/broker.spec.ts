@@ -7,11 +7,15 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { startBroker } from '../src/broker.ts'
-import { TAIL_WINDOW_BYTES } from '../src/constants.ts'
-import { capOutput, RateLimiter } from '../src/limits.ts'
-import type { BrokerResponse } from '../src/protocol.ts'
-import { createLineReader, parseRequest } from '../src/protocol.ts'
+import {
+  capOutput,
+  createLineReader,
+  parseRequest,
+  RateLimiter,
+  startBroker,
+  TAIL_WINDOW_BYTES,
+  type BrokerResponse,
+} from '../src/index.ts'
 
 const SMALL_LINE_LIMIT = 10
 const LONG_ROW_CHARS = 40_000
