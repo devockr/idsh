@@ -341,9 +341,11 @@ async function answer(
     await send(response)
     if (after !== undefined) {
       // The caller's container may be replaced by this work, so give the answer time to arrive.
-      setTimeout(() => {
-        void Promise.resolve(after()).catch(() => null)
-      }, AFTER_RESPONSE_DELAY_MS)
+      await new Promise(resolve => {
+        setTimeout(resolve, AFTER_RESPONSE_DELAY_MS)
+      })
+      // A failed deferred step is recorded in its own log; the answer has already gone out.
+      await Promise.resolve(after()).catch(() => null)
     }
   }
 
@@ -352,20 +354,49 @@ async function answer(
     op = request.op
     requestId = request.id
     args = request.args
-    const execution = await execute(request, context, limiter, started)
-    await finish(
-      {
-        ...(requestId === undefined ? {} : { id: requestId }),
-        ok: true,
-        result: execution.text,
-        ...(execution.truncated ? { truncated: true } : {}),
-      },
-      {
-        bytes: Buffer.byteLength(execution.text),
-        truncated: execution.truncated,
-      },
-      execution.after,
-    )
+    const definition = findOp(request.op)
+    const budget = definition?.timeoutMs ?? context.execTimeoutMs
+    const deadline = Date.now() + budget
+    const deployment = await acquireDeployment(context, definition, budget)
+    if (deployment.fault !== undefined) {
+      await finish(
+        {
+          ...(requestId === undefined ? {} : { id: requestId }),
+          ok: false,
+          error: {
+            code: deployment.fault.code,
+            message: deployment.fault.message,
+          },
+        },
+        { bytes: 0, truncated: false, error: deployment.fault.code },
+      )
+      return
+    }
+    const release = deployment.release
+    try {
+      const execution = await execute(
+        request,
+        context,
+        limiter,
+        started,
+        deadline,
+      )
+      await finish(
+        {
+          ...(requestId === undefined ? {} : { id: requestId }),
+          ok: true,
+          result: execution.text,
+          ...(execution.truncated ? { truncated: true } : {}),
+        },
+        {
+          bytes: Buffer.byteLength(execution.text),
+          truncated: execution.truncated,
+        },
+        execution.after,
+      )
+    } finally {
+      release?.()
+    }
   } catch (error) {
     let fault: BrokerFault
     if (error instanceof BrokerFault) {
@@ -392,6 +423,7 @@ async function execute(
   context: OpContext,
   limiter: RateLimiter,
   started: number,
+  deadline: number,
 ): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
@@ -417,7 +449,7 @@ async function execute(
   const raw =
     definition === undefined
       ? describeOps()
-      : await runOp(definition, request.args, context)
+      : await runOp(definition, request.args, context, deadline)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
     definition === undefined
@@ -429,14 +461,41 @@ async function execute(
   }
 }
 
+/**
+ * Take the deployment lock when the operation asks for it. A waiter that cannot get in within its
+ * own budget answers with the fault instead of queueing indefinitely.
+ */
+async function acquireDeployment(
+  context: OpContext,
+  definition: OpDefinition | undefined,
+  budget: number,
+): Promise<{ release?: () => void; fault?: BrokerFault }> {
+  if (definition?.serial !== true) {
+    return {}
+  }
+  try {
+    return { release: await context.deployLock.acquire(budget) }
+  } catch (error) {
+    if (error instanceof BrokerFault) {
+      return { fault: error }
+    }
+    const message =
+      error instanceof Error ? error.message : 'the operation failed'
+    return { fault: new BrokerFault('internal', message) }
+  }
+}
+
 function runOp(
   op: OpDefinition,
   args: Record<string, unknown>,
   context: OpContext,
+  deadline: number,
 ): Promise<Execution | string> {
+  // The lock wait comes out of the same budget, so a queued deployment cannot start after its
+  // caller has already been told the operation timed out.
   return withTimeout(
     op.run(args, context),
-    (op.timeoutMs ?? context.execTimeoutMs) + TIMEOUT_SLACK_MS,
+    Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS,
   )
 }
 

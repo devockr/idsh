@@ -8,6 +8,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rm,
   stat,
   unlink,
   writeFile,
@@ -15,7 +16,7 @@ import {
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 
 import {
   capOutput,
@@ -27,6 +28,18 @@ import {
   TAIL_WINDOW_BYTES,
   type BrokerResponse,
 } from '../src/index.ts'
+
+const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
+
+const roots: string[] = []
+
+after(async () => {
+  await Promise.all(
+    roots.map(root =>
+      rm(root, { recursive: true, force: true }).catch(() => null),
+    ),
+  )
+})
 
 const SMALL_LINE_LIMIT = 10
 const LONG_ROW_CHARS = 40_000
@@ -51,6 +64,7 @@ interface FakeHost {
  */
 async function fakeHost(): Promise<FakeHost> {
   const root = await mkdtemp(path.join(tmpdir(), 'idsh-host-'))
+  roots.push(root)
   const logDir = path.join(root, 'log')
   const procDir = path.join(root, 'proc')
   await mkdir(logDir)
@@ -915,6 +929,7 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
     const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
     const recreate = ops.find(op => op.name === 'deploy.recreate')
     assert.equal(recreate?.confirm, true)
+    assert.equal(ops.find(op => op.name === 'deploy.rollback')?.confirm, true)
 
     const answer = await connection.request({ op: 'deploy.recreate', args: {} })
     assert.equal(answer.ok, true)
@@ -1317,7 +1332,7 @@ echo "$*"
   )
   const checkout = path.join(host.root, 'checkout')
   await mkdir(checkout)
-  await writeFile(path.join(host.root, 'rollback'), 'sha256:previous\n')
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -1330,10 +1345,13 @@ echo "$*"
   try {
     const answer = await connection.request({ op: 'deploy.rollback', args: {} })
     assert.equal(answer.ok, true)
-    assert.match(answer.result ?? '', /^rollback queued to sha256:previous/u)
-    const docker = await readFile(dockerLog, 'utf8')
-    assert.match(docker, /tag sha256:previous devockr\/idsh:dev/u)
+    assert.match(
+      answer.result ?? '',
+      new RegExp('^rollback queued to ' + ROLLBACK_TARGET, 'u'),
+    )
+    // The tag and compose are deferred: nothing has happened when the answer arrives.
     const logPath = path.join(host.root, 'compose.log')
+    await assert.rejects(readFile(logPath, 'utf8'))
     let log = ''
     for (let attempt = 0; attempt < 60; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 100))
@@ -1345,6 +1363,11 @@ echo "$*"
     assert.match(
       log,
       /compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
+    )
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(
+      docker,
+      new RegExp('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev', 'u'),
     )
   } finally {
     connection.close()
@@ -1374,7 +1397,10 @@ void test('deploy.rollback without a recorded target is refused', async () => {
 
 void test('deploy.rollback refuses a rollback file with more than one line', async () => {
   const host = await fakeHost()
-  await writeFile(path.join(host.root, 'rollback'), 'sha256:first\nextra\n')
+  await writeFile(
+    path.join(host.root, 'rollback'),
+    ROLLBACK_TARGET + '\nextra\n',
+  )
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -1414,14 +1440,14 @@ esac
 echo "$*" >> '${dockerLog}'
 case "$1" in
   run) sleep 0.4 ;;
-  *inspect*) echo 'sha256:prev' ;;
+  *inspect*) echo '${ROLLBACK_TARGET}' ;;
 esac
 `,
     { mode: 0o755 },
   )
   const checkout = path.join(host.root, 'checkout')
   await mkdir(checkout)
-  await writeFile(path.join(host.root, 'rollback'), 'sha256:prev\n')
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -1443,14 +1469,161 @@ esac
     const [built, rolled] = await Promise.all([build, rollback])
     assert.equal(built.ok, true, JSON.stringify(built.error))
     assert.equal(rolled.ok, true, JSON.stringify(rolled.error))
-    const log = await readFile(dockerLog, 'utf8')
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      log = await readFile(dockerLog, 'utf8')
+      if (log.includes('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev')) {
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
     const buildAt = log.indexOf('build --tag devockr/idsh:dev')
-    const tagAt = log.indexOf('tag sha256:prev devockr/idsh:dev')
+    const tagAt = log.indexOf('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev')
     assert.ok(buildAt !== -1 && tagAt !== -1)
     assert.ok(buildAt < tagAt, 'the build finished before the rollback tagged')
   } finally {
     building.close()
     rolling.close()
+    await broker.close()
+  }
+})
+
+void test('a deployment in progress is refused, not queued past its budget', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  run) sleep 0.8 ;;
+  inspect) echo '${ROLLBACK_TARGET}' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+    execTimeoutMs: 300,
+  })
+  const building = client(host.socketPath)
+  const rolling = client(host.socketPath)
+  try {
+    const build = building.request({
+      op: 'deploy.build',
+      args: { sha: 'aaaaaaaa' },
+    })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const refused = await rolling.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(refused.ok, false)
+    assert.match(JSON.stringify(refused.error), /a deployment is in progress/u)
+    await build
+  } finally {
+    building.close()
+    rolling.close()
+    await broker.close()
+  }
+})
+
+void test('a failed answer leaves no tag behind', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    await writeFile(host.auditPath, '')
+    await chmod(host.auditPath, 0o400)
+    const answer = await connection.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /audit/u)
+  } finally {
+    await chmod(host.auditPath, 0o600).catch(() => null)
+    await new Promise(resolve => setTimeout(resolve, 700))
+    connection.close()
+    await broker.close()
+  }
+  const docker = await readFile(dockerLog, 'utf8').catch(() => '')
+  assert.doesNotMatch(docker, /\btag\b/u)
+  await assert.rejects(readFile(path.join(host.root, 'compose.log'), 'utf8'))
+})
+
+void test('a failing tag is recorded and no compose runs', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  tag) echo 'cannot tag' >&2; exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(answer.ok, true)
+    const logPath = path.join(host.root, 'compose.log')
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('rollback tag failed')) {
+        break
+      }
+    }
+    assert.match(log, /rollback tag failed: .*cannot tag/u)
+    assert.doesNotMatch(log, /up -d --no-build/u)
+  } finally {
+    connection.close()
     await broker.close()
   }
 })

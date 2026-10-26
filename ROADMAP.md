@@ -10,7 +10,7 @@ restarts it, `deploy.build` builds it from an origin-only source and `deploy.rol
 image recorded before that build — all behind an in-tool confirmation — and `packages/host-ops` turns
 that table into dsh tools. The confirmation currently shows the request
 (`pr`/`sha`); the resolved source and `main` shas are resolved after the answer, so resolve-then-ask
-is still open, as is the single-flight lock around concurrent builds and recreates. Labelled images
+is still open; builds, recreates and rollbacks are serialized by one deployment lock. Labelled images
 accumulate until the reaper that drops `idsh.keep=1` images lands. Everything else below is still the plan, and
 this file is the contract the implementation is judged against.
 
