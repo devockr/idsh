@@ -32,7 +32,6 @@ export interface OpContext {
   readonly stateDir: string
 }
 
-/** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
 /** An answer plus work that must not start until that answer has been written. */
 export interface Execution {
   readonly text: string
@@ -40,6 +39,7 @@ export interface Execution {
   readonly after?: () => Promise<void> | void
 }
 
+/** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
 export interface OpDefinition {
   readonly name: string
   readonly summary: string
