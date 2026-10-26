@@ -604,6 +604,7 @@ void test('deploy.status and deploy.log drive the docker client', async () => {
       /^inspect --type container --format .*web$/mu,
     )
     assert.match(status.result ?? '', /\{\{\.Config\.Image\}\}/u)
+    assert.match(status.result ?? '', /container=\{\{\.ID\}\}/u)
     assert.match(status.result ?? '', /\{\{\.State\.ExitCode\}\}/u)
     const tail = await connection.request({
       op: 'deploy.log',
