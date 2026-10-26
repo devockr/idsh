@@ -391,6 +391,9 @@ export const OPS: readonly OpDefinition[] = [
     input: { type: 'object', properties: {}, additionalProperties: false },
     async run(args, ctx) {
       rejectUnknown(args, [])
+      // The keys are the inspect JSON names ('.Id', not '.ID'), and docker renders with
+      // `missingkey=error`, so a wrong name fails the call. `index .State "Health"` is the one
+      // guard that survives an absent health block; `{{if .State.Health}}` is itself a lookup.
       return docker(ctx, [
         'inspect',
         '--type',
