@@ -1248,3 +1248,17 @@ esac
     await broker.close()
   }
 })
+
+void test('a planted build directory is swept at boot', async () => {
+  const host = await fakeHost()
+  const junk = path.join(host.root, 'build', 'junk')
+  await mkdir(junk, { recursive: true })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  await broker.close()
+  await assert.rejects(stat(junk))
+})

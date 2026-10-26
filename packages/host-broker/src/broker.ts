@@ -151,11 +151,12 @@ export async function startBroker(
     recursive: true,
     mode: DIRECTORY_MODE,
   })
-  // A broker that died mid-build leaves its clone behind; runtime state, swept at boot.
+  // A broker that died mid-build leaves its clone behind; runtime state, swept at best effort —
+  // a tree another uid owns must not keep the broker from starting.
   await rm(path.join(path.dirname(auditPath), 'build'), {
     recursive: true,
     force: true,
-  })
+  }).catch(() => null)
   // A file left by rotation may be wider than FILE_MODE; narrow it before the first record.
   const audit = await stat(auditPath).catch(() => null)
   if (audit?.isFile() === true) {

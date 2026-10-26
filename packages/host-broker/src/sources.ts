@@ -610,7 +610,8 @@ export const OPS: readonly OpDefinition[] = [
         await buildImage(ctx, dir, deadline)
         return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
       } finally {
-        await rm(dir, { recursive: true, force: true })
+        // Best effort: a cleanup failure must not turn a tagged image into an error.
+        await rm(dir, { recursive: true, force: true }).catch(() => null)
       }
     },
   },
@@ -816,7 +817,7 @@ async function prepareBuildSource(
     )
     return dir
   } catch (error) {
-    await rm(dir, { recursive: true, force: true })
+    await rm(dir, { recursive: true, force: true }).catch(() => null)
     throw error
   }
 }
@@ -885,30 +886,43 @@ async function buildImage(
       : `${String(uid)}:${String(gid)}`
   const registry =
     process.env['NPM_REGISTRY'] ?? 'https://registry.npmmirror.com/'
+  const cidFile = path.join(dir, 'container.cid')
   // The image's entrypoint is dsh itself; without --entrypoint the command would be handed to it
   // as dsh arguments and boot a second server. --user keeps the mounted tree owned by the broker's
-  // uid, since --entrypoint bypasses the entrypoint's own setpriv drop.
-  await docker(
-    ctx,
-    [
-      'run',
-      '--rm',
-      '--entrypoint',
-      'sh',
-      ...(user === undefined ? [] : ['--user', user]),
-      '-v',
-      `${dir}:/src`,
-      '-w',
-      '/src',
-      '-e',
-      `npm_config_registry=${registry}`,
-      BUILD_CONTAINER,
-      '-c',
-      BUILD_COMMAND,
-    ],
-    'tail',
-    { timeoutMs: remaining(deadline), logPath },
-  )
+  // uid, since --entrypoint bypasses the entrypoint's own setpriv drop. Not a Windows target: the
+  // broker runs on the host as the same POSIX user that owns the checkout.
+  try {
+    await docker(
+      ctx,
+      [
+        'run',
+        '--rm',
+        '--cidfile',
+        cidFile,
+        '--entrypoint',
+        'sh',
+        ...(user === undefined ? [] : ['--user', user]),
+        '-v',
+        `${dir}:/src`,
+        '-w',
+        '/src',
+        '-e',
+        `npm_config_registry=${registry}`,
+        BUILD_CONTAINER,
+        '-c',
+        BUILD_COMMAND,
+      ],
+      'tail',
+      { timeoutMs: remaining(deadline), logPath },
+    )
+  } catch (error) {
+    // A killed client does not stop its container: remove the one this run started.
+    const cid = await readFile(cidFile, 'utf8').catch(() => null)
+    if (cid !== null && cid.trim() !== '') {
+      await docker(ctx, ['rm', '--force', cid.trim()]).catch(() => null)
+    }
+    throw error
+  }
   await docker(
     ctx,
     [
