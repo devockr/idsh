@@ -8,6 +8,9 @@
 import { DEFAULT_SOCKET_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 
+/** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
+const OP_TIMEOUT_SLACK_MS = 5000
+
 export const name = '@idsh/host-ops'
 export const inject = ['tools', 'userQuestions']
 
@@ -36,6 +39,7 @@ export interface HostTool {
   readonly name: string
   readonly description: string
   readonly parameters: Record<string, unknown>
+  readonly timeoutMs?: number
   readonly output: {
     readonly schema: Record<string, unknown>
     render(args: unknown, value: unknown): ContentBlock[]
@@ -78,6 +82,8 @@ interface DescribedOp {
   readonly input: Record<string, unknown>
   /** Destructive: ask the person before the broker is called. */
   readonly confirm?: boolean
+  /** How long the broker may take; a build is minutes, not the client's default. */
+  readonly timeoutMs?: number
 }
 
 /**
@@ -96,10 +102,14 @@ export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
   })
 }
 
+/** The caller the tools use; a test can pass a stub instead of waiting on a socket. */
+type BrokerCaller = typeof callBroker
+
 /** Ask the broker for its table and register each operation. Exported for the tests. */
 export async function registerTools(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
+  call: BrokerCaller = callBroker,
 ): Promise<void> {
   const described = await callBroker(endpoint, 'ops.describe', {})
   const ops = JSON.parse(described.text) as unknown
@@ -107,7 +117,7 @@ export async function registerTools(
     throw new TypeError('the broker did not describe a table of operations')
   }
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value)))
+  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call))
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -156,11 +166,16 @@ function toolFor(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   op: DescribedOp,
+  call: BrokerCaller,
 ): HostTool {
+  // A long operation says so; the tool call and the socket wait inherit it together.
+  const timeoutMs =
+    op.timeoutMs === undefined ? undefined : op.timeoutMs + OP_TIMEOUT_SLACK_MS
   return {
     name: toolName(op.name),
     description: op.summary,
     parameters: op.input,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     output: {
       schema: {
         type: 'object',
@@ -189,8 +204,8 @@ function toolFor(
           `host-ops: ${op.name} was not confirmed; the host was not touched`,
         )
       }
-      return callBroker(
-        endpoint,
+      return call(
+        timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs },
         op.name,
         args as Record<string, unknown>,
         exec.signal,
@@ -203,7 +218,10 @@ function asOp(value: unknown): DescribedOp {
   if (value === null || typeof value !== 'object') {
     throw new Error('the broker described an operation that is not an object')
   }
-  const { name, summary, input, confirm } = value as Record<string, unknown>
+  const { name, summary, input, confirm, timeoutMs } = value as Record<
+    string,
+    unknown
+  >
   if (
     typeof name !== 'string' ||
     typeof summary !== 'string' ||
@@ -220,6 +238,13 @@ function asOp(value: unknown): DescribedOp {
     summary,
     input: input as Record<string, unknown>,
     ...(confirm === true ? { confirm: true } : {}),
+    // The broker's per-operation budget travels with the operation; dropping it silently is how
+    // a long build ends up waiting the default 15 seconds again.
+    ...(typeof timeoutMs === 'number' &&
+    Number.isInteger(timeoutMs) &&
+    timeoutMs > 0
+      ? { timeoutMs }
+      : {}),
   }
 }
 

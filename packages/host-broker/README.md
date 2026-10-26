@@ -12,7 +12,7 @@ with a small set of validated arguments.
 
 ```text
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
-         [--container <name>] [--docker <path>] [--checkout <dir>]
+         [--container <name>] [--docker <path>] [--git <path>] [--checkout <dir>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -70,15 +70,16 @@ request.
 
 ## Operations (first slice)
 
-| op                | behaviour                                                                                     |
-| ----------------- | --------------------------------------------------------------------------------------------- |
-| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string |
-| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                          |
-| `disk.usage`      | `df -h`                                                                                       |
-| `deploy.status`   | the deployment container: image, creation time and state                                      |
-| `deploy.log`      | the tail of the deployment container log                                                      |
-| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required           |
-| `ops.describe`    | the table itself: names, summaries and each operation's schema                                |
+| op                | behaviour                                                                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                     |
+| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                              |
+| `disk.usage`      | `df -h`                                                                                                                                           |
+| `deploy.status`   | the deployment container: image, creation time and state                                                                                          |
+| `deploy.log`      | the tail of the deployment container log                                                                                                          |
+| `deploy.build`    | builds `:dev` from a PR head or an origin branch tip; the six root-surface files come from `main`, and the previous image id is kept for rollback |
+| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                               |
+| `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                    |
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing
@@ -91,19 +92,23 @@ to escape, nothing that can backtrack.
   a truncated answer says so.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
 - **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`, and
-  its process group is stopped with it, so whatever it started goes too.
+  its process group is stopped with it, so whatever it started goes too. An operation may publish a
+  longer `timeoutMs` (the build takes up to 15 minutes), and the plugin then waits that long.
 - **Buffer**: one program may write 1 MiB. Past that a tail operation keeps the last 1 MiB (the
   oldest bytes are dropped) and a head operation the first 1 MiB (the newest are), then the answer
   cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.
 - **Audit**: one JSON line per request — operation, outcome, duration, bytes, truncation, the
   arguments capped at 200 characters — written before the response. If the audit cannot be written,
   the response is an error, not a success. The file is append-only and unbounded; rotating it is the
-  host's job, with the same log rotation everything else on that machine gets.
+  host's job, with the same log rotation everything else on that machine gets. The state directory
+  also holds `compose.log` and `build.log` (detached launches), `rollback` (the last build's target),
+  and `build/<socket-hash>/` (build clones, keyed by the socket path and swept when this broker takes
+  its socket).
 
 ## What is not here yet
 
-`deploy.build`, `deploy.rollback`, the router operations and the `run` allowlist are phase‑1/phase‑3
-work in `ROADMAP.md`. `deploy.recreate` is the first destructive operation: it runs one fixed
+`deploy.rollback`, the router operations and the `run` allowlist are phase‑1/phase‑3 work in
+`ROADMAP.md`. `deploy.recreate` is the first destructive operation: it runs one fixed
 `docker compose` in `--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`),
 and the plugin asks the person before calling it. It is acknowledged first and launched detached, so
 the answer arrives before the container is replaced; `<stateDir>/compose.log` records the outcome.

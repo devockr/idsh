@@ -6,14 +6,25 @@
  * program. The socket's permissions are the other half — `0600` in a directory only its owner may
  * write means only that uid can open it at all.
  */
-import { appendFile, chmod, lstat, mkdir, stat, unlink } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import {
+  appendFile,
+  chmod,
+  lstat,
+  mkdir,
+  rm,
+  stat,
+  unlink,
+} from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
 import {
   AFTER_RESPONSE_DELAY_MS,
+  BUILD_KEY_CHARS,
   DEFAULT_CONTAINER,
   DEFAULT_DOCKER,
+  DEFAULT_GIT,
   DEFAULT_EXEC_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
@@ -62,6 +73,8 @@ export interface BrokerOptions {
   readonly container?: string
   /** The docker client `deploy.*` runs. Default `docker`, resolved through the host's PATH. */
   readonly dockerPath?: string
+  /** The git client `deploy.*` runs. Default `git`, resolved through the host's PATH. */
+  readonly gitPath?: string
   /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
   readonly checkout?: string
   /** Requests per operation per minute. Default 60. */
@@ -81,6 +94,7 @@ const DEFAULTS = {
   procDir: '/proc',
   container: DEFAULT_CONTAINER,
   dockerPath: DEFAULT_DOCKER,
+  gitPath: DEFAULT_GIT,
   rateLimitPerMinute: 60,
   execTimeoutMs: DEFAULT_EXEC_TIMEOUT_MS,
 } as const
@@ -98,7 +112,9 @@ export async function startBroker(
     )
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
-  const checkout = options.checkout
+  const gitPath = options.gitPath ?? DEFAULTS.gitPath
+  const checkout =
+    options.checkout === undefined ? undefined : path.resolve(options.checkout)
   if (checkout !== undefined) {
     const stats = await stat(checkout).catch(() => null)
     if (stats?.isDirectory() !== true) {
@@ -118,13 +134,22 @@ export async function startBroker(
   const auditPath = options.auditPath
   const now = options.now ?? Date.now
 
+  // A build root per socket *path*, not per basename: two sockets with the same name in different
+  // directories must not share (and sweep) one another's clones.
+  const buildKey = createHash('sha256')
+    .update(path.resolve(options.socketPath))
+    .digest('hex')
+    .slice(0, BUILD_KEY_CHARS)
+  const buildRoot = path.join(path.dirname(auditPath), 'build', buildKey)
   const context: OpContext = {
     logDir,
     procDir,
     execTimeoutMs,
     container,
     dockerPath,
+    gitPath,
     stateDir: path.dirname(auditPath),
+    buildRoot,
     ...(checkout === undefined ? {} : { checkout }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
@@ -142,6 +167,12 @@ export async function startBroker(
     await chmod(auditPath, FILE_MODE).catch(() => null)
   }
   await prepareSocketDirectory(options.socketPath)
+  // Only now is it clear no other broker is serving this socket; a tree another uid owns must not
+  // keep the broker from starting, so the sweep is best effort.
+  await rm(buildRoot, { recursive: true, force: true }).catch(() => null)
+  await mkdir(buildRoot, { recursive: true, mode: DIRECTORY_MODE }).catch(
+    () => null,
+  )
   const server = net.createServer(socket => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
@@ -402,7 +433,7 @@ function runOp(
 ): Promise<Execution | string> {
   return withTimeout(
     op.run(args, context),
-    context.execTimeoutMs + TIMEOUT_SLACK_MS,
+    (op.timeoutMs ?? context.execTimeoutMs) + TIMEOUT_SLACK_MS,
   )
 }
 

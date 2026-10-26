@@ -1,11 +1,13 @@
 /* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   chmod,
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   stat,
   unlink,
   writeFile,
@@ -268,6 +270,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'proc.read',
         'deploy.status',
         'deploy.log',
+        'deploy.build',
         'deploy.recreate',
         'disk.usage',
       ],
@@ -1010,5 +1013,287 @@ void test('a failed launch is recorded and the broker keeps serving', async () =
   } finally {
     connection.close()
     await broker.close()
+  }
+})
+
+void test('deploy.build resolves a PR, pins main and builds :dev', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const dockerLog = path.join(host.root, 'docker.log')
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$*" >> '${gitLog}'
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *"ls-remote origin refs/pull/7/head"*)
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/pull/7/head\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$*" in
+  *"--type image"*) printf '["devockr/idsh:dev@sha256:abc"]\\n' ;;
+  *inspect*) printf 'sha256:previousimage\\n' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { pr: 7 },
+    })
+    assert.equal(answer.ok, true)
+    assert.match(
+      answer.result ?? '',
+      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111/u,
+    )
+    const git = await readFile(gitLog, 'utf8')
+    assert.match(git, /ls-remote origin refs\/pull\/7\/head/u)
+    assert.match(
+      git,
+      /checkout aaaaaaaa11111111111111111111111111111111 -- Dockerfile Dockerfile\.dev entrypoint\.sh tools \.dockerignore Dockerfile\.dev\.dockerignore/u,
+    )
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(docker, /build --tag devockr\/idsh:dev/u)
+    assert.match(docker, /--label idsh\.keep=1/u)
+    assert.match(docker, /--entrypoint sh/u)
+    assert.match(
+      docker,
+      new RegExp(
+        `--user ${String(process.getuid?.())}:${String(process.getgid?.())}`,
+        'u',
+      ),
+    )
+    assert.match(docker, /--file .*Dockerfile\.dev/u)
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    // A pulled image's digest is the rollback target, not its local id.
+    assert.equal(rollback, 'devockr/idsh:dev@sha256:abc\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.build refuses an ambiguous source and a fork head', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n' ;;
+  *"refs/pull/8/head"*) printf 'cccccccc33333333333333333333333333333333 refs/pull/8/head\\n' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(dockerPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const both = await connection.request({
+      op: 'deploy.build',
+      args: { pr: 7, sha: 'aaaaaaaa' },
+    })
+    assert.equal(both.error?.code, 'bad-argument')
+    assert.match(JSON.stringify(both.error), /exactly one/u)
+
+    const fork = await connection.request({
+      op: 'deploy.build',
+      args: { pr: 8 },
+    })
+    assert.equal(fork.error?.code, 'unavailable')
+    assert.match(JSON.stringify(fork.error), /not on an origin branch/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.build takes the tip of an origin branch by sha', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    '#!/bin/sh\ncase "$*" in *inspect*) printf \'sha256:previousimage\\n\' ;; esac\n',
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { sha: 'bbbbbbbb' },
+    })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /^built sha bbbbbbbb/u)
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    assert.equal(rollback, 'sha256:previousimage\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a failed build still records the rollback target and its log', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  inspect) printf 'sha256:previousimage\\n' ;;
+  build) printf 'boom: the build failed\\n'; exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { sha: 'aaaaaaaa' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /boom/u)
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    assert.equal(rollback, 'sha256:previousimage\n')
+    const log = await readFile(path.join(host.root, 'build.log'), 'utf8')
+    assert.match(log, /boom: the build failed/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a planted build directory is swept at boot', async () => {
+  const host = await fakeHost()
+  const key = createHash('sha256')
+    .update(path.resolve(host.socketPath))
+    .digest('hex')
+    .slice(0, 16)
+  const junk = path.join(host.root, 'build', key, 'junk')
+  await mkdir(junk, { recursive: true })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  await broker.close()
+  await assert.rejects(stat(junk))
+})
+
+void test('two sockets with the same name keep separate build roots', async () => {
+  const host = await fakeHost()
+  const first = await startBroker({
+    socketPath: path.join(host.root, 'sock', 'a', 'host.sock'),
+    auditPath: path.join(host.root, 'a.jsonl'),
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  try {
+    const before = await readdir(path.join(host.root, 'build'))
+    assert.equal(before.length, 1)
+    const second = await startBroker({
+      socketPath: path.join(host.root, 'sock', 'b', 'host.sock'),
+      auditPath: path.join(host.root, 'b.jsonl'),
+      logDir: host.logDir,
+      procDir: host.procDir,
+    })
+    try {
+      const after = await readdir(path.join(host.root, 'build'))
+      assert.equal(after.length, 2)
+      assert.ok(after.includes(before[0]))
+    } finally {
+      await second.close()
+    }
+  } finally {
+    await first.close()
   }
 })

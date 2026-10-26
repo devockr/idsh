@@ -6,7 +6,11 @@ living inside the container.
 
 Phase 1 has started: `packages/host-broker` carries the socket, three read sources, the bounds and
 the audit log, `deploy.status`/`deploy.log` inspect the deployment container, `deploy.recreate`
-restarts it behind an in-tool confirmation, and `packages/host-ops` turns that table into dsh tools. Everything else below is still the plan, and
+restarts it and `deploy.build` builds it from an origin-only source behind an in-tool confirmation, and
+`packages/host-ops` turns that table into dsh tools. The confirmation currently shows the request
+(`pr`/`sha`); the resolved source and `main` shas are resolved after the answer, so resolve-then-ask
+is still open, as is the single-flight lock around concurrent builds and recreates. Labelled images
+accumulate until the reaper that drops `idsh.keep=1` images lands. Everything else below is still the plan, and
 this file is the contract the implementation is judged against.
 
 ## The problem
@@ -178,7 +182,7 @@ channel has to carry deployment before the keys can go.
 | op                                 | source                                           | purpose                       |
 | ---------------------------------- | ------------------------------------------------ | ----------------------------- |
 | `deploy.build({pr})`               | the PR head, on the remote, from this repository | verify an unmerged change     |
-| `deploy.build({sha})`              | any commit on a remote branch                    | verify a pushed branch        |
+| `deploy.build({sha})`              | the tip of a branch on the remote                | verify a pushed branch        |
 | `deploy.main()`                    | the main branch                                  | ship                          |
 | `deploy.recreate()`                | no build; the current image                      | profile-only changes          |
 | `deploy.rollback()`                | the previous image                               | a deploy that will not boot   |

@@ -7,10 +7,22 @@
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
 import { spawn } from 'node:child_process'
-import { appendFile, open, readFile, stat } from 'node:fs/promises'
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import path from 'node:path'
 
 import {
+  BUILD_TIMEOUT_MS,
+  DIRECTORY_MODE,
   FILE_MODE,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
@@ -28,8 +40,12 @@ export interface OpContext {
   readonly container: string
   readonly dockerPath: string
   readonly checkout?: string
+  /** The git client. Default `git`, resolved through the host's PATH. */
+  readonly gitPath: string
   /** Where a detached operation writes its log; the audit directory. */
   readonly stateDir: string
+  /** Where builds clone; unique to this broker's socket, swept at boot. */
+  readonly buildRoot: string
 }
 
 /** An answer plus work that must not start until that answer has been written. */
@@ -48,6 +64,8 @@ export interface OpDefinition {
   readonly keep?: Keep
   /** Destructive: the plugin must ask the person before it runs. */
   readonly confirm?: boolean
+  /** How long the operation may take; defaults to the broker's per-program deadline. */
+  readonly timeoutMs?: number
   run(
     args: Record<string, unknown>,
     ctx: OpContext,
@@ -64,6 +82,10 @@ export interface OpDefinition {
  */
 interface RunOptions {
   readonly keep?: Keep
+  /** How long this program may run; a build is minutes, not the default ten seconds. */
+  readonly timeoutMs?: number
+  /** Append the program's output here as it arrives, so a failed build stays diagnosable. */
+  readonly logPath?: string
   /** Where the program runs; a compose file is relative to its checkout. */
   readonly cwd?: string
   /** Extra environment, merged over the broker's own. */
@@ -77,7 +99,9 @@ function runFixed(
   options: RunOptions = {},
 ): Promise<string> {
   const keep = options.keep ?? 'head'
+  const timeoutMs = options.timeoutMs ?? ctx.execTimeoutMs
   return new Promise((resolve, reject) => {
+    let logChain: Promise<unknown> = Promise.resolve()
     const child = spawn(program, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       // Its own group, so a timeout can stop whatever the program started too.
@@ -100,13 +124,24 @@ function runFixed(
       if (state.timer !== undefined) {
         clearTimeout(state.timer)
       }
-      if (failure === undefined) {
-        resolve(buffer.toString('utf8'))
-      } else {
-        reject(failure)
-      }
+      // The answer waits for the log to be complete, so a reader never sees a torn tail.
+      void logChain.finally(() => {
+        if (failure === undefined) {
+          resolve(buffer.toString('utf8'))
+        } else {
+          reject(failure)
+        }
+      })
     }
     const collect = (chunk: Buffer): void => {
+      if (options.logPath !== undefined) {
+        // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
+        logChain = logChain
+          .then(() =>
+            appendFile(options.logPath as string, chunk, { mode: FILE_MODE }),
+          )
+          .catch(() => null)
+      }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
         // The retained window's start never reaches a client: the answer cap keeps the last
@@ -129,12 +164,9 @@ function runFixed(
         }
       }
       settle(
-        new BrokerFault(
-          'timeout',
-          `no answer within ${String(ctx.execTimeoutMs)} ms`,
-        ),
+        new BrokerFault('timeout', `no answer within ${String(timeoutMs)} ms`),
       )
-    }, ctx.execTimeoutMs)
+    }, timeoutMs)
     child.once('error', (error: NodeJS.ErrnoException) => {
       settle(
         new BrokerFault(
@@ -354,8 +386,19 @@ function docker(
   ctx: OpContext,
   args: readonly string[],
   keep: Keep = 'head',
+  options: RunOptions = {},
 ): Promise<string> {
-  return runFixed(ctx, ctx.dockerPath, args, { keep })
+  return runFixed(ctx, ctx.dockerPath, args, { ...options, keep })
+}
+
+/** One git invocation in the deployment checkout (or in a clone, via `-C`). */
+function git(
+  ctx: OpContext,
+  args: readonly string[],
+  options: RunOptions = {},
+  cwd: string | undefined = ctx.checkout,
+): Promise<string> {
+  return runFixed(ctx, ctx.gitPath, ['-C', cwd ?? '.', ...args], options)
 }
 
 /**
@@ -404,14 +447,44 @@ async function composeDetached(
     // where the operator will look for it. The handle is closed by the finally below, so this
     // appends by path instead of holding the descriptor open.
     child.on('error', (error: Error) => {
-      void appendFile(logPath, `spawn failed: ${error.message}\n`, {
-        mode: FILE_MODE,
-      }).catch(() => null)
+      noteFailure(logPath, error)
     })
     child.unref()
   } finally {
     await log.close()
   }
+}
+
+/** The files a build takes from main: everything that runs as root before the uid drops. */
+const ROOT_SURFACE = [
+  'Dockerfile',
+  'Dockerfile.dev',
+  'entrypoint.sh',
+  'tools',
+  '.dockerignore',
+  'Dockerfile.dev.dockerignore',
+] as const
+
+/** Run inside the build container; the host argv is fixed and no caller input reaches it. */
+const BUILD_COMMAND = 'pnpm install --frozen-lockfile && pnpm build'
+
+/** The image that carries node and pnpm for the build step. */
+const BUILD_CONTAINER = 'devockr/idsh:base'
+
+const BUILD_IMAGE = 'devockr/idsh:dev'
+
+const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
+
+/** A spawn failure the answer already left behind: record it where the operator will look. */
+function noteFailure(logPath: string, error: Error): void {
+  void appendFile(logPath, `spawn failed: ${error.message}\n`, {
+    mode: FILE_MODE,
+  }).catch(() => null)
+}
+
+/** What is left of one operation's budget. */
+function remaining(deadline: number): number {
+  return Math.max(1, deadline - Date.now())
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -515,6 +588,43 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
   {
+    name: 'deploy.build',
+    summary:
+      'Build the :dev image from a PR head or the tip of an origin branch; the root files stay at main.',
+    confirm: true,
+    timeoutMs: BUILD_TIMEOUT_MS,
+    input: {
+      type: 'object',
+      properties: {
+        pr: {
+          type: 'integer',
+          description:
+            'A same-repository PR number; its head must be on an origin branch.',
+        },
+        sha: {
+          type: 'string',
+          description: 'The tip of an origin branch.',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['pr', 'sha'])
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      const source = await resolveBuildSource(ctx, args, deadline)
+      const dir = await prepareBuildSource(ctx, source, deadline)
+      try {
+        // Recorded before the build, so the tag moving is what makes this the rollback target.
+        const previous = await recordRollback(ctx)
+        await buildImage(ctx, dir, deadline)
+        return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
+      } finally {
+        // Best effort: a cleanup failure must not turn a tagged image into an error.
+        await rm(dir, { recursive: true, force: true }).catch(() => null)
+      }
+    },
+  },
+  {
     name: 'deploy.recreate',
     summary:
       'Recreate the deployment container from the current :dev image, without building.',
@@ -555,13 +665,287 @@ export function findOp(name: string): OpDefinition | undefined {
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
 export function describeOps(): string {
   return JSON.stringify(
-    OPS.map(({ name, summary, input, confirm }) => ({
+    OPS.map(({ name, summary, input, confirm, timeoutMs }) => ({
       name,
       summary,
       input,
       ...(confirm === true ? { confirm: true } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     })),
     null,
     2,
+  )
+}
+
+/* ---------------------------------------------------------------- deploy.build */
+
+interface BuildSource {
+  readonly sha: string
+  /** `main` resolved at the same moment as the source, so the pin cannot drift. */
+  readonly mainSha: string
+  readonly label: string
+}
+
+function parseLsRemote(text: string): Array<{ sha: string; ref: string }> {
+  return text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line !== '')
+    .map(line => {
+      const [sha = '', ref = ''] = line.split(/\s+/u)
+      return { sha, ref }
+    })
+}
+
+function lsRemote(
+  ctx: OpContext,
+  pattern: string,
+  deadline: number,
+): Promise<string> {
+  return git(ctx, ['ls-remote', 'origin', pattern], {
+    timeoutMs: remaining(deadline),
+  })
+}
+
+/**
+ * Resolve what to build.
+ *
+ * Only code that exists on origin is deployable: a PR's head must be a branch of this repository,
+ * and a bare sha must be the tip of an origin branch. Nothing from the working tree is ever built.
+ */
+async function resolveBuildSource(
+  ctx: OpContext,
+  args: Record<string, unknown>,
+  deadline: number,
+): Promise<BuildSource> {
+  const pr = args['pr']
+  const sha = args['sha']
+  if ((pr === undefined) === (sha === undefined)) {
+    throw new BrokerFault('bad-argument', 'give exactly one of pr or sha')
+  }
+  if (ctx.checkout === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      'no checkout configured; start the broker with --checkout',
+    )
+  }
+  const heads = parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline))
+  const main = heads.find(entry => entry.ref === 'refs/heads/main')
+  if (main === undefined) {
+    throw new BrokerFault('unavailable', 'origin has no main branch')
+  }
+  if (pr !== undefined) {
+    if (typeof pr !== 'number' || !Number.isInteger(pr) || pr < 1) {
+      throw new BrokerFault('bad-argument', 'pr must be a positive integer')
+    }
+    const head = parseLsRemote(
+      await lsRemote(ctx, `refs/pull/${String(pr)}/head`, deadline),
+    )
+    const resolved = head.at(0)?.sha
+    if (resolved === undefined) {
+      throw new BrokerFault(
+        'unavailable',
+        `PR ${String(pr)} has no head on origin`,
+      )
+    }
+    if (!heads.some(entry => entry.sha === resolved)) {
+      throw new BrokerFault(
+        'unavailable',
+        `the head of PR ${String(pr)} is not on an origin branch; fork PRs are not deployable`,
+      )
+    }
+    return { sha: resolved, mainSha: main.sha, label: `PR #${String(pr)}` }
+  }
+  if (typeof sha !== 'string' || !SHA_PATTERN.test(sha)) {
+    throw new BrokerFault('bad-argument', 'sha must be a hex commit id')
+  }
+  // Several branches at one commit is ordinary; only different commits are ambiguous.
+  const matches = [
+    ...new Set(
+      heads
+        .map(entry => entry.sha)
+        .filter(candidate => candidate.startsWith(sha)),
+    ),
+  ]
+  if (matches.length === 0) {
+    throw new BrokerFault(
+      'unavailable',
+      `sha ${sha} is not the tip of an origin branch`,
+    )
+  }
+  if (matches.length > 1) {
+    throw new BrokerFault(
+      'bad-argument',
+      `sha ${sha} matches more than one origin branch`,
+    )
+  }
+  return { sha: matches[0], mainSha: main.sha, label: `sha ${sha}` }
+}
+
+/** A clean clone of the source, with the root surface replaced by main's. */
+async function prepareBuildSource(
+  ctx: OpContext,
+  source: BuildSource,
+  deadline: number,
+): Promise<string> {
+  const checkout = ctx.checkout
+  if (checkout === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      'no checkout configured; start the broker with --checkout',
+    )
+  }
+  const root = ctx.buildRoot
+  await mkdir(root, { recursive: true, mode: DIRECTORY_MODE })
+  // The checkout may never have fetched the source: freshen its refs, then clone its objects.
+  await git(
+    ctx,
+    ['fetch', '--quiet', 'origin'],
+    { timeoutMs: remaining(deadline) },
+    checkout,
+  )
+  const dir = await mkdtemp(path.join(root, 'source-'))
+  try {
+    await git(
+      ctx,
+      ['clone', '--quiet', '--no-checkout', checkout, dir],
+      { timeoutMs: remaining(deadline) },
+      root,
+    )
+    await git(
+      ctx,
+      ['checkout', '--quiet', '--detach', source.sha],
+      { timeoutMs: remaining(deadline) },
+      dir,
+    )
+    await git(
+      ctx,
+      ['checkout', source.mainSha, '--', ...ROOT_SURFACE],
+      { timeoutMs: remaining(deadline) },
+      dir,
+    )
+    return dir
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true }).catch(() => null)
+    throw error
+  }
+}
+
+/** Remember the image the container runs now, before a build retags `:dev`. */
+async function recordRollback(ctx: OpContext): Promise<string> {
+  // RepoDigests lives on the image, not on the container: read the id first, then the image.
+  const idText = await docker(ctx, [
+    'inspect',
+    '--type',
+    'container',
+    '--format',
+    '{{.Image}}',
+    ctx.container,
+  ])
+  const id = idText.trim().split('\n')[0] ?? ''
+  if (id === '') {
+    throw new BrokerFault(
+      'unavailable',
+      'the container has no image to roll back to',
+    )
+  }
+  let previous = id
+  try {
+    const digestsText = await docker(ctx, [
+      'inspect',
+      '--type',
+      'image',
+      '--format',
+      '{{json .RepoDigests}}',
+      id,
+    ])
+    const list = JSON.parse(
+      digestsText.trim().split('\n')[0] ?? '[]',
+    ) as unknown
+    // A pulled image is one pull away; a local one only exists as its id.
+    if (Array.isArray(list) && typeof list[0] === 'string') {
+      previous = list[0]
+    }
+  } catch {
+    // No digests: the id is the target.
+  }
+  const file = path.join(ctx.stateDir, 'rollback')
+  await writeFile(file, `${previous}\n`, { mode: FILE_MODE })
+  await chmod(file, FILE_MODE).catch(() => null)
+  return previous
+}
+async function buildImage(
+  ctx: OpContext,
+  dir: string,
+  deadline: number,
+): Promise<void> {
+  const logPath = path.join(ctx.stateDir, 'build.log')
+  // Create the log before the first program: a silent failure still leaves the file behind.
+  const log = await open(logPath, 'a', FILE_MODE)
+  try {
+    await log.chmod(FILE_MODE)
+  } finally {
+    await log.close()
+  }
+  const uid = process.getuid?.()
+  const gid = process.getgid?.()
+  const user =
+    uid === undefined || gid === undefined
+      ? undefined
+      : `${String(uid)}:${String(gid)}`
+  const registry =
+    process.env['NPM_REGISTRY'] ?? 'https://registry.npmmirror.com/'
+  const cidFile = path.join(dir, 'container.cid')
+  // The image's entrypoint is dsh itself; without --entrypoint the command would be handed to it
+  // as dsh arguments and boot a second server. --user keeps the mounted tree owned by the broker's
+  // uid, since --entrypoint bypasses the entrypoint's own setpriv drop. Not a Windows target: the
+  // broker runs on the host as the same POSIX user that owns the checkout.
+  try {
+    await docker(
+      ctx,
+      [
+        'run',
+        '--rm',
+        '--cidfile',
+        cidFile,
+        '--entrypoint',
+        'sh',
+        ...(user === undefined ? [] : ['--user', user]),
+        '-v',
+        `${dir}:/src`,
+        '-w',
+        '/src',
+        '-e',
+        `npm_config_registry=${registry}`,
+        BUILD_CONTAINER,
+        '-c',
+        BUILD_COMMAND,
+      ],
+      'tail',
+      { timeoutMs: remaining(deadline), logPath },
+    )
+  } catch (error) {
+    // A killed client does not stop its container: remove the one this run started.
+    const cid = await readFile(cidFile, 'utf8').catch(() => null)
+    if (cid !== null && cid.trim() !== '') {
+      await docker(ctx, ['rm', '--force', cid.trim()]).catch(() => null)
+    }
+    throw error
+  }
+  await docker(
+    ctx,
+    [
+      'build',
+      '--tag',
+      BUILD_IMAGE,
+      // Retention: the previous :dev image becomes untagged, and a prune keeps this one.
+      '--label',
+      'idsh.keep=1',
+      '--file',
+      path.join(dir, 'Dockerfile.dev'),
+      dir,
+    ],
+    'tail',
+    { timeoutMs: remaining(deadline), logPath },
   )
 }

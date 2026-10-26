@@ -48,6 +48,15 @@ export const DEFAULT_CONTAINER = 'dsh'
 /** The docker client, unless the host says otherwise. */
 export const DEFAULT_DOCKER = 'docker'
 
+/** The git client, unless the host says otherwise. */
+export const DEFAULT_GIT = 'git'
+
+/** Characters of the socket hash that name a build root: enough to keep two sockets apart. */
+export const BUILD_KEY_CHARS = 16
+
+/** A build may take minutes; the per-program default is ten seconds. */
+export const BUILD_TIMEOUT_MS = 15 * 60_000
+
 /** How long a deferred action waits after its answer is written, so the client can read it. */
 export const AFTER_RESPONSE_DELAY_MS = 500
 
