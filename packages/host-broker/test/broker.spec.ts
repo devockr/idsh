@@ -1045,7 +1045,8 @@ esac
     `#!/bin/sh
 echo "$*" >> '${dockerLog}'
 case "$*" in
-  *inspect*) printf 'sha256:previousimage|["devockr/idsh:dev@sha256:abc"]\\n' ;;
+  *"--type image"*) printf '["devockr/idsh:dev@sha256:abc"]\\n' ;;
+  *inspect*) printf 'sha256:previousimage\\n' ;;
 esac
 `,
     { mode: 0o755 },

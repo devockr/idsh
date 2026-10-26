@@ -1,5 +1,6 @@
 ---
 "@idsh/host-broker": minor
+"@idsh/host-ops": patch
 ---
 
 Add `deploy.build`: resolve a PR head or an origin branch tip with `git ls-remote` (fetching first, so

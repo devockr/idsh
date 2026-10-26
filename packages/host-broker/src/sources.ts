@@ -438,9 +438,7 @@ async function composeDetached(
     // where the operator will look for it. The handle is closed by the finally below, so this
     // appends by path instead of holding the descriptor open.
     child.on('error', (error: Error) => {
-      void appendFile(logPath, `spawn failed: ${error.message}\n`, {
-        mode: FILE_MODE,
-      }).catch(() => null)
+      noteFailure(logPath, error)
     })
     child.unref()
   } finally {
@@ -467,6 +465,18 @@ const BUILD_CONTAINER = 'devockr/idsh:base'
 const BUILD_IMAGE = 'devockr/idsh:dev'
 
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
+
+/** A spawn failure the answer already left behind: record it where the operator will look. */
+function noteFailure(logPath: string, error: Error): void {
+  void appendFile(logPath, `spawn failed: ${error.message}\n`, {
+    mode: FILE_MODE,
+  }).catch(() => null)
+}
+
+/** What is left of one operation's budget. */
+function remaining(deadline: number): number {
+  return Math.max(1, deadline - Date.now())
+}
 
 /* ------------------------------------------------------------------ the table */
 
@@ -591,16 +601,17 @@ export const OPS: readonly OpDefinition[] = [
     },
     async run(args, ctx) {
       rejectUnknown(args, ['pr', 'sha'])
-      const source = await resolveBuildSource(ctx, args)
-      const dir = await prepareBuildSource(ctx, source)
-      // Recorded before the build, so the tag moving is what makes this the rollback target.
-      const previous = await recordRollback(ctx)
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      const source = await resolveBuildSource(ctx, args, deadline)
+      const dir = await prepareBuildSource(ctx, source, deadline)
       try {
-        await buildImage(ctx, dir)
+        // Recorded before the build, so the tag moving is what makes this the rollback target.
+        const previous = await recordRollback(ctx)
+        await buildImage(ctx, dir, deadline)
+        return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
       } finally {
         await rm(dir, { recursive: true, force: true })
       }
-      return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
     },
   },
   {
@@ -676,9 +687,13 @@ function parseLsRemote(text: string): Array<{ sha: string; ref: string }> {
     })
 }
 
-function lsRemote(ctx: OpContext, pattern: string): Promise<string> {
+function lsRemote(
+  ctx: OpContext,
+  pattern: string,
+  deadline: number,
+): Promise<string> {
   return git(ctx, ['ls-remote', 'origin', pattern], {
-    timeoutMs: BUILD_TIMEOUT_MS,
+    timeoutMs: remaining(deadline),
   })
 }
 
@@ -691,6 +706,7 @@ function lsRemote(ctx: OpContext, pattern: string): Promise<string> {
 async function resolveBuildSource(
   ctx: OpContext,
   args: Record<string, unknown>,
+  deadline: number,
 ): Promise<BuildSource> {
   const pr = args['pr']
   const sha = args['sha']
@@ -703,7 +719,7 @@ async function resolveBuildSource(
       'no checkout configured; start the broker with --checkout',
     )
   }
-  const heads = parseLsRemote(await lsRemote(ctx, 'refs/heads/*'))
+  const heads = parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline))
   const main = heads.find(entry => entry.ref === 'refs/heads/main')
   if (main === undefined) {
     throw new BrokerFault('unavailable', 'origin has no main branch')
@@ -713,7 +729,7 @@ async function resolveBuildSource(
       throw new BrokerFault('bad-argument', 'pr must be a positive integer')
     }
     const head = parseLsRemote(
-      await lsRemote(ctx, `refs/pull/${String(pr)}/head`),
+      await lsRemote(ctx, `refs/pull/${String(pr)}/head`, deadline),
     )
     const resolved = head.at(0)?.sha
     if (resolved === undefined) {
@@ -760,6 +776,7 @@ async function resolveBuildSource(
 async function prepareBuildSource(
   ctx: OpContext,
   source: BuildSource,
+  deadline: number,
 ): Promise<string> {
   const checkout = ctx.checkout
   if (checkout === undefined) {
@@ -774,47 +791,67 @@ async function prepareBuildSource(
   await git(
     ctx,
     ['fetch', '--quiet', 'origin'],
-    { timeoutMs: BUILD_TIMEOUT_MS },
+    { timeoutMs: remaining(deadline) },
     checkout,
   )
   const dir = await mkdtemp(path.join(root, 'source-'))
-  await git(
-    ctx,
-    ['clone', '--quiet', '--no-checkout', checkout, dir],
-    { timeoutMs: BUILD_TIMEOUT_MS },
-    root,
-  )
-  await git(
-    ctx,
-    ['checkout', '--quiet', '--detach', source.sha],
-    { timeoutMs: BUILD_TIMEOUT_MS },
-    dir,
-  )
-  await git(
-    ctx,
-    ['checkout', source.mainSha, '--', ...ROOT_SURFACE],
-    { timeoutMs: BUILD_TIMEOUT_MS },
-    dir,
-  )
-  return dir
+  try {
+    await git(
+      ctx,
+      ['clone', '--quiet', '--no-checkout', checkout, dir],
+      { timeoutMs: remaining(deadline) },
+      root,
+    )
+    await git(
+      ctx,
+      ['checkout', '--quiet', '--detach', source.sha],
+      { timeoutMs: remaining(deadline) },
+      dir,
+    )
+    await git(
+      ctx,
+      ['checkout', source.mainSha, '--', ...ROOT_SURFACE],
+      { timeoutMs: remaining(deadline) },
+      dir,
+    )
+    return dir
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true })
+    throw error
+  }
 }
 
 /** Remember the image the container runs now, before a build retags `:dev`. */
 async function recordRollback(ctx: OpContext): Promise<string> {
-  const text = await docker(ctx, [
+  // RepoDigests lives on the image, not on the container: read the id first, then the image.
+  const idText = await docker(ctx, [
     'inspect',
     '--type',
     'container',
     '--format',
-    '{{.Image}}|{{json .RepoDigests}}',
+    '{{.Image}}',
     ctx.container,
   ])
-  const [id = '', digests = '[]'] = (text.trim().split('\n')[0] ?? '').split(
-    '|',
-  )
+  const id = idText.trim().split('\n')[0] ?? ''
+  if (id === '') {
+    throw new BrokerFault(
+      'unavailable',
+      'the container has no image to roll back to',
+    )
+  }
   let previous = id
   try {
-    const list = JSON.parse(digests) as unknown
+    const digestsText = await docker(ctx, [
+      'inspect',
+      '--type',
+      'image',
+      '--format',
+      '{{json .RepoDigests}}',
+      id,
+    ])
+    const list = JSON.parse(
+      digestsText.trim().split('\n')[0] ?? '[]',
+    ) as unknown
     // A pulled image is one pull away; a local one only exists as its id.
     if (Array.isArray(list) && typeof list[0] === 'string') {
       previous = list[0]
@@ -822,23 +859,24 @@ async function recordRollback(ctx: OpContext): Promise<string> {
   } catch {
     // No digests: the id is the target.
   }
-  if (previous === '') {
-    throw new BrokerFault(
-      'unavailable',
-      'the container has no image to roll back to',
-    )
-  }
   const file = path.join(ctx.stateDir, 'rollback')
   await writeFile(file, `${previous}\n`, { mode: FILE_MODE })
   await chmod(file, FILE_MODE).catch(() => null)
   return previous
 }
-
-async function buildImage(ctx: OpContext, dir: string): Promise<void> {
+async function buildImage(
+  ctx: OpContext,
+  dir: string,
+  deadline: number,
+): Promise<void> {
   const logPath = path.join(ctx.stateDir, 'build.log')
-  // One deadline for the whole build; each program gets what is left, so no child outlives the op.
-  const deadline = Date.now() + BUILD_TIMEOUT_MS
-  const remaining = (): number => Math.max(1, deadline - Date.now())
+  // Create the log before the first program: a silent failure still leaves the file behind.
+  const log = await open(logPath, 'a', FILE_MODE)
+  try {
+    await log.chmod(FILE_MODE)
+  } finally {
+    await log.close()
+  }
   const uid = process.getuid?.()
   const gid = process.getgid?.()
   const user =
@@ -869,7 +907,7 @@ async function buildImage(ctx: OpContext, dir: string): Promise<void> {
       BUILD_COMMAND,
     ],
     'tail',
-    { timeoutMs: remaining(), logPath },
+    { timeoutMs: remaining(deadline), logPath },
   )
   await docker(
     ctx,
@@ -885,6 +923,6 @@ async function buildImage(ctx: OpContext, dir: string): Promise<void> {
       dir,
     ],
     'tail',
-    { timeoutMs: BUILD_TIMEOUT_MS, logPath },
+    { timeoutMs: remaining(deadline), logPath },
   )
 }

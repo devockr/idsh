@@ -100,7 +100,9 @@ to escape, nothing that can backtrack.
 - **Audit**: one JSON line per request — operation, outcome, duration, bytes, truncation, the
   arguments capped at 200 characters — written before the response. If the audit cannot be written,
   the response is an error, not a success. The file is append-only and unbounded; rotating it is the
-  host's job, with the same log rotation everything else on that machine gets.
+  host's job, with the same log rotation everything else on that machine gets. The state directory
+  also holds `compose.log` and `build.log` (detached launches), `rollback` (the last build's target),
+  and `build/` (build clones, swept at boot).
 
 ## What is not here yet
 

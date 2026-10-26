@@ -6,7 +6,15 @@
  * program. The socket's permissions are the other half — `0600` in a directory only its owner may
  * write means only that uid can open it at all.
  */
-import { appendFile, chmod, lstat, mkdir, stat, unlink } from 'node:fs/promises'
+import {
+  appendFile,
+  chmod,
+  lstat,
+  mkdir,
+  rm,
+  stat,
+  unlink,
+} from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
@@ -142,6 +150,11 @@ export async function startBroker(
   await mkdir(path.dirname(auditPath), {
     recursive: true,
     mode: DIRECTORY_MODE,
+  })
+  // A broker that died mid-build leaves its clone behind; runtime state, swept at boot.
+  await rm(path.join(path.dirname(auditPath), 'build'), {
+    recursive: true,
+    force: true,
   })
   // A file left by rotation may be wider than FILE_MODE; narrow it before the first record.
   const audit = await stat(auditPath).catch(() => null)
