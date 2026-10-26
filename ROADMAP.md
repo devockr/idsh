@@ -6,7 +6,8 @@ living inside the container.
 
 Phase 1 has started: `packages/host-broker` carries the socket, three read sources, the bounds and
 the audit log, `deploy.status`/`deploy.log` inspect the deployment container, `deploy.recreate`
-restarts it behind an in-tool confirmation, and `packages/host-ops` turns that table into dsh tools. Everything else below is still the plan, and
+restarts it and `deploy.build` builds it from an origin-only source behind an in-tool confirmation, and
+`packages/host-ops` turns that table into dsh tools. Everything else below is still the plan, and
 this file is the contract the implementation is judged against.
 
 ## The problem

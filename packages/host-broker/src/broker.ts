@@ -14,6 +14,7 @@ import {
   AFTER_RESPONSE_DELAY_MS,
   DEFAULT_CONTAINER,
   DEFAULT_DOCKER,
+  DEFAULT_GIT,
   DEFAULT_EXEC_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
@@ -62,6 +63,8 @@ export interface BrokerOptions {
   readonly container?: string
   /** The docker client `deploy.*` runs. Default `docker`, resolved through the host's PATH. */
   readonly dockerPath?: string
+  /** The git client `deploy.*` runs. Default `git`, resolved through the host's PATH. */
+  readonly gitPath?: string
   /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
   readonly checkout?: string
   /** Requests per operation per minute. Default 60. */
@@ -81,6 +84,7 @@ const DEFAULTS = {
   procDir: '/proc',
   container: DEFAULT_CONTAINER,
   dockerPath: DEFAULT_DOCKER,
+  gitPath: DEFAULT_GIT,
   rateLimitPerMinute: 60,
   execTimeoutMs: DEFAULT_EXEC_TIMEOUT_MS,
 } as const
@@ -98,6 +102,7 @@ export async function startBroker(
     )
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
+  const gitPath = options.gitPath ?? DEFAULTS.gitPath
   const checkout = options.checkout
   if (checkout !== undefined) {
     const stats = await stat(checkout).catch(() => null)
@@ -124,6 +129,7 @@ export async function startBroker(
     execTimeoutMs,
     container,
     dockerPath,
+    gitPath,
     stateDir: path.dirname(auditPath),
     ...(checkout === undefined ? {} : { checkout }),
   }
@@ -402,7 +408,7 @@ function runOp(
 ): Promise<Execution | string> {
   return withTimeout(
     op.run(args, context),
-    context.execTimeoutMs + TIMEOUT_SLACK_MS,
+    (op.timeoutMs ?? context.execTimeoutMs) + TIMEOUT_SLACK_MS,
   )
 }
 

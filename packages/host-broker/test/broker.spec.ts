@@ -268,6 +268,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'proc.read',
         'deploy.status',
         'deploy.log',
+        'deploy.build',
         'deploy.recreate',
         'disk.usage',
       ],
@@ -1007,6 +1008,125 @@ void test('a failed launch is recorded and the broker keeps serving', async () =
     const still = await connection.request({ op: 'deploy.status', args: {} })
     assert.equal(still.ok, false)
     assert.match(JSON.stringify(still.error), /ENOENT/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.build resolves a PR, pins main and builds :dev', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const dockerLog = path.join(host.root, 'docker.log')
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$*" >> '${gitLog}'
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *"ls-remote origin refs/pull/7/head"*)
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/pull/7/head\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$*" in
+  *inspect*) printf 'sha256:previousimage\\n' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { pr: 7 },
+    })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /^built PR #7 \(bbbbbbbb2222/u)
+    const git = await readFile(gitLog, 'utf8')
+    assert.match(git, /ls-remote origin refs\/pull\/7\/head/u)
+    assert.match(
+      git,
+      /checkout origin\/main -- Dockerfile Dockerfile\.dev entrypoint\.sh tools \.dockerignore Dockerfile\.dev\.dockerignore/u,
+    )
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(docker, /build --tag devockr\/idsh:dev/u)
+    assert.match(docker, /--file .*Dockerfile\.dev/u)
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    assert.equal(rollback, 'sha256:previousimage\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.build refuses an ambiguous source and a fork head', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n' ;;
+  *"refs/pull/8/head"*) printf 'cccccccc33333333333333333333333333333333 refs/pull/8/head\\n' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(dockerPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const both = await connection.request({
+      op: 'deploy.build',
+      args: { pr: 7, sha: 'aaaaaaaa' },
+    })
+    assert.equal(both.error?.code, 'bad-argument')
+    assert.match(JSON.stringify(both.error), /exactly one/u)
+
+    const fork = await connection.request({
+      op: 'deploy.build',
+      args: { pr: 8 },
+    })
+    assert.equal(fork.error?.code, 'unavailable')
+    assert.match(JSON.stringify(fork.error), /not on an origin branch/u)
   } finally {
     connection.close()
     await broker.close()
