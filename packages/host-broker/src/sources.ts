@@ -396,7 +396,7 @@ export const OPS: readonly OpDefinition[] = [
         '--type',
         'container',
         '--format',
-        'container={{.ID}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} exit={{.State.ExitCode}}',
+        'container={{.Id}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}} status={{.State.Status}} health={{with index .State "Health"}}{{.Status}}{{else}}none{{end}} exit={{.State.ExitCode}}',
         ctx.container,
       ])
     },
