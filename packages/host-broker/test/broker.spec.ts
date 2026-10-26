@@ -1,11 +1,13 @@
 /* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   chmod,
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   stat,
   unlink,
   writeFile,
@@ -1251,7 +1253,11 @@ esac
 
 void test('a planted build directory is swept at boot', async () => {
   const host = await fakeHost()
-  const junk = path.join(host.root, 'build', 'host.sock', 'junk')
+  const key = createHash('sha256')
+    .update(path.resolve(host.socketPath))
+    .digest('hex')
+    .slice(0, 16)
+  const junk = path.join(host.root, 'build', key, 'junk')
   await mkdir(junk, { recursive: true })
   const broker = await startBroker({
     socketPath: host.socketPath,
@@ -1261,4 +1267,33 @@ void test('a planted build directory is swept at boot', async () => {
   })
   await broker.close()
   await assert.rejects(stat(junk))
+})
+
+void test('two sockets with the same name keep separate build roots', async () => {
+  const host = await fakeHost()
+  const first = await startBroker({
+    socketPath: path.join(host.root, 'sock', 'a', 'host.sock'),
+    auditPath: path.join(host.root, 'a.jsonl'),
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  try {
+    const before = await readdir(path.join(host.root, 'build'))
+    assert.equal(before.length, 1)
+    const second = await startBroker({
+      socketPath: path.join(host.root, 'sock', 'b', 'host.sock'),
+      auditPath: path.join(host.root, 'b.jsonl'),
+      logDir: host.logDir,
+      procDir: host.procDir,
+    })
+    try {
+      const after = await readdir(path.join(host.root, 'build'))
+      assert.equal(after.length, 2)
+      assert.ok(after.includes(before[0]))
+    } finally {
+      await second.close()
+    }
+  } finally {
+    await first.close()
+  }
 })

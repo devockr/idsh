@@ -6,6 +6,7 @@
  * program. The socket's permissions are the other half — `0600` in a directory only its owner may
  * write means only that uid can open it at all.
  */
+import { createHash } from 'node:crypto'
 import {
   appendFile,
   chmod,
@@ -20,6 +21,7 @@ import path from 'node:path'
 
 import {
   AFTER_RESPONSE_DELAY_MS,
+  BUILD_KEY_CHARS,
   DEFAULT_CONTAINER,
   DEFAULT_DOCKER,
   DEFAULT_GIT,
@@ -132,12 +134,13 @@ export async function startBroker(
   const auditPath = options.auditPath
   const now = options.now ?? Date.now
 
-  // A build root per socket: two brokers cannot delete each other's clones.
-  const buildRoot = path.join(
-    path.dirname(auditPath),
-    'build',
-    path.basename(options.socketPath),
-  )
+  // A build root per socket *path*, not per basename: two sockets with the same name in different
+  // directories must not share (and sweep) one another's clones.
+  const buildKey = createHash('sha256')
+    .update(path.resolve(options.socketPath))
+    .digest('hex')
+    .slice(0, BUILD_KEY_CHARS)
+  const buildRoot = path.join(path.dirname(auditPath), 'build', buildKey)
   const context: OpContext = {
     logDir,
     procDir,

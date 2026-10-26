@@ -102,7 +102,8 @@ to escape, nothing that can backtrack.
   the response is an error, not a success. The file is append-only and unbounded; rotating it is the
   host's job, with the same log rotation everything else on that machine gets. The state directory
   also holds `compose.log` and `build.log` (detached launches), `rollback` (the last build's target),
-  and `build/<socket-name>/` (build clones, swept when this broker takes its socket).
+  and `build/<socket-hash>/` (build clones, keyed by the socket path and swept when this broker takes
+  its socket).
 
 ## What is not here yet
 
