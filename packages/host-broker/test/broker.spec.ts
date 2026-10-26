@@ -271,6 +271,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'deploy.status',
         'deploy.log',
         'deploy.build',
+        'deploy.rollback',
         'deploy.recreate',
         'disk.usage',
       ],
@@ -1295,5 +1296,74 @@ void test('two sockets with the same name keep separate build roots', async () =
     }
   } finally {
     await first.close()
+  }
+})
+
+void test('deploy.rollback retags the recorded image and recreates', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+echo "$*"
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), 'sha256:previous\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /^rollback queued to sha256:previous/u)
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(docker, /tag sha256:previous devockr\/idsh:dev/u)
+    const logPath = path.join(host.root, 'compose.log')
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('up -d --no-build')) {
+        break
+      }
+    }
+    assert.match(
+      log,
+      /compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.rollback without a recorded target is refused', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    checkout: host.root,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /no rollback target/u)
+  } finally {
+    connection.close()
+    await broker.close()
   }
 })

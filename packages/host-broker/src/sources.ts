@@ -487,6 +487,29 @@ function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now())
 }
 
+/* ---------------------------------------------------------------- deploy.rollback */
+
+/** The image recorded before the last build; a build that never ran leaves no target. */
+async function rollbackTarget(ctx: OpContext): Promise<string> {
+  let text: string
+  try {
+    text = await readFile(path.join(ctx.stateDir, 'rollback'), 'utf8')
+  } catch {
+    throw new BrokerFault(
+      'unavailable',
+      'no rollback target recorded; run deploy.build first',
+    )
+  }
+  const target = text.trim()
+  if (target === '' || target.includes('\n')) {
+    throw new BrokerFault(
+      'unavailable',
+      `the rollback file does not name one image: ${JSON.stringify(text)}`,
+    )
+  }
+  return target
+}
+
 /* ------------------------------------------------------------------ the table */
 
 export const OPS: readonly OpDefinition[] = [
@@ -621,6 +644,30 @@ export const OPS: readonly OpDefinition[] = [
       } finally {
         // Best effort: a cleanup failure must not turn a tagged image into an error.
         await rm(dir, { recursive: true, force: true }).catch(() => null)
+      }
+    },
+  },
+  {
+    name: 'deploy.rollback',
+    summary:
+      'Retag :dev to the image recorded before the last build, then recreate from it.',
+    confirm: true,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      if (ctx.checkout === undefined) {
+        throw new BrokerFault(
+          'unavailable',
+          'no checkout configured; start the broker with --checkout',
+        )
+      }
+      const checkout = ctx.checkout
+      const target = await rollbackTarget(ctx)
+      // Tagging first: a target that is no longer present fails before anything is acknowledged.
+      await docker(ctx, ['tag', target, BUILD_IMAGE])
+      return {
+        text: `rollback queued to ${target}; the session drops when the container is replaced`,
+        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
       }
     },
   },

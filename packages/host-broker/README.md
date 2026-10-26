@@ -78,6 +78,7 @@ request.
 | `deploy.status`   | the deployment container: image, creation time and state                                                                                          |
 | `deploy.log`      | the tail of the deployment container log                                                                                                          |
 | `deploy.build`    | builds `:dev` from a PR head or an origin branch tip; the six root-surface files come from `main`, and the previous image id is kept for rollback |
+| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                   |
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                               |
 | `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                    |
 
@@ -107,8 +108,7 @@ to escape, nothing that can backtrack.
 
 ## What is not here yet
 
-`deploy.rollback`, the router operations and the `run` allowlist are phase‑1/phase‑3 work in
-`ROADMAP.md`. `deploy.recreate` is the first destructive operation: it runs one fixed
+the router operations and the `run` allowlist are phase‑1/phase‑3 work in `ROADMAP.md`. `deploy.recreate` is the first destructive operation: it runs one fixed
 `docker compose` in `--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`),
 and the plugin asks the person before calling it. It is acknowledged first and launched detached, so
 the answer arrives before the container is replaced; `<stateDir>/compose.log` records the outcome.
