@@ -70,14 +70,15 @@ request.
 
 ## Operations (first slice)
 
-| op              | reads                                                                                         |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| `log.tail`      | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string |
-| `proc.read`     | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                          |
-| `disk.usage`    | `df -h`                                                                                       |
-| `deploy.status` | the deployment container: image, creation time and state                                      |
-| `deploy.log`    | the tail of the deployment container log                                                      |
-| `ops.describe`  | the table itself: names, summaries and each operation's schema                                |
+| op                | behaviour                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------- |
+| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string |
+| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                          |
+| `disk.usage`      | `df -h`                                                                                       |
+| `deploy.status`   | the deployment container: image, creation time and state                                      |
+| `deploy.log`      | the tail of the deployment container log                                                      |
+| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required           |
+| `ops.describe`    | the table itself: names, summaries and each operation's schema                                |
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing

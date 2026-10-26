@@ -32,12 +32,15 @@ function context(selected: readonly string[] = ['Run']): {
   ctx: HostContext
   tools: HostTool[]
   warnings: string[]
+  asks: Array<Record<string, unknown>>
 } {
   const tools: HostTool[] = []
   const warnings: string[] = []
+  const asks: Array<Record<string, unknown>> = []
   return {
     tools,
     warnings,
+    asks,
     ctx: {
       tools: {
         register(tool) {
@@ -51,7 +54,10 @@ function context(selected: readonly string[] = ['Run']): {
         },
       },
       userQuestions: {
-        ask: () => Promise.resolve({ answers: [{ id: 'confirm', selected }] }),
+        ask: (request: Record<string, unknown>) => {
+          asks.push(request)
+          return Promise.resolve({ answers: [{ id: 'confirm', selected }] })
+        },
       },
     },
   }
@@ -222,10 +228,15 @@ void test('a destructive operation asks before it calls the broker', async () =>
   try {
     const cancelled = context(['Cancel'])
     await registerTools(cancelled.ctx, { socketPath: broker.socketPath })
+    const agent = { session: 'test-session' }
     await assert.rejects(
-      cancelled.tools[0].execute({}, { signal: new AbortController().signal }),
+      cancelled.tools[0].execute(
+        {},
+        { signal: new AbortController().signal, agent },
+      ),
       /was not confirmed/u,
     )
+    assert.equal(cancelled.asks[0]?.agent, agent)
     assert.deepEqual(
       broker.requests.map(request => request.op),
       ['ops.describe'],

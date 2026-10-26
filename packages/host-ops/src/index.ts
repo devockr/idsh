@@ -25,6 +25,8 @@ interface ContentBlock {
 
 interface ToolExecution {
   readonly signal: AbortSignal
+  /** The calling agent, forwarded to the question service so the card is scoped to it. */
+  readonly agent?: unknown
 }
 
 /** The slice of dsh a tool needs; structural, so this package imports no dsh code. */
@@ -62,6 +64,7 @@ export interface HostContext {
     ask(request: {
       questions: readonly Question[]
       signal?: AbortSignal
+      agent?: unknown
     }): Promise<{ answers: readonly QuestionAnswer[] }>
   }
 }
@@ -178,10 +181,7 @@ function toolFor(
       },
     },
     async execute(args, exec) {
-      if (
-        op.confirm === true &&
-        !(await confirmed(ctx, op, args, exec.signal))
-      ) {
+      if (op.confirm === true && !(await confirmed(ctx, op, args, exec))) {
         throw new Error(
           `host-ops: ${op.name} was not confirmed; the host was not touched`,
         )
@@ -231,7 +231,7 @@ async function confirmed(
   ctx: HostContext,
   op: DescribedOp,
   args: unknown,
-  signal?: AbortSignal,
+  exec: ToolExecution,
 ): Promise<boolean> {
   const answer = await ctx.userQuestions.ask({
     questions: [
@@ -245,7 +245,8 @@ async function confirmed(
         ],
       },
     ],
-    ...(signal === undefined ? {} : { signal }),
+    signal: exec.signal,
+    ...(exec.agent === undefined ? {} : { agent: exec.agent }),
   })
   const item = answer.answers.find(entry => entry.id === 'confirm')
   return item?.selected.includes('Run') === true

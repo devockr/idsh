@@ -11,6 +11,7 @@ import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
+  FILE_MODE,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
@@ -27,6 +28,8 @@ export interface OpContext {
   readonly container: string
   readonly dockerPath: string
   readonly checkout?: string
+  /** Where a detached operation writes its log; the audit directory. */
+  readonly stateDir: string
 }
 
 /** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
@@ -346,39 +349,47 @@ function docker(
 }
 
 /**
- * Run `docker compose` against the deployment's checkout.
+ * Start `docker compose` on the host, detached from this request.
  *
- * The real compose file interpolates `UID`/`GID`; the broker exports the ids it runs under, so a
- * restart binds the same paths as the person who deployed.
+ * A recreate removes and replaces the container the caller runs in, so the request cannot wait for
+ * it: the answer goes back as soon as the launch succeeds, and compose's own log records the rest.
+ * `setsid` puts it in a new session, so neither this broker's exit nor a timeout can stop it.
  */
-function compose(ctx: OpContext, args: readonly string[]): Promise<string> {
+async function composeDetached(
+  ctx: OpContext,
+  args: readonly string[],
+): Promise<string> {
   if (ctx.checkout === undefined) {
     throw new BrokerFault(
       'unavailable',
       'no checkout configured; start the broker with --checkout',
     )
   }
-  const uid = process.getuid?.()
-  const gid = process.getgid?.()
-  return runFixed(
-    ctx,
-    ctx.dockerPath,
-    [
-      'compose',
-      '-f',
-      'docker-compose.yml',
-      '-f',
-      'docker-compose.dev.yml',
-      ...args,
-    ],
-    {
-      cwd: ctx.checkout,
-      env: {
-        ...(uid === undefined ? {} : { UID: String(uid) }),
-        ...(gid === undefined ? {} : { GID: String(gid) }),
+  const logPath = path.join(ctx.stateDir, 'compose.log')
+  const log = await open(logPath, 'a', FILE_MODE)
+  try {
+    const child = spawn(
+      ctx.dockerPath,
+      [
+        'compose',
+        '-f',
+        'docker-compose.yml',
+        '-f',
+        'docker-compose.dev.yml',
+        ...args,
+      ],
+      {
+        detached: true,
+        cwd: ctx.checkout,
+        env: { ...process.env },
+        stdio: ['ignore', log.fd, log.fd],
       },
-    },
-  )
+    )
+    child.unref()
+    return `started (pid ${String(child.pid ?? '?')}); compose log: ${logPath}`
+  } finally {
+    await log.close()
+  }
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -489,7 +500,7 @@ export const OPS: readonly OpDefinition[] = [
     input: { type: 'object', properties: {}, additionalProperties: false },
     async run(args, ctx) {
       rejectUnknown(args, [])
-      return compose(ctx, ['up', '-d', '--no-build'])
+      return composeDetached(ctx, ['up', '-d', '--no-build'])
     },
   },
   {

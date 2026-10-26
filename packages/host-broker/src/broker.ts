@@ -114,6 +114,7 @@ export async function startBroker(
     execTimeoutMs,
     container,
     dockerPath,
+    stateDir: path.dirname(auditPath),
     ...(checkout === undefined ? {} : { checkout }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)

@@ -913,10 +913,13 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
 
     const answer = await connection.request({ op: 'deploy.recreate', args: {} })
     assert.equal(answer.ok, true)
-    const result = answer.result ?? ''
-    assert.match(result, new RegExp(`cwd=${checkout}`, 'u'))
+    assert.match(answer.result ?? '', /^started \(pid \d+\)/u)
+    // It runs detached, so the evidence is its own log, not the answer.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const log = await readFile(path.join(host.root, 'compose.log'), 'utf8')
+    assert.match(log, new RegExp(`cwd=${checkout}`, 'u'))
     assert.match(
-      result,
+      log,
       /args=compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
     )
   } finally {
