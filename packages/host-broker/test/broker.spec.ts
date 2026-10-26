@@ -261,7 +261,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
     assert.deepEqual(
       ops.map(op => op.name),
-      ['log.tail', 'proc.read', 'disk.usage'],
+      ['log.tail', 'proc.read', 'deploy.status', 'deploy.log', 'disk.usage'],
     )
     assert.equal(ops[0].input.required?.[0], 'file')
 
@@ -579,4 +579,299 @@ void test('an exec timeout past the timer ceiling is clamped where it is used', 
     process.off('warning', onWarning)
   }
   assert.ok(!warnings.includes('TimeoutOverflowWarning'))
+})
+
+void test('deploy.status and deploy.log drive the docker client', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(dockerPath, '#!/bin/sh\nprintf "%s\\n" "$*"\n', {
+    mode: 0o755,
+  })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    container: 'web',
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const status = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(status.ok, true)
+    assert.match(
+      status.result ?? '',
+      /^inspect --type container --format .*web$/mu,
+    )
+    assert.match(status.result ?? '', /\{\{\.Config\.Image\}\}/u)
+    assert.match(status.result ?? '', /container=\{\{\.Id\}\}/u)
+    assert.match(status.result ?? '', /index \.State "Health"/u)
+    assert.match(status.result ?? '', /\{\{\.State\.ExitCode\}\}/u)
+    const tail = await connection.request({
+      op: 'deploy.log',
+      args: { lines: 3 },
+    })
+    assert.equal(tail.result, 'logs --tail 3 web\n')
+    const bad = await connection.request({
+      op: 'deploy.log',
+      args: { lines: 0 },
+    })
+    assert.equal(bad.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a docker call that exceeds the deadline answers timeout', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(dockerPath, '#!/bin/sh\nsleep 5\n', { mode: 0o755 })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    execTimeoutMs: 100,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'timeout')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('docker streams merge in arrival order', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nprintf '1 stdout\\n'\nprintf '2 stderr\\n' >&2\nprintf '3 stdout\\n'\nprintf '4 stderr\\n' >&2\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.log', args: {} })
+    const lines = answer.result ?? ''
+    // Threads and pipes interleave nondeterministically, but each stream keeps its own order and
+    // no line is welded to the next: the old concatenation lost both.
+    assert.match(lines, /1 stdout[\s\S]*3 stdout/u)
+    assert.match(lines, /2 stderr[\s\S]*4 stderr/u)
+    assert.equal(lines.endsWith('\n'), true)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a program that exits non-zero carries its own message', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nfor i in $(seq 1 40); do printf 'line %d: explaining the failure\\n' \"$i\"; done\nprintf 'FINAL: the actual cause\\n' >&2\nexit 1\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /FINAL: the actual cause/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a log past the buffer ceiling keeps its newest lines', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nhead -c 1200000 /dev/zero | tr '\\0' 'x'\nprintf '\\nEND\\n'\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.log', args: {} })
+    assert.equal(answer.ok, true)
+    assert.equal(answer.truncated, true)
+    assert.match(answer.result ?? '', /END\n?$/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a missing docker client names the failure', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'no-docker'),
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /ENOENT/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a container name that is not one is refused', async () => {
+  const host = await fakeHost()
+  await assert.rejects(
+    startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      container: '-f',
+    }),
+    /container must be a docker container name/u,
+  )
+})
+
+void test('capOutput keeps a tail of whole rows, never half a character', () => {
+  const row = `${'x'.repeat(199)}😀\n`
+  const text = row.repeat(400)
+  const capped = capOutput(text, 'tail')
+  assert.equal(capped.truncated, true)
+  assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
+  assert.ok(!capped.text.includes('\uFFFD'))
+  assert.ok(capped.text.endsWith(`${'x'.repeat(199)}😀\n`))
+})
+
+void test('capOutput backs off a cut that lands inside a character', () => {
+  // 65 536 bytes back from the end falls on the emoji's third byte.
+  const text = `${'x'.repeat(100)}😀${'x'.repeat(65_534)}`
+  const capped = capOutput(text, 'tail')
+  assert.equal(capped.truncated, true)
+  assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
+  assert.ok(!capped.text.includes('\uFFFD'))
+  assert.equal(capped.text, 'x'.repeat(Buffer.byteLength(capped.text)))
+})
+
+void test('a window that starts on a surrogate half drops it, not the character', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const line = `${'x'.repeat(60)}😀${'y'.repeat(499)}`
+  await writeFile(dockerPath, `#!/bin/sh\nprintf '%s\\n' '${line}'\nexit 1\n`, {
+    mode: 0o755,
+  })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.message, 'y'.repeat(499))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a tail window that is one long line is not emptied', () => {
+  const text = `${'x'.repeat(70_000)}\n`
+  const capped = capOutput(text, 'tail')
+  assert.equal(capped.truncated, true)
+  assert.ok(capped.text.length > 0)
+  assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
+})
+
+void test('a timed-out program does not leave its child behind', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const pidFile = path.join(host.root, 'child.pid')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh\nsleep 5 &\necho $! > '${pidFile}'\nwait\n`,
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    // Generous: the program must start and write its pid before the deadline.
+    execTimeoutMs: 2000,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.error?.code, 'timeout')
+    const pidText = await readFile(pidFile, 'utf8')
+    const pid = Number(pidText.trim())
+    assert.ok(Number.isInteger(pid) && pid > 0)
+    // The group is killed before the answer; let the signal land.
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.throws(() => process.kill(pid, 0), /ESRCH/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a head op keeps the opening of a large program output', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    "#!/bin/sh\nprintf 'FIRST\\n'\nhead -c 1200000 /dev/zero | tr '\\0' 'x'\nprintf '\\n'\n",
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(answer.ok, true)
+    assert.equal(answer.truncated, true)
+    // A head cap keeps whole lines: the first row survives, the huge second one does not.
+    assert.equal(answer.result, 'FIRST')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
 })

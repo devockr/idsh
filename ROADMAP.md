@@ -5,8 +5,9 @@ LAN and the router, and to deploy — without the credentials that make that rea
 living inside the container.
 
 Phase 1 has started: `packages/host-broker` carries the socket, three read sources, the bounds and
-the audit log, and `packages/host-ops` turns that table into dsh tools. Everything else below is
-still the plan, and this file is the contract the implementation is judged against.
+the audit log, `deploy.status`/`deploy.log` inspect the deployment container, and
+`packages/host-ops` turns that table into dsh tools. Everything else below is still the plan, and
+this file is the contract the implementation is judged against.
 
 ## The problem
 
@@ -174,14 +175,14 @@ run anything" has no safe version, and the tiers are the honest decomposition of
 Removing the container's SSH keys removes the only way a phone can ask for a deployment. The
 channel has to carry deployment before the keys can go.
 
-| op                    | source                                           | purpose                       |
-| --------------------- | ------------------------------------------------ | ----------------------------- |
-| `deploy.build({pr})`  | the PR head, on the remote, from this repository | verify an unmerged change     |
-| `deploy.build({sha})` | any commit on a remote branch                    | verify a pushed branch        |
-| `deploy.main()`       | the main branch                                  | ship                          |
-| `deploy.recreate()`   | no build; the current image                      | profile-only changes          |
-| `deploy.rollback()`   | the previous image                               | a deploy that will not boot   |
-| `deploy.status()`     | —                                                | what is running, from a phone |
+| op                                 | source                                           | purpose                       |
+| ---------------------------------- | ------------------------------------------------ | ----------------------------- |
+| `deploy.build({pr})`               | the PR head, on the remote, from this repository | verify an unmerged change     |
+| `deploy.build({sha})`              | any commit on a remote branch                    | verify a pushed branch        |
+| `deploy.main()`                    | the main branch                                  | ship                          |
+| `deploy.recreate()`                | no build; the current image                      | profile-only changes          |
+| `deploy.rollback()`                | the previous image                               | a deploy that will not boot   |
+| `deploy.status()` / `deploy.log()` | —                                                | what is running, from a phone |
 
 **Source rule: deploy only code that exists on the remote.** The container can write the
 checkout, so a working-tree path would mean deploying whatever the agent has just typed. A

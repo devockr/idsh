@@ -12,6 +12,7 @@ with a small set of validated arguments.
 
 ```text
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
+         [--container <name>] [--docker <path>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -36,7 +37,8 @@ loginctl enable-linger "$USER" # keep it running without a login session
 ```
 
 A system unit would default to root, which changes both whose files it reads and who may open the
-socket; do not use one.
+socket; do not use one. The unit's user also needs to reach the docker daemon, and the broker runs
+`docker` from `PATH` — on DSM that is `/usr/local/bin/docker`, so pass `--docker /usr/local/bin/docker`.
 
 A directory the broker creates is `0700` and the socket is chmodded `0600`, so only the uid running
 the broker can open it. An existing directory is not narrowed — the read-only fallback in
@@ -68,12 +70,14 @@ request.
 
 ## Operations (first slice)
 
-| op             | reads                                                                                         |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| `log.tail`     | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string |
-| `proc.read`    | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                          |
-| `disk.usage`   | `df -h`                                                                                       |
-| `ops.describe` | the table itself: names, summaries and each operation's schema                                |
+| op              | reads                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `log.tail`      | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string |
+| `proc.read`     | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                          |
+| `disk.usage`    | `df -h`                                                                                       |
+| `deploy.status` | the deployment container: image, creation time and state                                      |
+| `deploy.log`    | the tail of the deployment container log                                                      |
+| `ops.describe`  | the table itself: names, summaries and each operation's schema                                |
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing
@@ -81,10 +85,15 @@ to escape, nothing that can backtrack.
 
 ## Bounds
 
-- **Output** is capped at 64 KiB, trimmed back to the last line boundary inside it (or to a
-  character boundary when the text has none), and a truncated answer says so.
+- **Output** is capped at 64 KiB: a tail answer keeps its last lines and a head answer its first,
+  trimmed to a line boundary inside the window (or to a character boundary when the text has none);
+  a truncated answer says so.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
-- **Time**: 10 seconds per operation by default.
+- **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`, and
+  its process group is stopped with it, so whatever it started goes too.
+- **Buffer**: one program may write 1 MiB. Past that a tail operation keeps the last 1 MiB (the
+  oldest bytes are dropped) and a head operation the first 1 MiB (the newest are), then the answer
+  cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.
 - **Audit**: one JSON line per request — operation, outcome, duration, bytes, truncation, the
   arguments capped at 200 characters — written before the response. If the audit cannot be written,
   the response is an error, not a success. The file is append-only and unbounded; rotating it is the
@@ -92,9 +101,10 @@ to escape, nothing that can backtrack.
 
 ## What is not here yet
 
-`run(binary, argv)` with its allowlist and path guard, the deploy operations and the router
-operations are all phase‑1/phase‑3 work in `ROADMAP.md`. This package is deliberately only the
-socket, three read sources, the bounds and the audit — the parts the rest is built on.
+`deploy.build`, `deploy.recreate`, `deploy.rollback`, the router operations and the `run` allowlist
+are phase‑1/phase‑3 work in `ROADMAP.md`. The two deploy operations here are read-only: they inspect
+the container through one fixed `docker` invocation, and `--container`/`--docker` name what the host
+actually runs.
 
 ## Not in the image
 

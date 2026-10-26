@@ -27,6 +27,9 @@ export const TAIL_WINDOW_BYTES = 256 * BYTES_PER_KIB
 /** The longest `log.tail` pattern, in characters. */
 export const MAX_PATTERN_CHARS = 200
 
+/** A failure message carries at most this many characters of the program output. */
+export const MAX_ERROR_CHARS = 500
+
 /** Arguments are capped to this many characters in the audit log. */
 export const MAX_AUDIT_ARGS_CHARS = 200
 
@@ -39,8 +42,18 @@ export const TIMEOUT_SLACK_MS = 1000
 /** The largest delay Node's timers accept (2^31 - 1 ms). */
 export const MAX_TIMER_MS = 2_147_483_647
 
+/** The deployment container's name, unless the host says otherwise. */
+export const DEFAULT_CONTAINER = 'dsh'
+
+/** The docker client, unless the host says otherwise. */
+export const DEFAULT_DOCKER = 'docker'
+
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
+
+/** UTF-8 continuation byte: the top two bits are `10`. */
+export const UTF8_CONTINUATION_MASK = 0b1100_0000
+export const UTF8_CONTINUATION_PREFIX = 0b1000_0000
 
 /** The longest UTF-8 sequence, so a cut inside one backs off by at most this much. */
 export const MAX_UTF8_SEQUENCE = 4

@@ -24,6 +24,8 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --audit <path>         Append-only JSON Lines, one line per request (required)
   --log-dir <dir>        Where log.tail reads (default /var/log)
   --proc-dir <dir>       Where proc.read reads (default /proc)
+  --container <name>     The container deploy.* inspects (default dsh)
+  --docker <path>        The docker client deploy.* runs (default docker)
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
@@ -63,6 +65,8 @@ async function main(): Promise<void> {
       audit: { type: 'string' },
       'log-dir': { type: 'string' },
       'proc-dir': { type: 'string' },
+      container: { type: 'string' },
+      docker: { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -86,6 +90,8 @@ async function main(): Promise<void> {
     ...(values['proc-dir'] === undefined
       ? {}
       : { procDir: values['proc-dir'] }),
+    ...(values.container === undefined ? {} : { container: values.container }),
+    ...(values.docker === undefined ? {} : { dockerPath: values.docker }),
     rateLimitPerMinute: number(values['rate-limit'], 60, '--rate-limit'),
     execTimeoutMs: number(
       values['exec-timeout'],

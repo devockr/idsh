@@ -11,6 +11,8 @@ import net from 'node:net'
 import path from 'node:path'
 
 import {
+  DEFAULT_CONTAINER,
+  DEFAULT_DOCKER,
   DEFAULT_EXEC_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
@@ -54,6 +56,10 @@ export interface BrokerOptions {
   readonly logDir?: string
   /** Where `proc.read` reads. Default `/proc`; tests point it somewhere else. */
   readonly procDir?: string
+  /** The container `deploy.*` inspects. Default `dsh`. */
+  readonly container?: string
+  /** The docker client `deploy.*` runs. Default `docker`, resolved through the host's PATH. */
+  readonly dockerPath?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -69,6 +75,8 @@ export interface RunningBroker {
 const DEFAULTS = {
   logDir: '/var/log',
   procDir: '/proc',
+  container: DEFAULT_CONTAINER,
+  dockerPath: DEFAULT_DOCKER,
   rateLimitPerMinute: 60,
   execTimeoutMs: DEFAULT_EXEC_TIMEOUT_MS,
 } as const
@@ -79,9 +87,16 @@ export async function startBroker(
 ): Promise<RunningBroker> {
   const logDir = options.logDir ?? DEFAULTS.logDir
   const procDir = options.procDir ?? DEFAULTS.procDir
+  const container = options.container ?? DEFAULTS.container
+  if (!/^\w[\w.-]*$/u.test(container)) {
+    throw new Error(
+      `container must be a docker container name, got ${JSON.stringify(container)}`,
+    )
+  }
+  const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const rateLimitPerMinute =
     options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
-  // Clamp where the context is built, not only in the wrapper: the same value reaches `execFile`,
+  // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,
   // and a program started with a delay past Node's ceiling is killed at 1 ms.
   const execTimeoutMs = Math.min(
     options.execTimeoutMs ?? DEFAULTS.execTimeoutMs,
@@ -90,7 +105,13 @@ export async function startBroker(
   const auditPath = options.auditPath
   const now = options.now ?? Date.now
 
-  const context: OpContext = { logDir, procDir, execTimeoutMs }
+  const context: OpContext = {
+    logDir,
+    procDir,
+    execTimeoutMs,
+    container,
+    dockerPath,
+  }
   const limiter = new RateLimiter(rateLimitPerMinute)
   const sockets = new Set<net.Socket>()
 
@@ -334,7 +355,9 @@ async function execute(
     definition === undefined
       ? describeOps()
       : await runOp(definition, request.args, context)
-  return capOutput(result)
+  return definition === undefined
+    ? capOutput(result)
+    : capOutput(result, definition.keep)
 }
 
 function runOp(

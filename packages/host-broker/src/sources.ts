@@ -6,25 +6,26 @@
  * are unbounded, the places an answer can come from are not. Nothing here takes a path or an
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { promisify } from 'node:util'
 
 import {
+  MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
 } from './constants.ts'
+import type { Keep } from './limits.ts'
 import { BrokerFault } from './protocol.ts'
 
-const run = promisify(execFile)
-
-/** Where an operation reads from, and how long a program it starts may run. */
+/** Where an operation reads from, which container it drives, and how long a program may run. */
 export interface OpContext {
   readonly logDir: string
   readonly procDir: string
   readonly execTimeoutMs: number
+  readonly container: string
+  readonly dockerPath: string
 }
 
 /** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
@@ -32,7 +33,117 @@ export interface OpDefinition {
   readonly name: string
   readonly summary: string
   readonly input: Record<string, unknown>
+  /** The end a cap keeps; a log wants its tail, everything else its head. */
+  readonly keep?: Keep
   run(args: Record<string, unknown>, ctx: OpContext): Promise<string>
+}
+
+/**
+ * Run one fixed program with fixed arguments.
+ *
+ * No shell and no caller-supplied argv; both pipes are collected in arrival order, so a log that
+ * writes to stderr is not reordered or welded onto stdout. Past the buffer ceiling a tail operation
+ * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
+ * size, from the end a log is asked for.
+ */
+function runFixed(
+  ctx: OpContext,
+  program: string,
+  args: readonly string[],
+  keep: Keep = 'head',
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(program, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Its own group, so a timeout can stop whatever the program started too.
+      detached: true,
+    })
+    const state: { settled: boolean; timer?: NodeJS.Timeout } = {
+      settled: false,
+    }
+    let buffer = Buffer.alloc(0)
+
+    const settle = (failure?: Error): void => {
+      if (state.settled) {
+        return
+      }
+      state.settled = true
+      if (state.timer !== undefined) {
+        clearTimeout(state.timer)
+      }
+      if (failure === undefined) {
+        resolve(buffer.toString('utf8'))
+      } else {
+        reject(failure)
+      }
+    }
+    const collect = (chunk: Buffer): void => {
+      buffer = Buffer.concat([buffer, chunk])
+      if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
+        // The retained window's start never reaches a client: the answer cap keeps the last
+        // 64 KiB of it, and that boundary is repaired by `decodeTail`.
+        buffer =
+          keep === 'tail'
+            ? buffer.subarray(buffer.length - MAX_EXEC_BUFFER_BYTES)
+            : buffer.subarray(0, MAX_EXEC_BUFFER_BYTES)
+      }
+    }
+
+    child.stdout.on('data', collect)
+    child.stderr.on('data', collect)
+    state.timer = setTimeout(() => {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL')
+        } catch {
+          child.kill('SIGKILL')
+        }
+      }
+      settle(
+        new BrokerFault(
+          'timeout',
+          `no answer within ${String(ctx.execTimeoutMs)} ms`,
+        ),
+      )
+    }, ctx.execTimeoutMs)
+    child.once('error', (error: NodeJS.ErrnoException) => {
+      settle(
+        new BrokerFault(
+          'unavailable',
+          `${error.code ?? 'spawn failed'}: ${error.message}`,
+        ),
+      )
+    })
+    child.once('close', (code, signal) => {
+      if (code === 0) {
+        settle()
+        return
+      }
+      // The program's own message is the useful part, and docker/df put the cause last: keep the
+      // tail of the output, from a line boundary, rather than its opening lines.
+      const text = buffer.toString('utf8').trim()
+      // Only a cut needs a boundary repair: a short message is complete as it stands.
+      const cut = text.length > MAX_ERROR_CHARS
+      let tail = cut ? text.slice(-MAX_ERROR_CHARS) : text
+      if (cut) {
+        // A slice can start on the low half of a surrogate pair.
+        if (/^[\uDC00-\uDFFF]/u.test(tail)) {
+          tail = tail.slice(1)
+        }
+        const boundary = tail.indexOf('\n')
+        tail = boundary === -1 ? tail : tail.slice(boundary + 1)
+      }
+      const message = tail.trim()
+      settle(
+        new BrokerFault(
+          'unavailable',
+          message === ''
+            ? `${program} exited with ${code ?? signal ?? 'no status'}`
+            : message,
+        ),
+      )
+    })
+  })
 }
 
 /* ------------------------------------------------------------------ argument checks */
@@ -198,23 +309,24 @@ async function readProc(file: ProcFile, ctx: OpContext): Promise<string> {
 
 /* ------------------------------------------------------------------ disk.usage */
 
-/** One fixed program with one fixed argument: the shape every `run` operation will take. */
-async function diskUsage(ctx: OpContext): Promise<string> {
-  try {
-    const { stdout } = await run('df', ['-h'], {
-      timeout: ctx.execTimeoutMs,
-      maxBuffer: MAX_EXEC_BUFFER_BYTES,
-      encoding: 'utf8',
-    })
-    return stdout
-  } catch (error) {
-    const stderr = (error as { stderr?: unknown }).stderr
-    const reason =
-      typeof stderr === 'string' && stderr.trim() !== ''
-        ? stderr.trim()
-        : 'df failed'
-    throw new BrokerFault('unavailable', reason)
-  }
+/** One fixed program with one fixed argument. */
+function diskUsage(ctx: OpContext): Promise<string> {
+  return runFixed(ctx, 'df', ['-h'])
+}
+
+/* ------------------------------------------------------------------ deploy.status / deploy.log */
+
+/** The most lines one log answer may ask for, and the default. */
+const MAX_LOG_LINES = 1000
+const DEFAULT_LOG_LINES = 100
+
+/** The shape every `run` operation takes: one program, fixed argv. */
+function docker(
+  ctx: OpContext,
+  args: readonly string[],
+  keep: Keep = 'head',
+): Promise<string> {
+  return runFixed(ctx, ctx.dockerPath, args, keep)
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -224,6 +336,7 @@ export const OPS: readonly OpDefinition[] = [
     name: 'log.tail',
     summary:
       'The last lines of a host log, optionally only the lines containing a literal string.',
+    keep: 'tail',
     input: {
       type: 'object',
       properties: {
@@ -270,6 +383,50 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['file'])
       const file = choice(args, 'file', PROC_TARGETS)
       return readProc(file, ctx)
+    },
+  },
+  {
+    name: 'deploy.status',
+    summary:
+      'The deployment container: its image, creation time and state, straight from docker.',
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      // The keys are the inspect JSON names ('.Id', not '.ID'), and docker renders with
+      // `missingkey=error`, so a wrong name fails the call. `index .State "Health"` is the one
+      // guard that survives an absent health block; `{{if .State.Health}}` is itself a lookup.
+      return docker(ctx, [
+        'inspect',
+        '--type',
+        'container',
+        '--format',
+        'container={{.Id}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}} status={{.State.Status}} health={{with index .State "Health"}}{{.Status}}{{else}}none{{end}} exit={{.State.ExitCode}}',
+        ctx.container,
+      ])
+    },
+  },
+  {
+    name: 'deploy.log',
+    summary: 'The tail of the deployment container log.',
+    keep: 'tail',
+    input: {
+      type: 'object',
+      properties: {
+        lines: {
+          type: 'integer',
+          description: `How many trailing lines to return, 1 to ${String(MAX_LOG_LINES)}. Default ${String(DEFAULT_LOG_LINES)}.`,
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['lines'])
+      const lines = integer(args, 'lines', 1, MAX_LOG_LINES, DEFAULT_LOG_LINES)
+      return docker(
+        ctx,
+        ['logs', '--tail', String(lines), ctx.container],
+        'tail',
+      )
     },
   },
   {
