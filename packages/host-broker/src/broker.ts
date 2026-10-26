@@ -11,6 +11,7 @@ import net from 'node:net'
 import path from 'node:path'
 
 import {
+  AFTER_RESPONSE_DELAY_MS,
   DEFAULT_CONTAINER,
   DEFAULT_DOCKER,
   DEFAULT_EXEC_TIMEOUT_MS,
@@ -37,6 +38,7 @@ import {
 import {
   describeOps,
   findOp,
+  type Execution,
   type OpContext,
   type OpDefinition,
 } from './sources.ts'
@@ -175,19 +177,22 @@ function serve(
     // that never closes cannot keep the descriptor.
     socket.end(encode(response), () => socket.destroy())
   }
-  const send = (response: BrokerResponse): void => {
-    // Nothing may be written after the overflow answer has ended the socket.
-    if (!closed && !socket.destroyed) {
-      socket.write(encode(response))
-    }
-  }
+  /** Write an answer and resolve once it is flushed, so a deferred action can wait for it. */
+  const sendAndWait = (response: BrokerResponse): Promise<void> =>
+    new Promise(resolve => {
+      if (closed || socket.destroyed) {
+        resolve()
+        return
+      }
+      socket.write(encode(response), () => resolve())
+    })
 
   let queue: Promise<void> = Promise.resolve()
   let pending = 0
   const reader = createLineReader({
     onLine(line) {
       queue = queue
-        .then(() => answer(line, send, context, limiter, auditPath, now))
+        .then(() => answer(line, sendAndWait, context, limiter, auditPath, now))
         .catch(() => {
           // One broken request must not stall every later one on this connection.
         })
@@ -252,7 +257,7 @@ function serve(
 
 async function answer(
   line: string,
-  send: (response: BrokerResponse) => void,
+  send: (response: BrokerResponse) => Promise<void>,
   context: OpContext,
   limiter: RateLimiter,
   auditPath: string,
@@ -266,6 +271,7 @@ async function answer(
   const finish = async (
     response: BrokerResponse,
     outcome: { bytes: number; truncated: boolean; error?: string },
+    after?: () => Promise<void> | void,
   ): Promise<void> => {
     try {
       await appendAudit(auditPath, {
@@ -280,7 +286,7 @@ async function answer(
       })
     } catch {
       // An unaudited action is not allowed to look like a successful one.
-      send({
+      await send({
         ...(requestId === undefined ? {} : { id: requestId }),
         ok: false,
         error: {
@@ -290,7 +296,13 @@ async function answer(
       })
       return
     }
-    send(response)
+    await send(response)
+    if (after !== undefined) {
+      // The caller's container may be replaced by this work, so give the answer time to arrive.
+      setTimeout(() => {
+        void Promise.resolve(after()).catch(() => null)
+      }, AFTER_RESPONSE_DELAY_MS)
+    }
   }
 
   try {
@@ -298,15 +310,19 @@ async function answer(
     op = request.op
     requestId = request.id
     args = request.args
-    const capped = await execute(request, context, limiter, started)
+    const execution = await execute(request, context, limiter, started)
     await finish(
       {
         ...(requestId === undefined ? {} : { id: requestId }),
         ok: true,
-        result: capped.text,
-        ...(capped.truncated ? { truncated: true } : {}),
+        result: execution.text,
+        ...(execution.truncated ? { truncated: true } : {}),
       },
-      { bytes: Buffer.byteLength(capped.text), truncated: capped.truncated },
+      {
+        bytes: Buffer.byteLength(execution.text),
+        truncated: execution.truncated,
+      },
+      execution.after,
     )
   } catch (error) {
     let fault: BrokerFault
@@ -334,7 +350,7 @@ async function execute(
   context: OpContext,
   limiter: RateLimiter,
   started: number,
-): Promise<Capped> {
+): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
   const definition = request.op === DESCRIBE_OP ? undefined : findOp(request.op)
@@ -356,20 +372,26 @@ async function execute(
       `no operation named ${JSON.stringify(request.op)}`,
     )
   }
-  const result =
+  const raw =
     definition === undefined
       ? describeOps()
       : await runOp(definition, request.args, context)
-  return definition === undefined
-    ? capOutput(result)
-    : capOutput(result, definition.keep)
+  const value: Execution = typeof raw === 'string' ? { text: raw } : raw
+  const capped =
+    definition === undefined
+      ? capOutput(value.text)
+      : capOutput(value.text, definition.keep)
+  return {
+    ...capped,
+    ...(value.after === undefined ? {} : { after: value.after }),
+  }
 }
 
 function runOp(
   op: OpDefinition,
   args: Record<string, unknown>,
   context: OpContext,
-): Promise<string> {
+): Promise<Execution | string> {
   return withTimeout(
     op.run(args, context),
     context.execTimeoutMs + TIMEOUT_SLACK_MS,

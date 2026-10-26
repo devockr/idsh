@@ -33,6 +33,13 @@ export interface OpContext {
 }
 
 /** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
+/** An answer plus work that must not start until that answer has been written. */
+export interface Execution {
+  readonly text: string
+  /** Runs on the host once the response is flushed; a recreate replaces the caller's container. */
+  readonly after?: () => Promise<void> | void
+}
+
 export interface OpDefinition {
   readonly name: string
   readonly summary: string
@@ -41,7 +48,10 @@ export interface OpDefinition {
   readonly keep?: Keep
   /** Destructive: the plugin must ask the person before it runs. */
   readonly confirm?: boolean
-  run(args: Record<string, unknown>, ctx: OpContext): Promise<string>
+  run(
+    args: Record<string, unknown>,
+    ctx: OpContext,
+  ): Promise<Execution | string>
 }
 
 /**
@@ -357,14 +367,9 @@ function docker(
  */
 async function composeDetached(
   ctx: OpContext,
+  checkout: string,
   args: readonly string[],
-): Promise<string> {
-  if (ctx.checkout === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'no checkout configured; start the broker with --checkout',
-    )
-  }
+): Promise<void> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const log = await open(logPath, 'a', FILE_MODE)
   try {
@@ -380,13 +385,12 @@ async function composeDetached(
       ],
       {
         detached: true,
-        cwd: ctx.checkout,
+        cwd: checkout,
         env: { ...process.env },
         stdio: ['ignore', log.fd, log.fd],
       },
     )
     child.unref()
-    return `started (pid ${String(child.pid ?? '?')}); compose log: ${logPath}`
   } finally {
     await log.close()
   }
@@ -498,9 +502,21 @@ export const OPS: readonly OpDefinition[] = [
       'Recreate the deployment container from the current :dev image, without building.',
     confirm: true,
     input: { type: 'object', properties: {}, additionalProperties: false },
-    async run(args, ctx) {
+    run(args, ctx) {
       rejectUnknown(args, [])
-      return composeDetached(ctx, ['up', '-d', '--no-build'])
+      if (ctx.checkout === undefined) {
+        return Promise.reject(
+          new BrokerFault(
+            'unavailable',
+            'no checkout configured; start the broker with --checkout',
+          ),
+        )
+      }
+      const checkout = ctx.checkout
+      return Promise.resolve({
+        text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
+        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
+      })
     },
   },
   {

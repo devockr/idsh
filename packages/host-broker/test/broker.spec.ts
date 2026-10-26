@@ -913,9 +913,11 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
 
     const answer = await connection.request({ op: 'deploy.recreate', args: {} })
     assert.equal(answer.ok, true)
-    assert.match(answer.result ?? '', /^started \(pid \d+\)/u)
-    // It runs detached, so the evidence is its own log, not the answer.
-    await new Promise(resolve => setTimeout(resolve, 300))
+    assert.match(answer.result ?? '', /^recreate queued/u)
+    // The acknowledgement is written before the deferred work runs: no log yet.
+    await assert.rejects(readFile(path.join(host.root, 'compose.log'), 'utf8'))
+    // Then the delayed launch happens, detached.
+    await new Promise(resolve => setTimeout(resolve, 900))
     const log = await readFile(path.join(host.root, 'compose.log'), 'utf8')
     assert.match(log, new RegExp(`cwd=${checkout}`, 'u'))
     assert.match(

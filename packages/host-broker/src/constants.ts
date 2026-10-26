@@ -48,6 +48,9 @@ export const DEFAULT_CONTAINER = 'dsh'
 /** The docker client, unless the host says otherwise. */
 export const DEFAULT_DOCKER = 'docker'
 
+/** How long a deferred action waits after its answer is written, so the client can read it. */
+export const AFTER_RESPONSE_DELAY_MS = 500
+
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
 
