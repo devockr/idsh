@@ -27,6 +27,10 @@ sees. The socket's directory is the deployment's to mount; this package names no
   every call — refusals included — leaves a line before the answer.
 - A broker that is down does not fail the profile: the plugin logs a warning and registers no tools,
   so the delegation still boots and the tools appear the next time the plugin loads.
+- A destructive operation (`confirm: true` in the broker's table) asks first, inside the tool call:
+  the question service blocks and holds the answer, so a model cannot fabricate a yes. Anything but
+  the explicit "Run" option — cancel, a skipped question, an empty answer — means the host is not
+  touched.
 
 ## Not in this package
 

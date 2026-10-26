@@ -60,6 +60,8 @@ export interface BrokerOptions {
   readonly container?: string
   /** The docker client `deploy.*` runs. Default `docker`, resolved through the host's PATH. */
   readonly dockerPath?: string
+  /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
+  readonly checkout?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -94,6 +96,7 @@ export async function startBroker(
     )
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
+  const checkout = options.checkout
   const rateLimitPerMinute =
     options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
   // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,
@@ -111,6 +114,7 @@ export async function startBroker(
     execTimeoutMs,
     container,
     dockerPath,
+    ...(checkout === undefined ? {} : { checkout }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
   const sockets = new Set<net.Socket>()

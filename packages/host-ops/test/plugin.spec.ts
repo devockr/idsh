@@ -28,7 +28,7 @@ const TABLE = [
   },
 ]
 
-function context(): {
+function context(selected: readonly string[] = ['Run']): {
   ctx: HostContext
   tools: HostTool[]
   warnings: string[]
@@ -49,6 +49,9 @@ function context(): {
         warn(message) {
           warnings.push(message)
         },
+      },
+      userQuestions: {
+        ask: () => Promise.resolve({ answers: [{ id: 'confirm', selected }] }),
       },
     },
   }
@@ -154,6 +157,10 @@ void test('a registration that fails rolls back the ones already made', async ()
       },
     },
     logger: { warn: () => true },
+    userQuestions: {
+      ask: () =>
+        Promise.resolve({ answers: [{ id: 'confirm', selected: [] }] }),
+    },
   }
   try {
     await assert.rejects(
@@ -195,6 +202,46 @@ void test('a table entry that is not an object rejects the table', async () => {
       /not an object/u,
     )
     assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a destructive operation asks before it calls the broker', async () => {
+  const table = [
+    {
+      name: 'deploy.recreate',
+      summary: 'Recreate the container.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+    },
+  ]
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`,
+  )
+  try {
+    const cancelled = context(['Cancel'])
+    await registerTools(cancelled.ctx, { socketPath: broker.socketPath })
+    await assert.rejects(
+      cancelled.tools[0].execute({}, { signal: new AbortController().signal }),
+      /was not confirmed/u,
+    )
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe'],
+    )
+
+    const accepted = context(['Run'])
+    await registerTools(accepted.ctx, { socketPath: broker.socketPath })
+    const answer = await accepted.tools[0].execute(
+      {},
+      { signal: new AbortController().signal },
+    )
+    assert.deepEqual(answer, { text: JSON.stringify(table), truncated: false })
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe', 'ops.describe', 'deploy.recreate'],
+    )
   } finally {
     await broker.close()
   }

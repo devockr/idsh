@@ -9,7 +9,7 @@ import { DEFAULT_SOCKET_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 
 export const name = '@idsh/host-ops'
-export const inject = ['tools']
+export const inject = ['tools', 'userQuestions']
 
 export interface Config {
   /** Where the deployment mounts the broker's socket. */
@@ -39,15 +39,39 @@ export interface HostTool {
   execute(args: unknown, exec: ToolExecution): Promise<unknown>
 }
 
+export interface Question {
+  readonly id: string
+  readonly header?: string
+  readonly question: string
+  readonly options?: ReadonlyArray<{
+    readonly label: string
+    readonly description?: string
+  }>
+}
+
+export interface QuestionAnswer {
+  readonly id: string
+  readonly selected: readonly string[]
+  readonly custom?: string
+}
+
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
   readonly logger: { warn(message: string): void }
+  readonly userQuestions: {
+    ask(request: {
+      questions: readonly Question[]
+      signal?: AbortSignal
+    }): Promise<{ answers: readonly QuestionAnswer[] }>
+  }
 }
 
 interface DescribedOp {
   readonly name: string
   readonly summary: string
   readonly input: Record<string, unknown>
+  /** Destructive: ask the person before the broker is called. */
+  readonly confirm?: boolean
 }
 
 /**
@@ -77,7 +101,7 @@ export async function registerTools(
     throw new TypeError('the broker did not describe a table of operations')
   }
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value => toolFor(endpoint, asOp(value)))
+  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value)))
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -122,7 +146,11 @@ function toolName(op: string): string {
   return `idsh_${op.replaceAll(/[^\w-]/gu, '_')}`
 }
 
-function toolFor(endpoint: BrokerEndpoint, op: DescribedOp): HostTool {
+function toolFor(
+  ctx: HostContext,
+  endpoint: BrokerEndpoint,
+  op: DescribedOp,
+): HostTool {
   return {
     name: toolName(op.name),
     description: op.summary,
@@ -149,13 +177,22 @@ function toolFor(endpoint: BrokerEndpoint, op: DescribedOp): HostTool {
         ]
       },
     },
-    execute: (args, exec) =>
-      callBroker(
+    async execute(args, exec) {
+      if (
+        op.confirm === true &&
+        !(await confirmed(ctx, op, args, exec.signal))
+      ) {
+        throw new Error(
+          `host-ops: ${op.name} was not confirmed; the host was not touched`,
+        )
+      }
+      return callBroker(
         endpoint,
         op.name,
         args as Record<string, unknown>,
         exec.signal,
-      ),
+      )
+    },
   }
 }
 
@@ -163,7 +200,7 @@ function asOp(value: unknown): DescribedOp {
   if (value === null || typeof value !== 'object') {
     throw new Error('the broker described an operation that is not an object')
   }
-  const { name, summary, input } = value as Record<string, unknown>
+  const { name, summary, input, confirm } = value as Record<string, unknown>
   if (
     typeof name !== 'string' ||
     typeof summary !== 'string' ||
@@ -175,5 +212,41 @@ function asOp(value: unknown): DescribedOp {
       'the broker described an operation without a name, summary or object input',
     )
   }
-  return { name, summary, input: input as Record<string, unknown> }
+  return {
+    name,
+    summary,
+    input: input as Record<string, unknown>,
+    ...(confirm === true ? { confirm: true } : {}),
+  }
+}
+
+/**
+ * Ask the person before a destructive operation.
+ *
+ * The question is asked inside the tool call and blocks: the answer comes from the question
+ * service, so the model cannot fabricate one. Anything other than the explicit "Run" option —
+ * cancel, a skipped question, an empty answer — means no.
+ */
+async function confirmed(
+  ctx: HostContext,
+  op: DescribedOp,
+  args: unknown,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const answer = await ctx.userQuestions.ask({
+    questions: [
+      {
+        id: 'confirm',
+        header: 'Host operation',
+        question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}`,
+        options: [
+          { label: 'Run', description: op.summary },
+          { label: 'Cancel' },
+        ],
+      },
+    ],
+    ...(signal === undefined ? {} : { signal }),
+  })
+  const item = answer.answers.find(entry => entry.id === 'confirm')
+  return item?.selected.includes('Run') === true
 }

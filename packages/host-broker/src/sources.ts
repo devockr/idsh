@@ -26,6 +26,7 @@ export interface OpContext {
   readonly execTimeoutMs: number
   readonly container: string
   readonly dockerPath: string
+  readonly checkout?: string
 }
 
 /** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
@@ -35,6 +36,8 @@ export interface OpDefinition {
   readonly input: Record<string, unknown>
   /** The end a cap keeps; a log wants its tail, everything else its head. */
   readonly keep?: Keep
+  /** Destructive: the plugin must ask the person before it runs. */
+  readonly confirm?: boolean
   run(args: Record<string, unknown>, ctx: OpContext): Promise<string>
 }
 
@@ -46,17 +49,30 @@ export interface OpDefinition {
  * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
  * size, from the end a log is asked for.
  */
+interface RunOptions {
+  readonly keep?: Keep
+  /** Where the program runs; a compose file is relative to its checkout. */
+  readonly cwd?: string
+  /** Extra environment, merged over the broker's own. */
+  readonly env?: NodeJS.ProcessEnv
+}
+
 function runFixed(
   ctx: OpContext,
   program: string,
   args: readonly string[],
-  keep: Keep = 'head',
+  options: RunOptions = {},
 ): Promise<string> {
+  const keep = options.keep ?? 'head'
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       // Its own group, so a timeout can stop whatever the program started too.
       detached: true,
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options.env === undefined
+        ? {}
+        : { env: { ...process.env, ...options.env } }),
     })
     const state: { settled: boolean; timer?: NodeJS.Timeout } = {
       settled: false,
@@ -326,7 +342,43 @@ function docker(
   args: readonly string[],
   keep: Keep = 'head',
 ): Promise<string> {
-  return runFixed(ctx, ctx.dockerPath, args, keep)
+  return runFixed(ctx, ctx.dockerPath, args, { keep })
+}
+
+/**
+ * Run `docker compose` against the deployment's checkout.
+ *
+ * The real compose file interpolates `UID`/`GID`; the broker exports the ids it runs under, so a
+ * restart binds the same paths as the person who deployed.
+ */
+function compose(ctx: OpContext, args: readonly string[]): Promise<string> {
+  if (ctx.checkout === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      'no checkout configured; start the broker with --checkout',
+    )
+  }
+  const uid = process.getuid?.()
+  const gid = process.getgid?.()
+  return runFixed(
+    ctx,
+    ctx.dockerPath,
+    [
+      'compose',
+      '-f',
+      'docker-compose.yml',
+      '-f',
+      'docker-compose.dev.yml',
+      ...args,
+    ],
+    {
+      cwd: ctx.checkout,
+      env: {
+        ...(uid === undefined ? {} : { UID: String(uid) }),
+        ...(gid === undefined ? {} : { GID: String(gid) }),
+      },
+    },
+  )
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -430,6 +482,17 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
   {
+    name: 'deploy.recreate',
+    summary:
+      'Recreate the deployment container from the current :dev image, without building.',
+    confirm: true,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      return compose(ctx, ['up', '-d', '--no-build'])
+    },
+  },
+  {
     name: 'disk.usage',
     summary: 'df -h: the mounted filesystems and how full they are.',
     input: { type: 'object', properties: {}, additionalProperties: false },
@@ -447,7 +510,12 @@ export function findOp(name: string): OpDefinition | undefined {
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
 export function describeOps(): string {
   return JSON.stringify(
-    OPS.map(({ name, summary, input }) => ({ name, summary, input })),
+    OPS.map(({ name, summary, input, confirm }) => ({
+      name,
+      summary,
+      input,
+      ...(confirm === true ? { confirm: true } : {}),
+    })),
     null,
     2,
   )

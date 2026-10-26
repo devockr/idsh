@@ -216,6 +216,7 @@ void test('the rate limiter opens a window per key and refills', () => {
 interface DescribedOp {
   name: string
   input: { required?: string[] }
+  confirm?: boolean
 }
 
 interface AuditEntry {
@@ -261,7 +262,14 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
     assert.deepEqual(
       ops.map(op => op.name),
-      ['log.tail', 'proc.read', 'deploy.status', 'deploy.log', 'disk.usage'],
+      [
+        'log.tail',
+        'proc.read',
+        'deploy.status',
+        'deploy.log',
+        'deploy.recreate',
+        'disk.usage',
+      ],
     )
     assert.equal(ops[0].input.required?.[0], 'file')
 
@@ -870,6 +878,67 @@ void test('a head op keeps the opening of a large program output', async () => {
     assert.equal(answer.truncated, true)
     // A head cap keeps whole lines: the first row survives, the huge second one does not.
     assert.equal(answer.result, 'FIRST')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.recreate runs compose in the checkout and is marked confirm', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    '#!/bin/sh\nprintf "cwd=%s\\nargs=%s\\n" "$PWD" "$*"\n',
+    {
+      mode: 0o755,
+    },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const recreate = ops.find(op => op.name === 'deploy.recreate')
+    assert.equal(recreate?.confirm, true)
+
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true)
+    const result = answer.result ?? ''
+    assert.match(result, new RegExp(`cwd=${checkout}`, 'u'))
+    assert.match(
+      result,
+      /args=compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.recreate without a checkout is refused', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'docker'),
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /no checkout configured/u)
   } finally {
     connection.close()
     await broker.close()
