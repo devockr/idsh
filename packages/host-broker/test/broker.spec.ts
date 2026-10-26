@@ -1045,7 +1045,7 @@ esac
     `#!/bin/sh
 echo "$*" >> '${dockerLog}'
 case "$*" in
-  *inspect*) printf 'sha256:previousimage\\n' ;;
+  *inspect*) printf 'sha256:previousimage|["devockr/idsh:dev@sha256:abc"]\\n' ;;
 esac
 `,
     { mode: 0o755 },
@@ -1068,18 +1068,31 @@ esac
       args: { pr: 7 },
     })
     assert.equal(answer.ok, true)
-    assert.match(answer.result ?? '', /^built PR #7 \(bbbbbbbb2222/u)
+    assert.match(
+      answer.result ?? '',
+      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111/u,
+    )
     const git = await readFile(gitLog, 'utf8')
     assert.match(git, /ls-remote origin refs\/pull\/7\/head/u)
     assert.match(
       git,
-      /checkout origin\/main -- Dockerfile Dockerfile\.dev entrypoint\.sh tools \.dockerignore Dockerfile\.dev\.dockerignore/u,
+      /checkout aaaaaaaa11111111111111111111111111111111 -- Dockerfile Dockerfile\.dev entrypoint\.sh tools \.dockerignore Dockerfile\.dev\.dockerignore/u,
     )
     const docker = await readFile(dockerLog, 'utf8')
     assert.match(docker, /build --tag devockr\/idsh:dev/u)
+    assert.match(docker, /--label idsh\.keep=1/u)
+    assert.match(docker, /--entrypoint sh/u)
+    assert.match(
+      docker,
+      new RegExp(
+        `--user ${String(process.getuid?.())}:${String(process.getgid?.())}`,
+        'u',
+      ),
+    )
     assert.match(docker, /--file .*Dockerfile\.dev/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
-    assert.equal(rollback, 'sha256:previousimage\n')
+    // A pulled image's digest is the rollback target, not its local id.
+    assert.equal(rollback, 'devockr/idsh:dev@sha256:abc\n')
   } finally {
     connection.close()
     await broker.close()
@@ -1127,6 +1140,108 @@ esac
     })
     assert.equal(fork.error?.code, 'unavailable')
     assert.match(JSON.stringify(fork.error), /not on an origin branch/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.build takes the tip of an origin branch by sha', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    '#!/bin/sh\ncase "$*" in *inspect*) printf \'sha256:previousimage\\n\' ;; esac\n',
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { sha: 'bbbbbbbb' },
+    })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /^built sha bbbbbbbb/u)
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    assert.equal(rollback, 'sha256:previousimage\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a failed build still records the rollback target and its log', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  inspect) printf 'sha256:previousimage\\n' ;;
+  build) printf 'boom: the build failed\\n'; exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { sha: 'aaaaaaaa' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /boom/u)
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    assert.equal(rollback, 'sha256:previousimage\n')
+    const log = await readFile(path.join(host.root, 'build.log'), 'utf8')
+    assert.match(log, /boom: the build failed/u)
   } finally {
     connection.close()
     await broker.close()

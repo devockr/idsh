@@ -8,6 +8,9 @@
 import { DEFAULT_SOCKET_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 
+/** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
+const OP_TIMEOUT_SLACK_MS = 5000
+
 export const name = '@idsh/host-ops'
 export const inject = ['tools', 'userQuestions']
 
@@ -36,6 +39,7 @@ export interface HostTool {
   readonly name: string
   readonly description: string
   readonly parameters: Record<string, unknown>
+  readonly timeoutMs?: number
   readonly output: {
     readonly schema: Record<string, unknown>
     render(args: unknown, value: unknown): ContentBlock[]
@@ -78,6 +82,8 @@ interface DescribedOp {
   readonly input: Record<string, unknown>
   /** Destructive: ask the person before the broker is called. */
   readonly confirm?: boolean
+  /** How long the broker may take; a build is minutes, not the client's default. */
+  readonly timeoutMs?: number
 }
 
 /**
@@ -157,10 +163,14 @@ function toolFor(
   endpoint: BrokerEndpoint,
   op: DescribedOp,
 ): HostTool {
+  // A long operation says so; the tool call and the socket wait inherit it together.
+  const timeoutMs =
+    op.timeoutMs === undefined ? undefined : op.timeoutMs + OP_TIMEOUT_SLACK_MS
   return {
     name: toolName(op.name),
     description: op.summary,
     parameters: op.input,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     output: {
       schema: {
         type: 'object',
@@ -190,7 +200,7 @@ function toolFor(
         )
       }
       return callBroker(
-        endpoint,
+        timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs },
         op.name,
         args as Record<string, unknown>,
         exec.signal,

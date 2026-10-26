@@ -7,7 +7,9 @@ living inside the container.
 Phase 1 has started: `packages/host-broker` carries the socket, three read sources, the bounds and
 the audit log, `deploy.status`/`deploy.log` inspect the deployment container, `deploy.recreate`
 restarts it and `deploy.build` builds it from an origin-only source behind an in-tool confirmation, and
-`packages/host-ops` turns that table into dsh tools. Everything else below is still the plan, and
+`packages/host-ops` turns that table into dsh tools. The confirmation currently shows the request
+(`pr`/`sha`); the resolved source and `main` shas are resolved after the answer, so resolve-then-ask
+is still open, as is the single-flight lock around concurrent builds and recreates. Everything else below is still the plan, and
 this file is the contract the implementation is judged against.
 
 ## The problem

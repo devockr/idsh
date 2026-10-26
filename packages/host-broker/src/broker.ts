@@ -103,7 +103,8 @@ export async function startBroker(
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const gitPath = options.gitPath ?? DEFAULTS.gitPath
-  const checkout = options.checkout
+  const checkout =
+    options.checkout === undefined ? undefined : path.resolve(options.checkout)
   if (checkout !== undefined) {
     const stats = await stat(checkout).catch(() => null)
     if (stats?.isDirectory() !== true) {

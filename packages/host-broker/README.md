@@ -92,7 +92,8 @@ to escape, nothing that can backtrack.
   a truncated answer says so.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
 - **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`, and
-  its process group is stopped with it, so whatever it started goes too.
+  its process group is stopped with it, so whatever it started goes too. An operation may publish a
+  longer `timeoutMs` (the build takes up to 15 minutes), and the plugin then waits that long.
 - **Buffer**: one program may write 1 MiB. Past that a tail operation keeps the last 1 MiB (the
   oldest bytes are dropped) and a head operation the first 1 MiB (the newest are), then the answer
   cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.

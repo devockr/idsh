@@ -9,7 +9,9 @@
 import { spawn } from 'node:child_process'
 import {
   appendFile,
+  chmod,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   rm,
@@ -80,6 +82,8 @@ interface RunOptions {
   readonly keep?: Keep
   /** How long this program may run; a build is minutes, not the default ten seconds. */
   readonly timeoutMs?: number
+  /** Append the program's output here as it arrives, so a failed build stays diagnosable. */
+  readonly logPath?: string
   /** Where the program runs; a compose file is relative to its checkout. */
   readonly cwd?: string
   /** Extra environment, merged over the broker's own. */
@@ -124,6 +128,11 @@ function runFixed(
       }
     }
     const collect = (chunk: Buffer): void => {
+      if (options.logPath !== undefined) {
+        void appendFile(options.logPath, chunk, { mode: FILE_MODE }).catch(
+          () => null,
+        )
+      }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
         // The retained window's start never reaches a client: the answer cap keeps the last
@@ -584,9 +593,14 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['pr', 'sha'])
       const source = await resolveBuildSource(ctx, args)
       const dir = await prepareBuildSource(ctx, source)
+      // Recorded before the build, so the tag moving is what makes this the rollback target.
       const previous = await recordRollback(ctx)
-      await buildImage(ctx, dir)
-      return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; previous image ${previous}`
+      try {
+        await buildImage(ctx, dir)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+      return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
     },
   },
   {
@@ -630,11 +644,12 @@ export function findOp(name: string): OpDefinition | undefined {
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
 export function describeOps(): string {
   return JSON.stringify(
-    OPS.map(({ name, summary, input, confirm }) => ({
+    OPS.map(({ name, summary, input, confirm, timeoutMs }) => ({
       name,
       summary,
       input,
       ...(confirm === true ? { confirm: true } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     })),
     null,
     2,
@@ -645,6 +660,8 @@ export function describeOps(): string {
 
 interface BuildSource {
   readonly sha: string
+  /** `main` resolved at the same moment as the source, so the pin cannot drift. */
+  readonly mainSha: string
   readonly label: string
 }
 
@@ -687,6 +704,10 @@ async function resolveBuildSource(
     )
   }
   const heads = parseLsRemote(await lsRemote(ctx, 'refs/heads/*'))
+  const main = heads.find(entry => entry.ref === 'refs/heads/main')
+  if (main === undefined) {
+    throw new BrokerFault('unavailable', 'origin has no main branch')
+  }
   if (pr !== undefined) {
     if (typeof pr !== 'number' || !Number.isInteger(pr) || pr < 1) {
       throw new BrokerFault('bad-argument', 'pr must be a positive integer')
@@ -707,12 +728,19 @@ async function resolveBuildSource(
         `the head of PR ${String(pr)} is not on an origin branch; fork PRs are not deployable`,
       )
     }
-    return { sha: resolved, label: `PR #${String(pr)}` }
+    return { sha: resolved, mainSha: main.sha, label: `PR #${String(pr)}` }
   }
   if (typeof sha !== 'string' || !SHA_PATTERN.test(sha)) {
     throw new BrokerFault('bad-argument', 'sha must be a hex commit id')
   }
-  const matches = heads.filter(entry => entry.sha.startsWith(sha))
+  // Several branches at one commit is ordinary; only different commits are ambiguous.
+  const matches = [
+    ...new Set(
+      heads
+        .map(entry => entry.sha)
+        .filter(candidate => candidate.startsWith(sha)),
+    ),
+  ]
   if (matches.length === 0) {
     throw new BrokerFault(
       'unavailable',
@@ -725,7 +753,7 @@ async function resolveBuildSource(
       `sha ${sha} matches more than one origin branch`,
     )
   }
-  return { sha: matches[0].sha, label: `sha ${sha}` }
+  return { sha: matches[0], mainSha: main.sha, label: `sha ${sha}` }
 }
 
 /** A clean clone of the source, with the root surface replaced by main's. */
@@ -741,9 +769,15 @@ async function prepareBuildSource(
     )
   }
   const root = path.join(ctx.stateDir, 'build')
-  const dir = path.join(root, source.sha)
-  await rm(dir, { recursive: true, force: true })
   await mkdir(root, { recursive: true, mode: DIRECTORY_MODE })
+  // The checkout may never have fetched the source: freshen its refs, then clone its objects.
+  await git(
+    ctx,
+    ['fetch', '--quiet', 'origin'],
+    { timeoutMs: BUILD_TIMEOUT_MS },
+    checkout,
+  )
+  const dir = await mkdtemp(path.join(root, 'source-'))
   await git(
     ctx,
     ['clone', '--quiet', '--no-checkout', checkout, dir],
@@ -758,7 +792,7 @@ async function prepareBuildSource(
   )
   await git(
     ctx,
-    ['checkout', 'origin/main', '--', ...ROOT_SURFACE],
+    ['checkout', source.mainSha, '--', ...ROOT_SURFACE],
     { timeoutMs: BUILD_TIMEOUT_MS },
     dir,
   )
@@ -772,41 +806,70 @@ async function recordRollback(ctx: OpContext): Promise<string> {
     '--type',
     'container',
     '--format',
-    '{{.Image}}',
+    '{{.Image}}|{{json .RepoDigests}}',
     ctx.container,
   ])
-  const previous = text.trim().split('\n')[0]
+  const [id = '', digests = '[]'] = (text.trim().split('\n')[0] ?? '').split(
+    '|',
+  )
+  let previous = id
+  try {
+    const list = JSON.parse(digests) as unknown
+    // A pulled image is one pull away; a local one only exists as its id.
+    if (Array.isArray(list) && typeof list[0] === 'string') {
+      previous = list[0]
+    }
+  } catch {
+    // No digests: the id is the target.
+  }
   if (previous === '') {
     throw new BrokerFault(
       'unavailable',
       'the container has no image to roll back to',
     )
   }
-  await writeFile(path.join(ctx.stateDir, 'rollback'), `${previous}\n`, {
-    mode: FILE_MODE,
-  })
+  const file = path.join(ctx.stateDir, 'rollback')
+  await writeFile(file, `${previous}\n`, { mode: FILE_MODE })
+  await chmod(file, FILE_MODE).catch(() => null)
   return previous
 }
 
 async function buildImage(ctx: OpContext, dir: string): Promise<void> {
+  const logPath = path.join(ctx.stateDir, 'build.log')
+  // One deadline for the whole build; each program gets what is left, so no child outlives the op.
+  const deadline = Date.now() + BUILD_TIMEOUT_MS
+  const remaining = (): number => Math.max(1, deadline - Date.now())
+  const uid = process.getuid?.()
+  const gid = process.getgid?.()
+  const user =
+    uid === undefined || gid === undefined
+      ? undefined
+      : `${String(uid)}:${String(gid)}`
+  const registry =
+    process.env['NPM_REGISTRY'] ?? 'https://registry.npmmirror.com/'
+  // The image's entrypoint is dsh itself; without --entrypoint the command would be handed to it
+  // as dsh arguments and boot a second server. --user keeps the mounted tree owned by the broker's
+  // uid, since --entrypoint bypasses the entrypoint's own setpriv drop.
   await docker(
     ctx,
     [
       'run',
       '--rm',
+      '--entrypoint',
+      'sh',
+      ...(user === undefined ? [] : ['--user', user]),
       '-v',
       `${dir}:/src`,
       '-w',
       '/src',
       '-e',
-      'npm_config_registry=https://registry.npmmirror.com/',
+      `npm_config_registry=${registry}`,
       BUILD_CONTAINER,
-      'sh',
       '-c',
       BUILD_COMMAND,
     ],
     'tail',
-    { timeoutMs: BUILD_TIMEOUT_MS },
+    { timeoutMs: remaining(), logPath },
   )
   await docker(
     ctx,
@@ -814,11 +877,14 @@ async function buildImage(ctx: OpContext, dir: string): Promise<void> {
       'build',
       '--tag',
       BUILD_IMAGE,
+      // Retention: the previous :dev image becomes untagged, and a prune keeps this one.
+      '--label',
+      'idsh.keep=1',
       '--file',
       path.join(dir, 'Dockerfile.dev'),
       dir,
     ],
     'tail',
-    { timeoutMs: BUILD_TIMEOUT_MS },
+    { timeoutMs: BUILD_TIMEOUT_MS, logPath },
   )
 }

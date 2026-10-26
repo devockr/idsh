@@ -17,7 +17,8 @@ tool-safe name (`log.tail` becomes `idsh_log_tail`; the call still goes to the b
 
 `socketPath` defaults to `/run/idsh-host/host.sock` and `timeoutMs` to 15 seconds — slightly longer
 than the broker's own 10-second operation deadline, so the broker's `timeout` is the one the agent
-sees. The socket's directory is the deployment's to mount; this package names nothing else.
+sees. An operation that publishes its own `timeoutMs` (the build) uses that instead, for the tool
+call and the socket wait alike. The socket's directory is the deployment's to mount; this package names nothing else.
 
 ## Shape
 
