@@ -102,10 +102,14 @@ export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
   })
 }
 
+/** The caller the tools use; a test can pass a stub instead of waiting on a socket. */
+type BrokerCaller = typeof callBroker
+
 /** Ask the broker for its table and register each operation. Exported for the tests. */
 export async function registerTools(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
+  call: BrokerCaller = callBroker,
 ): Promise<void> {
   const described = await callBroker(endpoint, 'ops.describe', {})
   const ops = JSON.parse(described.text) as unknown
@@ -113,7 +117,7 @@ export async function registerTools(
     throw new TypeError('the broker did not describe a table of operations')
   }
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value)))
+  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call))
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -162,6 +166,7 @@ function toolFor(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   op: DescribedOp,
+  call: BrokerCaller,
 ): HostTool {
   // A long operation says so; the tool call and the socket wait inherit it together.
   const timeoutMs =
@@ -199,7 +204,7 @@ function toolFor(
           `host-ops: ${op.name} was not confirmed; the host was not touched`,
         )
       }
-      return callBroker(
+      return call(
         timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs },
         op.name,
         args as Record<string, unknown>,
