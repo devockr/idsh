@@ -44,6 +44,8 @@ export interface OpContext {
   readonly gitPath: string
   /** Where a detached operation writes its log; the audit directory. */
   readonly stateDir: string
+  /** Where builds clone; unique to this broker's socket, swept at boot. */
+  readonly buildRoot: string
 }
 
 /** An answer plus work that must not start until that answer has been written. */
@@ -99,6 +101,7 @@ function runFixed(
   const keep = options.keep ?? 'head'
   const timeoutMs = options.timeoutMs ?? ctx.execTimeoutMs
   return new Promise((resolve, reject) => {
+    let logChain: Promise<unknown> = Promise.resolve()
     const child = spawn(program, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       // Its own group, so a timeout can stop whatever the program started too.
@@ -121,17 +124,23 @@ function runFixed(
       if (state.timer !== undefined) {
         clearTimeout(state.timer)
       }
-      if (failure === undefined) {
-        resolve(buffer.toString('utf8'))
-      } else {
-        reject(failure)
-      }
+      // The answer waits for the log to be complete, so a reader never sees a torn tail.
+      void logChain.finally(() => {
+        if (failure === undefined) {
+          resolve(buffer.toString('utf8'))
+        } else {
+          reject(failure)
+        }
+      })
     }
     const collect = (chunk: Buffer): void => {
       if (options.logPath !== undefined) {
-        void appendFile(options.logPath, chunk, { mode: FILE_MODE }).catch(
-          () => null,
-        )
+        // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
+        logChain = logChain
+          .then(() =>
+            appendFile(options.logPath as string, chunk, { mode: FILE_MODE }),
+          )
+          .catch(() => null)
       }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
@@ -786,7 +795,7 @@ async function prepareBuildSource(
       'no checkout configured; start the broker with --checkout',
     )
   }
-  const root = path.join(ctx.stateDir, 'build')
+  const root = ctx.buildRoot
   await mkdir(root, { recursive: true, mode: DIRECTORY_MODE })
   // The checkout may never have fetched the source: freshen its refs, then clone its objects.
   await git(

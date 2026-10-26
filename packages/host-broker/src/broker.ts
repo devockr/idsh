@@ -132,6 +132,12 @@ export async function startBroker(
   const auditPath = options.auditPath
   const now = options.now ?? Date.now
 
+  // A build root per socket: two brokers cannot delete each other's clones.
+  const buildRoot = path.join(
+    path.dirname(auditPath),
+    'build',
+    path.basename(options.socketPath),
+  )
   const context: OpContext = {
     logDir,
     procDir,
@@ -140,6 +146,7 @@ export async function startBroker(
     dockerPath,
     gitPath,
     stateDir: path.dirname(auditPath),
+    buildRoot,
     ...(checkout === undefined ? {} : { checkout }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
@@ -151,18 +158,18 @@ export async function startBroker(
     recursive: true,
     mode: DIRECTORY_MODE,
   })
-  // A broker that died mid-build leaves its clone behind; runtime state, swept at best effort —
-  // a tree another uid owns must not keep the broker from starting.
-  await rm(path.join(path.dirname(auditPath), 'build'), {
-    recursive: true,
-    force: true,
-  }).catch(() => null)
   // A file left by rotation may be wider than FILE_MODE; narrow it before the first record.
   const audit = await stat(auditPath).catch(() => null)
   if (audit?.isFile() === true) {
     await chmod(auditPath, FILE_MODE).catch(() => null)
   }
   await prepareSocketDirectory(options.socketPath)
+  // Only now is it clear no other broker is serving this socket; a tree another uid owns must not
+  // keep the broker from starting, so the sweep is best effort.
+  await rm(buildRoot, { recursive: true, force: true }).catch(() => null)
+  await mkdir(buildRoot, { recursive: true, mode: DIRECTORY_MODE }).catch(
+    () => null,
+  )
   const server = net.createServer(socket => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
