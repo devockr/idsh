@@ -7,6 +7,7 @@ import {
   mkdir,
   readFile,
   stat,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import net from 'node:net'
@@ -969,6 +970,45 @@ void test('a checkout that is not a directory is refused at boot', async () => {
       auditPath: host.auditPath,
       checkout: notADirectory,
     }),
-    /checkout must be a directory/u,
+    /--checkout must be an existing directory/u,
   )
+})
+
+void test('a failed launch is recorded and the broker keeps serving', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(dockerPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    await unlink(dockerPath)
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true)
+    const logPath = path.join(host.root, 'compose.log')
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('spawn failed')) {
+        break
+      }
+    }
+    assert.match(log, /spawn failed/u)
+    // The broker is still there: the missing client is an answer, not a crash.
+    const still = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(still.ok, false)
+    assert.match(JSON.stringify(still.error), /ENOENT/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
 })

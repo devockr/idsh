@@ -100,9 +100,11 @@ export async function startBroker(
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const checkout = options.checkout
   if (checkout !== undefined) {
-    const stats = await stat(checkout)
-    if (!stats.isDirectory()) {
-      throw new Error(`checkout must be a directory, got ${checkout}`)
+    const stats = await stat(checkout).catch(() => null)
+    if (stats?.isDirectory() !== true) {
+      throw new Error(
+        `--checkout must be an existing directory, got ${checkout}`,
+      )
     }
   }
   const rateLimitPerMinute =

@@ -7,7 +7,7 @@
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
 import { spawn } from 'node:child_process'
-import { open, readFile, stat } from 'node:fs/promises'
+import { appendFile, open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
@@ -362,8 +362,9 @@ function docker(
  * Start `docker compose` on the host, detached from this request.
  *
  * A recreate removes and replaces the container the caller runs in, so the request cannot wait for
- * it: the answer goes back as soon as the launch succeeds, and compose's own log records the rest.
- * `setsid` puts it in a new session, so neither this broker's exit nor a timeout can stop it.
+ * it: the broker flushes its answer, the scheduler waits `AFTER_RESPONSE_DELAY_MS`, and only then is
+ * this called. The child is detached and unref'd, so neither the broker's exit nor a timeout stops
+ * it, and compose's own log records the outcome.
  */
 async function composeDetached(
   ctx: OpContext,
@@ -400,12 +401,12 @@ async function composeDetached(
       },
     )
     // A failed spawn must not take the broker down, and the answer already went out: record it
-    // where the operator will look for it.
+    // where the operator will look for it. The handle is closed by the finally below, so this
+    // appends by path instead of holding the descriptor open.
     child.on('error', (error: Error) => {
-      void log
-        .write(`spawn failed: ${error.message}\n`)
-        .catch(() => null)
-        .finally(() => log.close().catch(() => null))
+      void appendFile(logPath, `spawn failed: ${error.message}\n`, {
+        mode: FILE_MODE,
+      }).catch(() => null)
     })
     child.unref()
   } finally {
