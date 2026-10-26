@@ -42,8 +42,9 @@ export interface OpDefinition {
  * Run one fixed program with fixed arguments.
  *
  * No shell and no caller-supplied argv; both pipes are collected in arrival order, so a log that
- * writes to stderr is not reordered or welded onto stdout. Past the buffer ceiling the oldest bytes
- * are dropped — a tail reader wants the newest — and `capOutput` then trims to the answer size.
+ * writes to stderr is not reordered or welded onto stdout. Past the buffer ceiling a tail operation
+ * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
+ * size, from the end a log is asked for.
  */
 function runFixed(
   ctx: OpContext,
