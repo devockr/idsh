@@ -258,3 +258,26 @@ void test('a destructive operation asks before it calls the broker', async () =>
     await broker.close()
   }
 })
+
+void test('an operation with its own timeout sets the tool and the wait', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    // The broker's budget plus the slack the plugin adds, on the tool and on the socket wait.
+    assert.equal(tools[0]?.timeoutMs, 905_000)
+  } finally {
+    await broker.close()
+  }
+})

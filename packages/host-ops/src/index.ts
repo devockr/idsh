@@ -213,7 +213,10 @@ function asOp(value: unknown): DescribedOp {
   if (value === null || typeof value !== 'object') {
     throw new Error('the broker described an operation that is not an object')
   }
-  const { name, summary, input, confirm } = value as Record<string, unknown>
+  const { name, summary, input, confirm, timeoutMs } = value as Record<
+    string,
+    unknown
+  >
   if (
     typeof name !== 'string' ||
     typeof summary !== 'string' ||
@@ -230,6 +233,13 @@ function asOp(value: unknown): DescribedOp {
     summary,
     input: input as Record<string, unknown>,
     ...(confirm === true ? { confirm: true } : {}),
+    // The broker's per-operation budget travels with the operation; dropping it silently is how
+    // a long build ends up waiting the default 15 seconds again.
+    ...(typeof timeoutMs === 'number' &&
+    Number.isInteger(timeoutMs) &&
+    timeoutMs > 0
+      ? { timeoutMs }
+      : {}),
   }
 }
 
