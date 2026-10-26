@@ -889,7 +889,7 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
   const dockerPath = path.join(host.root, 'docker')
   await writeFile(
     dockerPath,
-    '#!/bin/sh\nprintf "cwd=%s\\nargs=%s\\n" "$PWD" "$*"\n',
+    '#!/bin/sh\nprintf "cwd=%s\\nuid=%s\\ngid=%s\\nargs=%s\\n" "$PWD" "$(printenv UID)" "$(printenv GID)" "$*"\n',
     {
       mode: 0o755,
     },
@@ -915,11 +915,20 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
     assert.equal(answer.ok, true)
     assert.match(answer.result ?? '', /^recreate queued/u)
     // The acknowledgement is written before the deferred work runs: no log yet.
-    await assert.rejects(readFile(path.join(host.root, 'compose.log'), 'utf8'))
-    // Then the delayed launch happens, detached.
-    await new Promise(resolve => setTimeout(resolve, 900))
-    const log = await readFile(path.join(host.root, 'compose.log'), 'utf8')
+    const logPath = path.join(host.root, 'compose.log')
+    await assert.rejects(readFile(logPath, 'utf8'))
+    // Then the delayed launch happens, detached; poll rather than guess a delay.
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('up -d --no-build')) {
+        break
+      }
+    }
     assert.match(log, new RegExp(`cwd=${checkout}`, 'u'))
+    assert.match(log, new RegExp(`uid=${String(process.getuid?.())}`, 'u'))
+    assert.match(log, new RegExp(`gid=${String(process.getgid?.())}`, 'u'))
     assert.match(
       log,
       /args=compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
@@ -948,4 +957,18 @@ void test('deploy.recreate without a checkout is refused', async () => {
     connection.close()
     await broker.close()
   }
+})
+
+void test('a checkout that is not a directory is refused at boot', async () => {
+  const host = await fakeHost()
+  const notADirectory = path.join(host.root, 'not-a-dir')
+  await writeFile(notADirectory, '')
+  await assert.rejects(
+    startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      checkout: notADirectory,
+    }),
+    /checkout must be a directory/u,
+  )
 })

@@ -232,11 +232,12 @@ void test('a destructive operation asks before it calls the broker', async () =>
     await assert.rejects(
       cancelled.tools[0].execute(
         {},
-        { signal: new AbortController().signal, agent },
+        { signal: new AbortController().signal, agent, callId: 'call-1' },
       ),
       /was not confirmed/u,
     )
     assert.equal(cancelled.asks[0]?.agent, agent)
+    assert.deepEqual(cancelled.asks[0]?.wait, { callId: 'call-1' })
     assert.deepEqual(
       broker.requests.map(request => request.op),
       ['ops.describe'],

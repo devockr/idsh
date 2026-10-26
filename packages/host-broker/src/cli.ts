@@ -26,7 +26,7 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --proc-dir <dir>       Where proc.read reads (default /proc)
   --container <name>     The container deploy.* inspects (default dsh)
   --docker <path>        The docker client deploy.* runs (default docker)
-  --checkout <dir>       The checkout holding docker-compose.yml, for deploy.recreate
+  --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help

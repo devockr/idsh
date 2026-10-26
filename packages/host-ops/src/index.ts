@@ -27,6 +27,8 @@ interface ToolExecution {
   readonly signal: AbortSignal
   /** The calling agent, forwarded to the question service so the card is scoped to it. */
   readonly agent?: unknown
+  /** The tool call, so the question card attaches to its row. */
+  readonly callId?: string
 }
 
 /** The slice of dsh a tool needs; structural, so this package imports no dsh code. */
@@ -65,6 +67,7 @@ export interface HostContext {
       questions: readonly Question[]
       signal?: AbortSignal
       agent?: unknown
+      wait?: { callId: string }
     }): Promise<{ answers: readonly QuestionAnswer[] }>
   }
 }
@@ -247,6 +250,7 @@ async function confirmed(
     ],
     signal: exec.signal,
     ...(exec.agent === undefined ? {} : { agent: exec.agent }),
+    ...(exec.callId === undefined ? {} : { wait: { callId: exec.callId } }),
   })
   const item = answer.answers.find(entry => entry.id === 'confirm')
   return item?.selected.includes('Run') === true

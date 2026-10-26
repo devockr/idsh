@@ -99,6 +99,12 @@ export async function startBroker(
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const checkout = options.checkout
+  if (checkout !== undefined) {
+    const stats = await stat(checkout)
+    if (!stats.isDirectory()) {
+      throw new Error(`checkout must be a directory, got ${checkout}`)
+    }
+  }
   const rateLimitPerMinute =
     options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
   // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,

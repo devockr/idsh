@@ -373,6 +373,11 @@ async function composeDetached(
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const log = await open(logPath, 'a', FILE_MODE)
   try {
+    await log.chmod(FILE_MODE)
+    // The real compose interpolates UID/GID, which the broker's own environment does not
+    // necessarily export (a user unit starts it without a login shell): pass its ids explicitly.
+    const uid = process.getuid?.()
+    const gid = process.getgid?.()
     const child = spawn(
       ctx.dockerPath,
       [
@@ -386,10 +391,22 @@ async function composeDetached(
       {
         detached: true,
         cwd: checkout,
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          ...(uid === undefined ? {} : { UID: String(uid) }),
+          ...(gid === undefined ? {} : { GID: String(gid) }),
+        },
         stdio: ['ignore', log.fd, log.fd],
       },
     )
+    // A failed spawn must not take the broker down, and the answer already went out: record it
+    // where the operator will look for it.
+    child.on('error', (error: Error) => {
+      void log
+        .write(`spawn failed: ${error.message}\n`)
+        .catch(() => null)
+        .finally(() => log.close().catch(() => null))
+    })
     child.unref()
   } finally {
     await log.close()

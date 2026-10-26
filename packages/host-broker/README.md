@@ -104,7 +104,9 @@ to escape, nothing that can backtrack.
 
 `deploy.build`, `deploy.rollback`, the router operations and the `run` allowlist are phase‑1/phase‑3
 work in `ROADMAP.md`. `deploy.recreate` is the first destructive operation: it runs one fixed
-`docker compose` in `--checkout`, and the plugin asks the person before calling it.
+`docker compose` in `--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`),
+and the plugin asks the person before calling it. It is acknowledged first and launched detached, so
+the answer arrives before the container is replaced; `<stateDir>/compose.log` records the outcome.
 
 ## Not in the image
 
