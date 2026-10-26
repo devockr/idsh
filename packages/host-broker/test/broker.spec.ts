@@ -1049,7 +1049,7 @@ esac
 echo "$*" >> '${dockerLog}'
 case "$*" in
   *"--type image"*) printf '["devockr/idsh:dev@sha256:abc"]\\n' ;;
-  *inspect*) printf 'sha256:previousimage\\n' ;;
+  *inspect*) echo 'sha256:prev' ;;
 esac
 `,
     { mode: 0o755 },
@@ -1111,7 +1111,7 @@ void test('deploy.build refuses an ambiguous source and a fork head', async () =
     gitPath,
     `#!/bin/sh
 case "$*" in
-  *"refs/heads/*"*) printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n' ;;
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
   *"refs/pull/8/head"*) printf 'cccccccc33333333333333333333333333333333 refs/pull/8/head\\n' ;;
 esac
 `,
@@ -1169,7 +1169,11 @@ esac
   )
   await writeFile(
     dockerPath,
-    '#!/bin/sh\ncase "$*" in *inspect*) printf \'sha256:previousimage\\n\' ;; esac\n',
+    `#!/bin/sh
+case "$*" in
+  *inspect*) echo 'sha256:prev' ;;
+esac
+`,
     { mode: 0o755 },
   )
   const checkout = path.join(host.root, 'checkout')
@@ -1192,7 +1196,7 @@ esac
     assert.equal(answer.ok, true)
     assert.match(answer.result ?? '', /^built sha bbbbbbbb/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
-    assert.equal(rollback, 'sha256:previousimage\n')
+    assert.equal(rollback, 'sha256:prev\n')
   } finally {
     connection.close()
     await broker.close()
@@ -1207,7 +1211,7 @@ void test('a failed build still records the rollback target and its log', async 
     gitPath,
     `#!/bin/sh
 case "$*" in
-  *"refs/heads/*"*) printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n' ;;
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
   *" clone "*) for last; do :; done; mkdir -p "$last" ;;
 esac
 `,
@@ -1217,7 +1221,7 @@ esac
     dockerPath,
     `#!/bin/sh
 case "$1" in
-  inspect) printf 'sha256:previousimage\\n' ;;
+  *inspect*) echo 'sha256:prev' ;;
   build) printf 'boom: the build failed\\n'; exit 1 ;;
 esac
 `,
@@ -1243,7 +1247,7 @@ esac
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /boom/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
-    assert.equal(rollback, 'sha256:previousimage\n')
+    assert.equal(rollback, 'sha256:prev\n')
     const log = await readFile(path.join(host.root, 'build.log'), 'utf8')
     assert.match(log, /boom: the build failed/u)
   } finally {
@@ -1364,6 +1368,89 @@ void test('deploy.rollback without a recorded target is refused', async () => {
     assert.match(JSON.stringify(answer.error), /no rollback target/u)
   } finally {
     connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.rollback refuses a rollback file with more than one line', async () => {
+  const host = await fakeHost()
+  await writeFile(path.join(host.root, 'rollback'), 'sha256:first\nextra\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    checkout: host.root,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /does not name one image/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a build and a rollback do not interleave', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$1" in
+  run) sleep 0.4 ;;
+  *inspect*) echo 'sha256:prev' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), 'sha256:prev\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const building = client(host.socketPath)
+  const rolling = client(host.socketPath)
+  try {
+    const build = building.request({
+      op: 'deploy.build',
+      args: { sha: 'aaaaaaaa' },
+    })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const rollback = rolling.request({ op: 'deploy.rollback', args: {} })
+    const [built, rolled] = await Promise.all([build, rollback])
+    assert.equal(built.ok, true, JSON.stringify(built.error))
+    assert.equal(rolled.ok, true, JSON.stringify(rolled.error))
+    const log = await readFile(dockerLog, 'utf8')
+    const buildAt = log.indexOf('build --tag devockr/idsh:dev')
+    const tagAt = log.indexOf('tag sha256:prev devockr/idsh:dev')
+    assert.ok(buildAt !== -1 && tagAt !== -1)
+    assert.ok(buildAt < tagAt, 'the build finished before the rollback tagged')
+  } finally {
+    building.close()
+    rolling.close()
     await broker.close()
   }
 })

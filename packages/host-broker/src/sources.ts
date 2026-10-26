@@ -29,6 +29,7 @@ import {
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
 } from './constants.ts'
+import type { DeployLock } from './deploy-lock.ts'
 import type { Keep } from './limits.ts'
 import { BrokerFault } from './protocol.ts'
 
@@ -46,6 +47,8 @@ export interface OpContext {
   readonly stateDir: string
   /** Where builds clone; unique to this broker's socket, swept at boot. */
   readonly buildRoot: string
+  /** Serializes builds, recreates and rollbacks: one retag at a time. */
+  readonly deployLock: DeployLock
 }
 
 /** An answer plus work that must not start until that answer has been written. */
@@ -450,6 +453,11 @@ async function composeDetached(
       noteFailure(logPath, error)
     })
     child.unref()
+    // The caller holds the deployment lock until compose is done.
+    await new Promise<void>(resolve => {
+      child.once('error', () => resolve())
+      child.once('exit', () => resolve())
+    })
   } finally {
     await log.close()
   }
@@ -500,12 +508,20 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
       'no rollback target recorded; run deploy.build first',
     )
   }
-  const target = text.trim()
-  if (target === '' || target.includes('\n')) {
+  // One line, plus the newline recordRollback writes; any other break is a broken file.
+  const lines = text.split('\n')
+  if (lines.at(-1) === '') {
+    lines.pop()
+  }
+  if (lines.length !== 1) {
     throw new BrokerFault(
       'unavailable',
       `the rollback file does not name one image: ${JSON.stringify(text)}`,
     )
+  }
+  const target = (lines[0] ?? '').trim()
+  if (target === '') {
+    throw new BrokerFault('unavailable', 'the rollback target is empty')
   }
   return target
 }
@@ -633,17 +649,22 @@ export const OPS: readonly OpDefinition[] = [
     },
     async run(args, ctx) {
       rejectUnknown(args, ['pr', 'sha'])
+      const release = await ctx.deployLock.acquire()
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      const source = await resolveBuildSource(ctx, args, deadline)
-      const dir = await prepareBuildSource(ctx, source, deadline)
       try {
-        // Recorded before the build, so the tag moving is what makes this the rollback target.
-        const previous = await recordRollback(ctx)
-        await buildImage(ctx, dir, deadline)
-        return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
+        const source = await resolveBuildSource(ctx, args, deadline)
+        const dir = await prepareBuildSource(ctx, source, deadline)
+        try {
+          // Recorded before the build, so the tag moving is what makes this the rollback target.
+          const previous = await recordRollback(ctx)
+          await buildImage(ctx, dir, deadline)
+          return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
+        } finally {
+          // Best effort: a cleanup failure must not turn a tagged image into an error.
+          await rm(dir, { recursive: true, force: true }).catch(() => null)
+        }
       } finally {
-        // Best effort: a cleanup failure must not turn a tagged image into an error.
-        await rm(dir, { recursive: true, force: true }).catch(() => null)
+        release()
       }
     },
   },
@@ -662,12 +683,21 @@ export const OPS: readonly OpDefinition[] = [
         )
       }
       const checkout = ctx.checkout
-      const target = await rollbackTarget(ctx)
-      // Tagging first: a target that is no longer present fails before anything is acknowledged.
-      await docker(ctx, ['tag', target, BUILD_IMAGE])
-      return {
-        text: `rollback queued to ${target}; the session drops when the container is replaced`,
-        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
+      const release = await ctx.deployLock.acquire()
+      try {
+        const target = await rollbackTarget(ctx)
+        // Tagging first: a target that is no longer present fails before anything is acknowledged.
+        await docker(ctx, ['tag', target, BUILD_IMAGE])
+        return {
+          text: `rollback queued to ${target}; the session drops when the container is replaced`,
+          after: () =>
+            composeDetached(ctx, checkout, ['up', '-d', '--no-build']).finally(
+              release,
+            ),
+        }
+      } catch (error) {
+        release()
+        throw error
       }
     },
   },
@@ -690,7 +720,14 @@ export const OPS: readonly OpDefinition[] = [
       const checkout = ctx.checkout
       return Promise.resolve({
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
-        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
+        after: async () => {
+          const release = await ctx.deployLock.acquire()
+          try {
+            await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          } finally {
+            release()
+          }
+        },
       })
     },
   },

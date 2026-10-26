@@ -37,6 +37,7 @@ import {
   SOCKET_MODE,
   TIMEOUT_SLACK_MS,
 } from './constants.ts'
+import { DeployLock } from './deploy-lock.ts'
 import { capOutput, RateLimiter, type Capped } from './limits.ts'
 import {
   BrokerFault,
@@ -141,6 +142,7 @@ export async function startBroker(
     .digest('hex')
     .slice(0, BUILD_KEY_CHARS)
   const buildRoot = path.join(path.dirname(auditPath), 'build', buildKey)
+  const deployLock = new DeployLock()
   const context: OpContext = {
     logDir,
     procDir,
@@ -150,6 +152,7 @@ export async function startBroker(
     gitPath,
     stateDir: path.dirname(auditPath),
     buildRoot,
+    deployLock,
     ...(checkout === undefined ? {} : { checkout }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
