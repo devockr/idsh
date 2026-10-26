@@ -85,8 +85,9 @@ to escape, nothing that can backtrack.
 
 ## Bounds
 
-- **Output** is capped at 64 KiB, trimmed back to the last line boundary inside it (or to a
-  character boundary when the text has none), and a truncated answer says so.
+- **Output** is capped at 64 KiB: a tail answer keeps its last lines and a head answer its first,
+  trimmed to a line boundary inside the window (or to a character boundary when the text has none);
+  a truncated answer says so.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
 - **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`, and
   its process group is stopped with it, so whatever it started goes too.
