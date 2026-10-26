@@ -282,3 +282,31 @@ void test('an operation with its own timeout sets the tool and the wait', async 
     await broker.close()
   }
 })
+
+void test('execute waits the operation timeout on the socket', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 200,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe' ? describe : null,
+  )
+  try {
+    const { ctx, tools } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    // The operation never answers: the rejection must come from the per-operation wait, not the
+    // adapter's default.
+    await assert.rejects(
+      tools[0].execute({}, { signal: new AbortController().signal }),
+      /did not answer within 5200 ms/u,
+    )
+  } finally {
+    await broker.close()
+  }
+})
