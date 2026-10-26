@@ -28,16 +28,19 @@ const TABLE = [
   },
 ]
 
-function context(): {
+function context(selected: readonly string[] = ['Run']): {
   ctx: HostContext
   tools: HostTool[]
   warnings: string[]
+  asks: Array<Record<string, unknown>>
 } {
   const tools: HostTool[] = []
   const warnings: string[] = []
+  const asks: Array<Record<string, unknown>> = []
   return {
     tools,
     warnings,
+    asks,
     ctx: {
       tools: {
         register(tool) {
@@ -48,6 +51,12 @@ function context(): {
       logger: {
         warn(message) {
           warnings.push(message)
+        },
+      },
+      userQuestions: {
+        ask: (request: Record<string, unknown>) => {
+          asks.push(request)
+          return Promise.resolve({ answers: [{ id: 'confirm', selected }] })
         },
       },
     },
@@ -154,6 +163,10 @@ void test('a registration that fails rolls back the ones already made', async ()
       },
     },
     logger: { warn: () => true },
+    userQuestions: {
+      ask: () =>
+        Promise.resolve({ answers: [{ id: 'confirm', selected: [] }] }),
+    },
   }
   try {
     await assert.rejects(
@@ -195,6 +208,52 @@ void test('a table entry that is not an object rejects the table', async () => {
       /not an object/u,
     )
     assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a destructive operation asks before it calls the broker', async () => {
+  const table = [
+    {
+      name: 'deploy.recreate',
+      summary: 'Recreate the container.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+    },
+  ]
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`,
+  )
+  try {
+    const cancelled = context(['Cancel'])
+    await registerTools(cancelled.ctx, { socketPath: broker.socketPath })
+    const agent = { session: 'test-session' }
+    await assert.rejects(
+      cancelled.tools[0].execute(
+        {},
+        { signal: new AbortController().signal, agent, callId: 'call-1' },
+      ),
+      /was not confirmed/u,
+    )
+    assert.equal(cancelled.asks[0]?.agent, agent)
+    assert.deepEqual(cancelled.asks[0]?.wait, { callId: 'call-1' })
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe'],
+    )
+
+    const accepted = context(['Run'])
+    await registerTools(accepted.ctx, { socketPath: broker.socketPath })
+    const answer = await accepted.tools[0].execute(
+      {},
+      { signal: new AbortController().signal },
+    )
+    assert.deepEqual(answer, { text: JSON.stringify(table), truncated: false })
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe', 'ops.describe', 'deploy.recreate'],
+    )
   } finally {
     await broker.close()
   }

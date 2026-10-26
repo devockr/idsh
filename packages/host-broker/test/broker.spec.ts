@@ -7,6 +7,7 @@ import {
   mkdir,
   readFile,
   stat,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import net from 'node:net'
@@ -216,6 +217,7 @@ void test('the rate limiter opens a window per key and refills', () => {
 interface DescribedOp {
   name: string
   input: { required?: string[] }
+  confirm?: boolean
 }
 
 interface AuditEntry {
@@ -261,7 +263,14 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
     assert.deepEqual(
       ops.map(op => op.name),
-      ['log.tail', 'proc.read', 'deploy.status', 'deploy.log', 'disk.usage'],
+      [
+        'log.tail',
+        'proc.read',
+        'deploy.status',
+        'deploy.log',
+        'deploy.recreate',
+        'disk.usage',
+      ],
     )
     assert.equal(ops[0].input.required?.[0], 'file')
 
@@ -870,6 +879,134 @@ void test('a head op keeps the opening of a large program output', async () => {
     assert.equal(answer.truncated, true)
     // A head cap keeps whole lines: the first row survives, the huge second one does not.
     assert.equal(answer.result, 'FIRST')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.recreate runs compose in the checkout and is marked confirm', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    '#!/bin/sh\nprintf "cwd=%s\\nuid=%s\\ngid=%s\\nargs=%s\\n" "$PWD" "$(printenv UID)" "$(printenv GID)" "$*"\n',
+    {
+      mode: 0o755,
+    },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const recreate = ops.find(op => op.name === 'deploy.recreate')
+    assert.equal(recreate?.confirm, true)
+
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /^recreate queued/u)
+    // The acknowledgement is written before the deferred work runs: no log yet.
+    const logPath = path.join(host.root, 'compose.log')
+    await assert.rejects(readFile(logPath, 'utf8'))
+    // Then the delayed launch happens, detached; poll rather than guess a delay.
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('up -d --no-build')) {
+        break
+      }
+    }
+    assert.match(log, new RegExp(`cwd=${checkout}`, 'u'))
+    assert.match(log, new RegExp(`uid=${String(process.getuid?.())}`, 'u'))
+    assert.match(log, new RegExp(`gid=${String(process.getgid?.())}`, 'u'))
+    assert.match(
+      log,
+      /args=compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.recreate without a checkout is refused', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'docker'),
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /no checkout configured/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a checkout that is not a directory is refused at boot', async () => {
+  const host = await fakeHost()
+  const notADirectory = path.join(host.root, 'not-a-dir')
+  await writeFile(notADirectory, '')
+  await assert.rejects(
+    startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      checkout: notADirectory,
+    }),
+    /--checkout must be an existing directory/u,
+  )
+})
+
+void test('a failed launch is recorded and the broker keeps serving', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(dockerPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    await unlink(dockerPath)
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true)
+    const logPath = path.join(host.root, 'compose.log')
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('spawn failed')) {
+        break
+      }
+    }
+    assert.match(log, /spawn failed/u)
+    // The broker is still there: the missing client is an answer, not a crash.
+    const still = await connection.request({ op: 'deploy.status', args: {} })
+    assert.equal(still.ok, false)
+    assert.match(JSON.stringify(still.error), /ENOENT/u)
   } finally {
     connection.close()
     await broker.close()

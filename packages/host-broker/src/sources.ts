@@ -7,10 +7,11 @@
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
 import { spawn } from 'node:child_process'
-import { open, readFile, stat } from 'node:fs/promises'
+import { appendFile, open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
+  FILE_MODE,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
@@ -26,6 +27,16 @@ export interface OpContext {
   readonly execTimeoutMs: number
   readonly container: string
   readonly dockerPath: string
+  readonly checkout?: string
+  /** Where a detached operation writes its log; the audit directory. */
+  readonly stateDir: string
+}
+
+/** An answer plus work that must not start until that answer has been written. */
+export interface Execution {
+  readonly text: string
+  /** Runs on the host once the response is flushed; a recreate replaces the caller's container. */
+  readonly after?: () => Promise<void> | void
 }
 
 /** One typed operation. `input` is the JSON Schema the plugin turns into a tool parameter. */
@@ -35,7 +46,12 @@ export interface OpDefinition {
   readonly input: Record<string, unknown>
   /** The end a cap keeps; a log wants its tail, everything else its head. */
   readonly keep?: Keep
-  run(args: Record<string, unknown>, ctx: OpContext): Promise<string>
+  /** Destructive: the plugin must ask the person before it runs. */
+  readonly confirm?: boolean
+  run(
+    args: Record<string, unknown>,
+    ctx: OpContext,
+  ): Promise<Execution | string>
 }
 
 /**
@@ -46,17 +62,30 @@ export interface OpDefinition {
  * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
  * size, from the end a log is asked for.
  */
+interface RunOptions {
+  readonly keep?: Keep
+  /** Where the program runs; a compose file is relative to its checkout. */
+  readonly cwd?: string
+  /** Extra environment, merged over the broker's own. */
+  readonly env?: NodeJS.ProcessEnv
+}
+
 function runFixed(
   ctx: OpContext,
   program: string,
   args: readonly string[],
-  keep: Keep = 'head',
+  options: RunOptions = {},
 ): Promise<string> {
+  const keep = options.keep ?? 'head'
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       // Its own group, so a timeout can stop whatever the program started too.
       detached: true,
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options.env === undefined
+        ? {}
+        : { env: { ...process.env, ...options.env } }),
     })
     const state: { settled: boolean; timer?: NodeJS.Timeout } = {
       settled: false,
@@ -326,7 +355,63 @@ function docker(
   args: readonly string[],
   keep: Keep = 'head',
 ): Promise<string> {
-  return runFixed(ctx, ctx.dockerPath, args, keep)
+  return runFixed(ctx, ctx.dockerPath, args, { keep })
+}
+
+/**
+ * Start `docker compose` on the host, detached from this request.
+ *
+ * A recreate removes and replaces the container the caller runs in, so the request cannot wait for
+ * it: the broker flushes its answer, the scheduler waits `AFTER_RESPONSE_DELAY_MS`, and only then is
+ * this called. The child is detached and unref'd, so neither the broker's exit nor a timeout stops
+ * it, and compose's own log records the outcome.
+ */
+async function composeDetached(
+  ctx: OpContext,
+  checkout: string,
+  args: readonly string[],
+): Promise<void> {
+  const logPath = path.join(ctx.stateDir, 'compose.log')
+  const log = await open(logPath, 'a', FILE_MODE)
+  try {
+    await log.chmod(FILE_MODE)
+    // The real compose interpolates UID/GID, which the broker's own environment does not
+    // necessarily export (a user unit starts it without a login shell): pass its ids explicitly.
+    const uid = process.getuid?.()
+    const gid = process.getgid?.()
+    const child = spawn(
+      ctx.dockerPath,
+      [
+        'compose',
+        '-f',
+        'docker-compose.yml',
+        '-f',
+        'docker-compose.dev.yml',
+        ...args,
+      ],
+      {
+        detached: true,
+        cwd: checkout,
+        env: {
+          ...process.env,
+          ...(uid === undefined ? {} : { UID: String(uid) }),
+          ...(gid === undefined ? {} : { GID: String(gid) }),
+        },
+        stdio: ['ignore', log.fd, log.fd],
+      },
+    )
+    // A failed spawn must not take the broker down, and the answer already went out: record it
+    // where the operator will look for it. The handle is closed by the finally below, so this
+    // appends by path instead of holding the descriptor open.
+    child.on('error', (error: Error) => {
+      void appendFile(logPath, `spawn failed: ${error.message}\n`, {
+        mode: FILE_MODE,
+      }).catch(() => null)
+    })
+    child.unref()
+  } finally {
+    await log.close()
+  }
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -430,6 +515,29 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
   {
+    name: 'deploy.recreate',
+    summary:
+      'Recreate the deployment container from the current :dev image, without building.',
+    confirm: true,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    run(args, ctx) {
+      rejectUnknown(args, [])
+      if (ctx.checkout === undefined) {
+        return Promise.reject(
+          new BrokerFault(
+            'unavailable',
+            'no checkout configured; start the broker with --checkout',
+          ),
+        )
+      }
+      const checkout = ctx.checkout
+      return Promise.resolve({
+        text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
+        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
+      })
+    },
+  },
+  {
     name: 'disk.usage',
     summary: 'df -h: the mounted filesystems and how full they are.',
     input: { type: 'object', properties: {}, additionalProperties: false },
@@ -447,7 +555,12 @@ export function findOp(name: string): OpDefinition | undefined {
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
 export function describeOps(): string {
   return JSON.stringify(
-    OPS.map(({ name, summary, input }) => ({ name, summary, input })),
+    OPS.map(({ name, summary, input, confirm }) => ({
+      name,
+      summary,
+      input,
+      ...(confirm === true ? { confirm: true } : {}),
+    })),
     null,
     2,
   )
