@@ -182,7 +182,7 @@ channel has to carry deployment before the keys can go.
 | op                                 | source                                           | purpose                       |
 | ---------------------------------- | ------------------------------------------------ | ----------------------------- |
 | `deploy.build({pr})`               | the PR head, on the remote, from this repository | verify an unmerged change     |
-| `deploy.build({sha})`              | any commit on a remote branch                    | verify a pushed branch        |
+| `deploy.build({sha})`              | the tip of a branch on the remote                | verify a pushed branch        |
 | `deploy.main()`                    | the main branch                                  | ship                          |
 | `deploy.recreate()`                | no build; the current image                      | profile-only changes          |
 | `deploy.rollback()`                | the previous image                               | a deploy that will not boot   |
