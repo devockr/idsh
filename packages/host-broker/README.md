@@ -40,8 +40,9 @@ loginctl enable-linger "$USER" # keep it running without a login session
 
 `Restart=always` is what makes `broker.update` work: that operation installs the new build, answers,
 drains the requests in flight and exits, and the unit starts the new one. The drain waits up to five
-seconds (`DRAIN_TIMEOUT_MS`); a request still running then is disconnected, so its answer and audit
-line are lost — a deploy build or a long log read should be allowed to finish first. Without a supervisor the
+seconds (`DRAIN_TIMEOUT_MS`); a request still running then is disconnected and its answer is lost,
+though its audit line still lands when the request finishes — a deploy build or a long log read
+should be allowed to finish first. Without a supervisor the
 CLI still exits after the update, so the broker is gone rather than still running the old build.
 
 How the update installs depends on what the process is running from — it reads its own entry. Run
