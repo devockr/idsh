@@ -4,7 +4,7 @@ This is the plan for letting the agent reach the machine it runs on — to diagn
 LAN and the router, and to deploy — without the credentials that make that reach possible ever
 living inside the container.
 
-Phase 1 has started: `packages/host-broker` carries the socket, three read sources, the bounds and
+Phase 1 has started: `packages/host-broker` carries the socket, four read sources, the bounds and
 the audit log, `deploy.status`/`deploy.log` inspect the deployment container, `deploy.recreate`
 restarts it, `deploy.build` builds it from an origin-only source, `deploy.main` builds and ships
 main in one call and `deploy.rollback` returns to the image recorded before that build — all

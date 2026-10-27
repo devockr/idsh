@@ -12,7 +12,7 @@ with a small set of validated arguments.
 
 ```text
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
-         [--container <name>] [--docker <path>] [--git <path>] [--checkout <dir>]
+         [--container <name>] [--docker <path>] [--git <path>] [--ip <path>] [--checkout <dir>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -74,6 +74,7 @@ request.
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                     |
 | `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                              |
+| `net.status`      | the host's addresses, routes and neighbours, read with `ip`                                                                                       |
 | `disk.usage`      | `df -h`                                                                                                                                           |
 | `deploy.status`   | the deployment container: image, creation time and state                                                                                          |
 | `deploy.log`      | the tail of the deployment container log                                                                                                          |

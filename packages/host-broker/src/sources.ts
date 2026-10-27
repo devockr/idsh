@@ -44,6 +44,8 @@ export interface OpContext {
   readonly checkout?: string
   /** The git client. Default `git`, resolved through the host's PATH. */
   readonly gitPath: string
+  /** The `ip` client `net.status` runs. */
+  readonly ipPath: string
   /** Where a detached operation writes its log; the audit directory. */
   readonly stateDir: string
   /** Where builds clone; unique to this broker's socket, swept at boot. */
@@ -541,6 +543,25 @@ function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now())
 }
 
+/* ---------------------------------------------------------------- net.status */
+
+/** The `ip` sub-commands `net.status` can read. */
+const NET_WHAT = ['addr', 'route', 'neigh', 'all'] as const
+
+type NetWhat = (typeof NET_WHAT)[number]
+
+async function netStatus(ctx: OpContext, what: NetWhat): Promise<string> {
+  const parts = what === 'all' ? ['addr', 'route', 'neigh'] : [what]
+  const sections: string[] = []
+  for (const part of parts) {
+    const table = await runFixed(ctx, ctx.ipPath, ['-br', part], {
+      keep: 'head',
+    })
+    sections.push(`## ${part}`, table.trimEnd())
+  }
+  return sections.join('\n')
+}
+
 /* ---------------------------------------------------------------- deploy.rollback */
 
 /** The image recorded before the last build; a build that never ran leaves no target. */
@@ -772,6 +793,35 @@ export const OPS: readonly OpDefinition[] = [
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
       })
+    },
+  },
+  {
+    name: 'net.status',
+    summary: "The host's addresses, routes and neighbours, read with ip.",
+    input: {
+      type: 'object',
+      properties: {
+        what: {
+          type: 'string',
+          enum: [...NET_WHAT],
+          description:
+            'Which table to read: addr, route, neigh, or all (the default).',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['what'])
+      const asked = args['what']
+      const what: NetWhat =
+        typeof asked === 'string' &&
+        (NET_WHAT as readonly string[]).includes(asked)
+          ? (asked as NetWhat)
+          : 'all'
+      if (asked !== undefined && typeof asked !== 'string') {
+        throw new BrokerFault('bad-argument', 'what must be a string')
+      }
+      return netStatus(ctx, what)
     },
   },
   {

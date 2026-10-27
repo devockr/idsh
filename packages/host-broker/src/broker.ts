@@ -7,7 +7,9 @@
  * write means only that uid can open it at all.
  */
 import { createHash } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
 import {
+  access,
   appendFile,
   chmod,
   lstat,
@@ -26,6 +28,7 @@ import {
   DEFAULT_DOCKER,
   DEFAULT_EXEC_TIMEOUT_MS,
   DEFAULT_GIT,
+  IP_CANDIDATES,
   DIRECTORY_MODE,
   FILE_MODE,
   FORBIDDEN_DIRECTORY_BITS,
@@ -77,6 +80,8 @@ export interface BrokerOptions {
   readonly dockerPath?: string
   /** The git client `deploy.*` runs. Default `git`, resolved through the host's PATH. */
   readonly gitPath?: string
+  /** The `ip` client `net.status` runs. Default: the first of the usual locations that exists. */
+  readonly ipPath?: string
   /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
   readonly checkout?: string
   /** Requests per operation per minute. Default 60. */
@@ -89,6 +94,21 @@ export interface BrokerOptions {
 
 export interface RunningBroker {
   close(): Promise<void>
+}
+
+/** First candidate that exists and is executable. */
+async function firstExisting(
+  candidates: readonly string[],
+): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, fsConstants.X_OK)
+      return candidate
+    } catch {
+      // Try the next location.
+    }
+  }
+  return undefined
 }
 
 const DEFAULTS = {
@@ -115,6 +135,7 @@ export async function startBroker(
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const gitPath = options.gitPath ?? DEFAULTS.gitPath
+  const ipPath = options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? 'ip'
   const checkout =
     options.checkout === undefined ? undefined : path.resolve(options.checkout)
   if (checkout !== undefined) {
@@ -151,6 +172,7 @@ export async function startBroker(
     container,
     dockerPath,
     gitPath,
+    ipPath,
     stateDir: path.dirname(auditPath),
     buildRoot,
     deployLock,

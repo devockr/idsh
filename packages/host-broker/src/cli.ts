@@ -27,6 +27,7 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --container <name>     The container deploy.* inspects (default dsh)
   --docker <path>        The docker client deploy.* runs (default docker)
   --git <path>           The git client deploy.build runs (default git)
+  --ip <path>            The ip client net.status runs (default: the usual locations)
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
@@ -70,6 +71,7 @@ async function main(): Promise<void> {
       container: { type: 'string' },
       docker: { type: 'string' },
       git: { type: 'string' },
+      ip: { type: 'string' },
       checkout: { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
@@ -97,6 +99,7 @@ async function main(): Promise<void> {
     ...(values.container === undefined ? {} : { container: values.container }),
     ...(values.docker === undefined ? {} : { dockerPath: values.docker }),
     ...(values.git === undefined ? {} : { gitPath: values.git }),
+    ...(values.ip === undefined ? {} : { ipPath: values.ip }),
     ...(values.checkout === undefined ? {} : { checkout: values.checkout }),
     rateLimitPerMinute: number(values['rate-limit'], 60, '--rate-limit'),
     execTimeoutMs: number(

@@ -289,6 +289,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'deploy.main',
         'deploy.rollback',
         'deploy.recreate',
+        'net.status',
         'disk.usage',
       ],
     )
@@ -1840,6 +1841,51 @@ esac
     assert.match(docker, /build --tag devockr\/idsh:dev --label idsh\.keep=1/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     assert.equal(rollback, ROLLBACK_TARGET + '\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('net.status reads the ip tables it is asked for', async () => {
+  const host = await fakeHost()
+  const ipPath = path.join(host.root, 'ip')
+  await writeFile(
+    ipPath,
+    `#!/bin/sh
+echo "ip $*"
+`,
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    ipPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const all = await connection.request({ op: 'net.status', args: {} })
+    assert.equal(all.ok, true)
+    assert.match(
+      all.result ?? '',
+      /## addr\nip -br addr\n## route\nip -br route\n## neigh\nip -br neigh/u,
+    )
+
+    const route = await connection.request({
+      op: 'net.status',
+      args: { what: 'route' },
+    })
+    assert.equal(route.ok, true)
+    assert.equal(route.result, '## route\nip -br route')
+
+    const refused = await connection.request({
+      op: 'net.status',
+      args: { what: 3 },
+    })
+    assert.equal(refused.ok, false)
+    assert.match(JSON.stringify(refused.error), /what must be a string/u)
   } finally {
     connection.close()
     await broker.close()
