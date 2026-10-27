@@ -293,6 +293,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'net.sockets',
         'broker.status',
         'broker.update',
+        'proc.list',
         'disk.usage',
       ],
     )
@@ -2415,6 +2416,48 @@ echo "$*" >> '${npmLog}'
     await assert.rejects(readFile(npmLog, 'utf8'))
     await new Promise(resolve => setTimeout(resolve, 700))
     assert.equal(stopped, 0)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('proc.list reads the process table, biggest resident set first', async () => {
+  const host = await fakeHost()
+  const procDir = path.join(host.root, 'proc')
+  await mkdir(path.join(procDir, '10'), { recursive: true })
+  await mkdir(path.join(procDir, '20'), { recursive: true })
+  await mkdir(path.join(procDir, 'not-a-pid'), { recursive: true })
+  await writeFile(
+    path.join(procDir, '10', 'stat'),
+    `10 (small) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n`,
+  )
+  await writeFile(path.join(procDir, '10', 'status'), 'VmRSS:\t  1200 kB\n')
+  await writeFile(
+    path.join(procDir, '20', 'stat'),
+    `20 (big one) R 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n`,
+  )
+  await writeFile(path.join(procDir, '20', 'status'), 'VmRSS:\t  4096 kB\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'proc.list', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const lines = (answer.result ?? '').split('\n')
+    assert.match(lines[0], /pid\s+ppid\s+s\s+rssKiB comm/u)
+    assert.match(lines[1], /^\s+20\s+1 R\s+4096 big one$/u)
+    assert.match(lines[2], /^\s+10\s+1 S\s+1200 small$/u)
+
+    const one = await connection.request({
+      op: 'proc.list',
+      args: { lines: 1 },
+    })
+    assert.equal((one.result ?? '').split('\n').length, 2)
   } finally {
     connection.close()
     await broker.close()

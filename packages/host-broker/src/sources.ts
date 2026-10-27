@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process'
 import {
   appendFile,
   chmod,
+  readdir,
   mkdir,
   mkdtemp,
   open,
@@ -411,6 +412,91 @@ async function readProc(file: ProcFile, ctx: OpContext): Promise<string> {
   } catch {
     throw new BrokerFault('unavailable', `${file} is not readable on this host`)
   }
+}
+
+/* ---------------------------------------------------------------- proc.list */
+
+/** How many processes `proc.list` returns by default, and at most. */
+const DEFAULT_PROC_LINES = 20
+const MAX_PROC_LINES = 100
+
+const PROC_PID = /^\d+$/u
+
+/** Width of the resident-set column. */
+const RSS_COLUMN = 9
+
+interface ProcEntry {
+  readonly pid: string
+  readonly ppid: number
+  readonly state: string
+  readonly rssKb: number
+  readonly comm: string
+}
+
+function parseProcStat(pid: string, stat: string): ProcEntry | undefined {
+  const open = stat.indexOf('(')
+  const close = stat.lastIndexOf(')')
+  if (open === -1 || close === -1 || close < open) {
+    return undefined
+  }
+  const comm = stat.slice(open + 1, close)
+  const fields = stat
+    .slice(close + 2)
+    .trim()
+    .split(/\s+/u)
+  return {
+    pid,
+    state: fields[0] ?? '',
+    ppid: Number(fields[1] ?? -1),
+    rssKb: 0,
+    comm,
+  }
+}
+
+function readRssKb(status: string): number {
+  const match = /^VmRSS:\s+(\d+) kB/mu.exec(status)
+  return match === null ? 0 : Number(match[1])
+}
+
+/** The process table, biggest resident set first. No environment, no argv. */
+async function procList(ctx: OpContext, lines: number): Promise<string> {
+  let names: string[]
+  try {
+    names = await readdir(ctx.procDir)
+  } catch {
+    throw new BrokerFault(
+      'unavailable',
+      'the process table is not readable on this host',
+    )
+  }
+  const entries: ProcEntry[] = []
+  for (const name of names) {
+    if (!PROC_PID.test(name)) {
+      continue
+    }
+    try {
+      const stat = await readFile(path.join(ctx.procDir, name, 'stat'), 'utf8')
+      const parsed = parseProcStat(name, stat)
+      if (parsed === undefined) {
+        continue
+      }
+      const status = await readFile(
+        path.join(ctx.procDir, name, 'status'),
+        'utf8',
+      )
+      entries.push({ ...parsed, rssKb: readRssKb(status) })
+    } catch {
+      // A process that exited while it was being read is not an error.
+    }
+  }
+  entries.sort((left, right) => right.rssKb - left.rssKb)
+  const rows = entries
+    .slice(0, lines)
+    .map(
+      entry =>
+        `${entry.pid.padStart(7)} ${String(entry.ppid).padStart(7)} ${entry.state} ${String(entry.rssKb).padStart(RSS_COLUMN)} ${entry.comm}`,
+    )
+  return ['    pid    ppid s   rssKiB comm', ...rows].join('\n')
 }
 
 /* ------------------------------------------------------------------ disk.usage */
@@ -1049,6 +1135,32 @@ export const OPS: readonly OpDefinition[] = [
         text: `updated from ${source}; the broker exits so its supervisor starts the new build`,
         after: () => ctx.stop(),
       }
+    },
+  },
+  {
+    name: 'proc.list',
+    summary:
+      'The process table: pid, parent, state, resident set and command name, biggest first.',
+    input: {
+      type: 'object',
+      properties: {
+        lines: {
+          type: 'integer',
+          description: `How many processes to return, 1 to ${String(MAX_PROC_LINES)}. Default ${String(DEFAULT_PROC_LINES)}.`,
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['lines'])
+      const lines = integer(
+        args,
+        'lines',
+        1,
+        MAX_PROC_LINES,
+        DEFAULT_PROC_LINES,
+      )
+      return procList(ctx, lines)
     },
   },
   {
