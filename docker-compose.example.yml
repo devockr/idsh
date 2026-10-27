@@ -70,11 +70,17 @@ networks:
   default:
     # Docker gives a container IPv6 addresses only when its network has an IPv6 subnet: this daemon
     # has no default IPv6 address pool (`docker info` lists none), and `enable_ipv6` alone fails
-    # with "could not find an available, non-overlapping IPv6 address pool". One explicit ULA is
-    # enough — Docker still allocates the IPv4 subnet automatically. Change the range (RFC 4193
-    # `fc00::/7`) if it collides with your LAN; the kernel's per-network `disable_ipv6` follows the
-    # network, so the image needs no change.
+    # with "could not find an available, non-overlapping IPv6 address pool". One explicit subnet is
+    # enough — Docker still allocates the IPv4 one automatically.
+    #
+    # The default is a placeholder: a ULA (RFC 4193, `fc00::/7`) is private and has nothing to do
+    # with your ISP prefix, so override `DSH_IPV6_SUBNET` in .env or your shell when it collides
+    # with a network or route on the host (check `docker network inspect` and `ip -6 route`).
+    # Nothing here matches the host's global prefix on purpose: the kernel's per-network
+    # `disable_ipv6` follows the network, so the image needs no change, and container traffic is
+    # routed/NATed by the host like any other private subnet. Remove the whole block to keep the
+    # network IPv4-only.
     enable_ipv6: true
     ipam:
       config:
-        - subnet: fd00:d5c0:0:1::/64
+        - subnet: ${DSH_IPV6_SUBNET:-fd00:d5c0:0:1::/64}
