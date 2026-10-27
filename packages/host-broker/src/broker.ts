@@ -357,7 +357,8 @@ async function answer(
     // The answer is out; the deferred work runs detached from this handler, after a pause that lets
     // the answer arrive, and whatever holds the request's lock releases when that work ends.
     setTimeout(() => {
-      void Promise.resolve(after())
+      void Promise.resolve()
+        .then(after)
         .catch(() => null)
         .finally(releaseOnce)
     }, AFTER_RESPONSE_DELAY_MS)
