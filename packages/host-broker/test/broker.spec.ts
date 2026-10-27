@@ -1796,7 +1796,7 @@ esac
     `#!/bin/sh
 echo "$*" >> '${dockerLog}'
 case "$1" in
-  inspect) echo 'sha256:previousimage' ;;
+  inspect) echo '${ROLLBACK_TARGET}' ;;
   compose) echo "$*" ;;
 esac
 `,
@@ -1839,7 +1839,7 @@ esac
     const docker = await readFile(dockerLog, 'utf8')
     assert.match(docker, /build --tag devockr\/idsh:dev --label idsh\.keep=1/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
-    assert.equal(rollback, 'sha256:previousimage\n')
+    assert.equal(rollback, ROLLBACK_TARGET + '\n')
   } finally {
     connection.close()
     await broker.close()
