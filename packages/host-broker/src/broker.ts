@@ -29,7 +29,9 @@ import {
   DEFAULT_EXEC_TIMEOUT_MS,
   DEFAULT_GIT,
   DEFAULT_IP,
+  DEFAULT_SS,
   IP_CANDIDATES,
+  SS_CANDIDATES,
   DIRECTORY_MODE,
   FILE_MODE,
   FORBIDDEN_DIRECTORY_BITS,
@@ -83,6 +85,8 @@ export interface BrokerOptions {
   readonly gitPath?: string
   /** The `ip` client `net.status` runs. Default: the first of the usual locations that exists. */
   readonly ipPath?: string
+  /** The `ss` client `net.sockets` runs. Default: the first of the usual locations that exists. */
+  readonly ssPath?: string
   /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
   readonly checkout?: string
   /** Requests per operation per minute. Default 60. */
@@ -138,6 +142,8 @@ export async function startBroker(
   const gitPath = options.gitPath ?? DEFAULTS.gitPath
   const ipPath =
     options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? DEFAULT_IP
+  const ssPath =
+    options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
   const checkout =
     options.checkout === undefined ? undefined : path.resolve(options.checkout)
   if (checkout !== undefined) {
@@ -175,6 +181,7 @@ export async function startBroker(
     dockerPath,
     gitPath,
     ipPath,
+    ssPath,
     stateDir: path.dirname(auditPath),
     buildRoot,
     deployLock,

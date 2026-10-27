@@ -46,6 +46,8 @@ export interface OpContext {
   readonly gitPath: string
   /** The `ip` client `net.status` runs. */
   readonly ipPath: string
+  /** The `ss` client `net.sockets` runs. */
+  readonly ssPath: string
   /** Where a detached operation writes its log; the audit directory. */
   readonly stateDir: string
   /** Where builds clone; unique to this broker's socket, swept at boot. */
@@ -543,6 +545,37 @@ function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now())
 }
 
+/* ---------------------------------------------------------------- net.sockets */
+
+/** The socket tables `net.sockets` can read. */
+const SOCKET_TABLES = ['listen', 'connections'] as const
+const SOCKET_WHAT = [...SOCKET_TABLES, 'all'] as const
+
+type SocketWhat = (typeof SOCKET_WHAT)[number]
+
+/** What each table renders; adding one to SOCKET_TABLES fails to type-check until it is here. */
+const SOCKET_RENDER: Record<
+  (typeof SOCKET_TABLES)[number],
+  { label: string; args: readonly string[] }
+> = {
+  listen: { label: 'listen', args: ['-tulpn'] },
+  // No -l and no -a: the non-listening TCP/UDP sockets, with their peers.
+  connections: { label: 'connections', args: ['-tunp'] },
+}
+
+async function netSockets(ctx: OpContext, what: SocketWhat): Promise<string> {
+  const sections: string[] = []
+  for (const table of SOCKET_TABLES) {
+    if (what !== 'all' && what !== table) {
+      continue
+    }
+    const { label, args } = SOCKET_RENDER[table]
+    const output = await runFixed(ctx, ctx.ssPath, args)
+    sections.push(`## ${label}`, output.trimEnd())
+  }
+  return sections.join('\n')
+}
+
 /* ---------------------------------------------------------------- net.status */
 
 /** The tables `net.status` can read; `all` means every one of them. */
@@ -834,6 +867,28 @@ export const OPS: readonly OpDefinition[] = [
       const what: NetWhat =
         args['what'] === undefined ? 'all' : choice(args, 'what', NET_WHAT)
       return netStatus(ctx, what)
+    },
+  },
+  {
+    name: 'net.sockets',
+    summary: "The host's listening sockets and connections, read with ss.",
+    input: {
+      type: 'object',
+      properties: {
+        what: {
+          type: 'string',
+          enum: [...SOCKET_WHAT],
+          description:
+            'Which table to read: listen, connections, or all (the default).',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['what'])
+      const what: SocketWhat =
+        args['what'] === undefined ? 'all' : choice(args, 'what', SOCKET_WHAT)
+      return netSockets(ctx, what)
     },
   },
   {
