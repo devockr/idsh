@@ -9,6 +9,6 @@ empty, non-image or multi-line target is refused before anything is queued (the 
 written to `compose.log` and stops the compose.
 
 Builds, recreates and rollbacks now share one deployment lock: a build cannot retag `:dev` while a
-recreate's compose is starting, and a rollback's tag cannot land under a running build. A queued
-operation waits at most two seconds for the lock and then answers `unavailable`; one whose answer
-times out is stopped, so it cannot finish its work behind the answer.
+recreate's compose is starting, and a rollback's tag cannot land under a running build. An operation that
+finds another deployment running answers `unavailable` (stop it or wait, then run again) instead of
+queueing; one whose answer times out is stopped, so it cannot finish its work behind the answer.

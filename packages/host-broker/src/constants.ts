@@ -54,9 +54,6 @@ export const DEFAULT_GIT = 'git'
 /** Characters of the socket hash that name a build root: enough to keep two sockets apart. */
 export const BUILD_KEY_CHARS = 16
 
-/** How long a serial operation waits for the deployment lock; the work budget starts after. */
-export const DEPLOY_ACQUIRE_MS = 2000
-
 /** A compose that never returns must not hold the deployment lock forever. */
 export const COMPOSE_TIMEOUT_MS = 15 * 60_000
 

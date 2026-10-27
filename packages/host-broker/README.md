@@ -95,9 +95,9 @@ to escape, nothing that can backtrack.
 - **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`, and
   its process group is stopped with it, so whatever it started goes too. An operation may publish a
   longer `timeoutMs` (the build takes up to 15 minutes), and the plugin then waits that long. A
-  serialized operation waits at most two seconds for the deployment lock and then gets its own
-  budget counted from admission; when the answer's deadline passes, the request's signal stops the
-  program it started, so nothing retags an image behind a failed answer.
+  serialized operation that finds another deployment running answers `unavailable` — stop it or wait
+  for it, then run the operation again; nothing queues. When the answer's deadline passes, the
+  request's signal stops the program it started, so nothing retags an image behind a failed answer.
 - **Buffer**: one program may write 1 MiB. Past that a tail operation keeps the last 1 MiB (the
   oldest bytes are dropped) and a head operation the first 1 MiB (the newest are), then the answer
   cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.

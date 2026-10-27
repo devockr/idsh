@@ -26,7 +26,6 @@ import {
   DEFAULT_DOCKER,
   DEFAULT_EXEC_TIMEOUT_MS,
   DEFAULT_GIT,
-  DEPLOY_ACQUIRE_MS,
   DIRECTORY_MODE,
   FILE_MODE,
   FORBIDDEN_DIRECTORY_BITS,
@@ -389,13 +388,7 @@ async function answer(
     args = request.args
     const definition = findOp(request.op)
     const budget = definition?.timeoutMs ?? context.execTimeoutMs
-    // The wait for the lock is bounded on its own: a granted operation gets its whole work budget,
-    // counted from the moment it is admitted.
-    const deployment = await acquireDeployment(
-      context,
-      definition,
-      DEPLOY_ACQUIRE_MS,
-    )
+    const deployment = acquireDeployment(context, definition)
     if (deployment.fault !== undefined) {
       await finish(faultAnswer(deployment.fault, requestId), {
         bytes: 0,
@@ -513,27 +506,26 @@ function faultAnswer(
 }
 
 /**
- * Take the deployment lock when the operation asks for it. A waiter that cannot get in within the
- * acquisition budget answers with the fault instead of queueing indefinitely.
+ * Take the deployment lock when the operation asks for it. There is no queue: a deployment that
+ * finds another one running answers with the fault, and its caller retries.
  */
-async function acquireDeployment(
+function acquireDeployment(
   context: OpContext,
   definition: OpDefinition | undefined,
-  budget: number,
-): Promise<{ release?: () => void; fault?: BrokerFault }> {
+): { release?: () => void; fault?: BrokerFault } {
   if (definition?.serial !== true) {
     return {}
   }
-  try {
-    return { release: await context.deployLock.acquire(budget) }
-  } catch (error) {
-    if (error instanceof BrokerFault) {
-      return { fault: error }
+  const release = context.deployLock.tryAcquire()
+  if (release === undefined) {
+    return {
+      fault: new BrokerFault(
+        'unavailable',
+        'a deployment is in progress; stop it (or wait for it to finish), then run this again',
+      ),
     }
-    const message =
-      error instanceof Error ? error.message : 'the operation failed'
-    return { fault: new BrokerFault('internal', message) }
   }
+  return { release }
 }
 
 function runOp(

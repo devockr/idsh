@@ -1419,7 +1419,7 @@ void test('deploy.rollback refuses a rollback file with more than one line', asy
   }
 })
 
-void test('a build and a rollback do not interleave', async () => {
+void test('a deployment in progress refuses a rollback until it finishes', async () => {
   const host = await fakeHost()
   const dockerLog = path.join(host.root, 'docker.log')
   const dockerPath = path.join(host.root, 'docker')
@@ -1439,8 +1439,8 @@ esac
     `#!/bin/sh
 echo "$*" >> '${dockerLog}'
 case "$1" in
-  run) sleep 0.4 ;;
-  *inspect*) echo '${ROLLBACK_TARGET}' ;;
+  run) sleep 0.8 ;;
+  inspect) echo '${ROLLBACK_TARGET}' ;;
 esac
 `,
     { mode: 0o755 },
@@ -1465,22 +1465,27 @@ esac
       args: { sha: 'aaaaaaaa' },
     })
     await new Promise(resolve => setTimeout(resolve, 100))
-    const rollback = rolling.request({ op: 'deploy.rollback', args: {} })
-    const [built, rolled] = await Promise.all([build, rollback])
+    const refused = await rolling.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(refused.ok, false)
+    assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
+    const built = await build
     assert.equal(built.ok, true, JSON.stringify(built.error))
-    assert.equal(rolled.ok, true, JSON.stringify(rolled.error))
+    const again = await rolling.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(again.ok, true, JSON.stringify(again.error))
     let log = ''
     for (let attempt = 0; attempt < 60; attempt += 1) {
       log = await readFile(dockerLog, 'utf8')
-      if (log.includes('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev')) {
+      if (log.includes('tag ' + ROLLBACK_TARGET)) {
         break
       }
       await new Promise(resolve => setTimeout(resolve, 100))
     }
-    const buildAt = log.indexOf('build --tag devockr/idsh:dev')
-    const tagAt = log.indexOf('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev')
-    assert.ok(buildAt !== -1 && tagAt !== -1)
-    assert.ok(buildAt < tagAt, 'the build finished before the rollback tagged')
+    assert.ok(log.includes('tag ' + ROLLBACK_TARGET))
+    assert.ok(
+      log.indexOf('build --tag devockr/idsh:dev') <
+        log.indexOf('tag ' + ROLLBACK_TARGET),
+      'the build finished before the retried rollback tagged',
+    )
   } finally {
     building.close()
     rolling.close()
@@ -1627,7 +1632,7 @@ esac
   }
 })
 
-void test('a rollback answered before a build still tags and composes first', async () => {
+void test('a rollback in flight refuses a build until its work is done', async () => {
   const host = await fakeHost()
   const dockerLog = path.join(host.root, 'docker.log')
   const dockerPath = path.join(host.root, 'docker')
@@ -1669,28 +1674,25 @@ esac
   try {
     const rolled = await rolling.request({ op: 'deploy.rollback', args: {} })
     assert.equal(rolled.ok, true, JSON.stringify(rolled.error))
-    // The answer is out; the deferred tag and compose are still the lock's business.
+    // The deferred tag and compose are still running: a build must be refused, not queued.
+    const refused = await building.request({
+      op: 'deploy.build',
+      args: { sha: 'aaaaaaaa' },
+    })
+    assert.equal(refused.ok, false)
+    assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
+    await new Promise(resolve => setTimeout(resolve, 1200))
     const built = await building.request({
       op: 'deploy.build',
       args: { sha: 'aaaaaaaa' },
     })
     assert.equal(built.ok, true, JSON.stringify(built.error))
-    let log = ''
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      log = await readFile(dockerLog, 'utf8')
-      if (log.includes('build --tag devockr/idsh:dev')) {
-        break
-      }
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
-    const tagAt = log.indexOf('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev')
-    const composeAt = log.indexOf('compose -f docker-compose.yml')
-    const buildAt = log.indexOf('build --tag devockr/idsh:dev')
-    assert.ok(tagAt !== -1 && composeAt !== -1 && buildAt !== -1, log)
-    assert.ok(tagAt < buildAt, 'the rollback tagged before the build rebuilt')
+    const log = await readFile(dockerLog, 'utf8')
+    assert.ok(log.includes('tag ' + ROLLBACK_TARGET))
     assert.ok(
-      composeAt < buildAt,
-      'the rollback composed before the build rebuilt',
+      log.indexOf('tag ' + ROLLBACK_TARGET) <
+        log.indexOf('build --tag devockr/idsh:dev'),
+      'the rollback tagged before the retried build rebuilt',
     )
   } finally {
     rolling.close()
