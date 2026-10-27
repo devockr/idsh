@@ -19,3 +19,16 @@ services:
       # public npmmirror of the same builds — the host NPM_REGISTRY already defaults to in both
       # Dockerfiles. Point it elsewhere, or drop the line, if you prefer.
       - PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}
+
+networks:
+  default:
+    # Docker gives a container IPv6 addresses only when its network has an IPv6 subnet, and the
+    # kernel's per-network `disable_ipv6` follows that — so this is the switch, not the image.
+    # Both subnets are explicit: naming any ipam config also turns off Docker's automatic IPv4
+    # allocation, and an IPv4-less container would be unreachable through the published port.
+    # The ULA is a private range (RFC 4193); change it if it collides with your LAN.
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+        - subnet: fd00:d5c0:0:1::/64
