@@ -1700,3 +1700,66 @@ esac
     await broker.close()
   }
 })
+
+void test('a lost answer leaves one audit line and the work still runs', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+echo "$*"
+case "$1" in
+  image) sleep 0.3 ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const socket = net.connect(host.socketPath)
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', () => resolve())
+      socket.once('error', reject)
+    })
+    socket.write(JSON.stringify({ op: 'deploy.rollback', args: {} }) + '\n')
+    // The broker is inside the read-only inspect; the caller goes away before the answer.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    socket.destroy()
+    const logPath = path.join(host.root, 'compose.log')
+    let composed = false
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      const log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('up -d --no-build')) {
+        composed = true
+        break
+      }
+    }
+    assert.ok(composed, 'the deferred compose still runs')
+    const auditText = await readFile(host.auditPath, 'utf8')
+    const audit = auditText
+      .trim()
+      .split('\n')
+      .filter(line => line !== '')
+    assert.equal(audit.length, 1, audit.join('\n'))
+    assert.match(audit[0] ?? '', /"op":"deploy\.rollback"/u)
+    assert.match(audit[0] ?? '', /"ok":true/u)
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(docker, new RegExp('tag ' + ROLLBACK_TARGET, 'u'))
+  } finally {
+    socket.destroy()
+    await broker.close()
+  }
+})
