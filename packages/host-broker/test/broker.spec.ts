@@ -2382,3 +2382,41 @@ echo "$*" >> '${npmLog}'
     await broker.close()
   }
 })
+
+void test('broker.update refuses an entry it cannot place in a prefix', async () => {
+  const host = await fakeHost()
+  const npmLog = path.join(host.root, 'npm.log')
+  const npmPath = path.join(host.root, 'npm')
+  await writeFile(
+    npmPath,
+    `#!/bin/sh
+echo "$*" >> '${npmLog}'
+`,
+    { mode: 0o755 },
+  )
+  let stopped = 0
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    npmPath,
+    // Neither <prefix>/bin/ nor <prefix>/lib/node_modules/: no prefix to install into.
+    entryPath: path.join(host.root, 'opt', 'odd', 'cli.js'),
+    stop: () => {
+      stopped += 1
+    },
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /cannot tell which npm prefix/u)
+    await assert.rejects(readFile(npmLog, 'utf8'))
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(stopped, 0)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
