@@ -824,15 +824,12 @@ interface BuildSource {
   readonly label: string
 }
 
-function findMain(heads: Array<{ sha: string; ref: string }>): {
-  sha: string
-  ref: string
-} {
+function findMain(heads: Array<{ sha: string; ref: string }>): string {
   const main = heads.find(entry => entry.ref === 'refs/heads/main')
   if (main === undefined) {
     throw new BrokerFault('unavailable', 'origin has no main branch')
   }
-  return main
+  return main.sha
 }
 
 function parseLsRemote(text: string): Array<{ sha: string; ref: string }> {
@@ -895,7 +892,7 @@ async function resolveBuildSource(
         `the head of PR ${String(pr)} is not on an origin branch; fork PRs are not deployable`,
       )
     }
-    return { sha: resolved, mainSha: main.sha, label: `PR #${String(pr)}` }
+    return { sha: resolved, mainSha: main, label: `PR #${String(pr)}` }
   }
   if (typeof sha !== 'string' || !SHA_PATTERN.test(sha)) {
     throw new BrokerFault('bad-argument', 'sha must be a hex commit id')
@@ -920,7 +917,7 @@ async function resolveBuildSource(
       `sha ${sha} matches more than one origin branch`,
     )
   }
-  return { sha: matches[0], mainSha: main.sha, label: `sha ${sha}` }
+  return { sha: matches[0], mainSha: main, label: `sha ${sha}` }
 }
 
 /** The tip of main, resolved like any other source. */
@@ -932,7 +929,7 @@ async function resolveMainSource(
   const main = findMain(
     parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline)),
   )
-  return { sha: main.sha, mainSha: main.sha, label: 'main' }
+  return { sha: main, mainSha: main, label: 'main' }
 }
 
 /** Prepare, build and clean up; returns the image the container ran before. */
