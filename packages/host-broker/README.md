@@ -39,6 +39,9 @@ loginctl enable-linger "$USER" # keep it running without a login session
 A system unit would default to root, which changes both whose files it reads and who may open the
 socket; do not use one. The unit's user also needs to reach the docker daemon, and the broker runs
 `docker` from `PATH` — on DSM that is `/usr/local/bin/docker`, so pass `--docker /usr/local/bin/docker`.
+`net.status` looks for `ip` in the places a deployment installs it (`/usr/bin/ip`, `/usr/sbin/ip`,
+`/sbin/ip`, `/bin/ip`) and falls back to `ip` through `PATH`; a user unit's `PATH` need not carry
+`/usr/sbin`, so `--ip /usr/sbin/ip` is the override.
 
 A directory the broker creates is `0700` and the socket is chmodded `0600`, so only the uid running
 the broker can open it. An existing directory is not narrowed — the read-only fallback in
@@ -74,7 +77,7 @@ request.
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                     |
 | `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                              |
-| `net.status`      | the host's addresses, routes and neighbours, read with `ip`                                                                                       |
+| `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route`, `neigh` or `all` (the default)                         |
 | `disk.usage`      | `df -h`                                                                                                                                           |
 | `deploy.status`   | the deployment container: image, creation time and state                                                                                          |
 | `deploy.log`      | the tail of the deployment container log                                                                                                          |

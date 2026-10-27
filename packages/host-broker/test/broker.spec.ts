@@ -1880,12 +1880,21 @@ echo "ip $*"
     assert.equal(route.ok, true)
     assert.equal(route.result, '## route\nip -br route')
 
-    const refused = await connection.request({
+    // An unknown string must not widen to "all": the published enum is the contract.
+    const unknown = await connection.request({
+      op: 'net.status',
+      args: { what: 'routes' },
+    })
+    assert.equal(unknown.ok, false)
+    assert.equal(unknown.error?.code, 'bad-argument')
+    assert.match(JSON.stringify(unknown.error), /what must be one of/u)
+
+    const notString = await connection.request({
       op: 'net.status',
       args: { what: 3 },
     })
-    assert.equal(refused.ok, false)
-    assert.match(JSON.stringify(refused.error), /what must be a string/u)
+    assert.equal(notString.ok, false)
+    assert.equal(notString.error?.code, 'bad-argument')
   } finally {
     connection.close()
     await broker.close()

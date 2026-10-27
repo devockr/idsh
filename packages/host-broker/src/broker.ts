@@ -28,6 +28,7 @@ import {
   DEFAULT_DOCKER,
   DEFAULT_EXEC_TIMEOUT_MS,
   DEFAULT_GIT,
+  DEFAULT_IP,
   IP_CANDIDATES,
   DIRECTORY_MODE,
   FILE_MODE,
@@ -135,7 +136,8 @@ export async function startBroker(
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const gitPath = options.gitPath ?? DEFAULTS.gitPath
-  const ipPath = options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? 'ip'
+  const ipPath =
+    options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? DEFAULT_IP
   const checkout =
     options.checkout === undefined ? undefined : path.resolve(options.checkout)
   if (checkout !== undefined) {

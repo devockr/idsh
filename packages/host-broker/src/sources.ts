@@ -545,18 +545,17 @@ function remaining(deadline: number): number {
 
 /* ---------------------------------------------------------------- net.status */
 
-/** The `ip` sub-commands `net.status` can read. */
-const NET_WHAT = ['addr', 'route', 'neigh', 'all'] as const
+/** The tables `net.status` can read; `all` means every one of them. */
+const NET_TABLES = ['addr', 'route', 'neigh'] as const
+const NET_WHAT = [...NET_TABLES, 'all'] as const
 
 type NetWhat = (typeof NET_WHAT)[number]
 
 async function netStatus(ctx: OpContext, what: NetWhat): Promise<string> {
-  const parts = what === 'all' ? ['addr', 'route', 'neigh'] : [what]
+  const parts = what === 'all' ? NET_TABLES : [what]
   const sections: string[] = []
   for (const part of parts) {
-    const table = await runFixed(ctx, ctx.ipPath, ['-br', part], {
-      keep: 'head',
-    })
+    const table = await runFixed(ctx, ctx.ipPath, ['-br', part])
     sections.push(`## ${part}`, table.trimEnd())
   }
   return sections.join('\n')
@@ -812,15 +811,9 @@ export const OPS: readonly OpDefinition[] = [
     },
     async run(args, ctx) {
       rejectUnknown(args, ['what'])
-      const asked = args['what']
+      // Asked for nothing means all of them; anything else must name one of the tables.
       const what: NetWhat =
-        typeof asked === 'string' &&
-        (NET_WHAT as readonly string[]).includes(asked)
-          ? (asked as NetWhat)
-          : 'all'
-      if (asked !== undefined && typeof asked !== 'string') {
-        throw new BrokerFault('bad-argument', 'what must be a string')
-      }
+        args['what'] === undefined ? 'all' : choice(args, 'what', NET_WHAT)
       return netStatus(ctx, what)
     },
   },
