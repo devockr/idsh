@@ -11,6 +11,9 @@ import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
 
+/** The option that approves a destructive operation; typed exactly, it counts too. */
+const CONFIRM_OPTION = 'Run'
+
 export const name = '@idsh/host-ops'
 export const inject = ['tools', 'userQuestions']
 
@@ -268,7 +271,7 @@ async function confirmed(
         header: 'Host operation',
         question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}`,
         options: [
-          { label: 'Run', description: op.summary },
+          { label: CONFIRM_OPTION, description: op.summary },
           { label: 'Cancel' },
         ],
       },
@@ -278,5 +281,13 @@ async function confirmed(
     ...(exec.callId === undefined ? {} : { wait: { callId: exec.callId } }),
   })
   const item = answer.answers.find(entry => entry.id === 'confirm')
-  return item?.selected.includes('Run') === true
+  if (item === undefined) {
+    return false
+  }
+  // The card has a Run option, but a UI may accept free text instead; typing the option's own
+  // word is as explicit as clicking it, and anything else is a refusal.
+  return (
+    item.selected.includes(CONFIRM_OPTION) ||
+    item.custom?.trim().toLowerCase() === CONFIRM_OPTION.toLowerCase()
+  )
 }

@@ -29,7 +29,10 @@ const TABLE = [
   },
 ]
 
-function context(selected: readonly string[] = ['Run']): {
+function context(
+  selected: readonly string[] = ['Run'],
+  custom?: string,
+): {
   ctx: HostContext
   tools: HostTool[]
   warnings: string[]
@@ -57,7 +60,15 @@ function context(selected: readonly string[] = ['Run']): {
       userQuestions: {
         ask: (request: Record<string, unknown>) => {
           asks.push(request)
-          return Promise.resolve({ answers: [{ id: 'confirm', selected }] })
+          return Promise.resolve({
+            answers: [
+              {
+                id: 'confirm',
+                selected,
+                ...(custom === undefined ? {} : { custom }),
+              },
+            ],
+          })
         },
       },
     },
@@ -314,5 +325,48 @@ void test('execute passes the operation timeout to the caller', async () => {
     assert.equal(calls[0]?.timeoutMs, 5200)
   } finally {
     await broker.close()
+  }
+})
+
+void test('a typed answer confirms only when it names the Run option', async () => {
+  const table = [
+    {
+      name: 'deploy.recreate',
+      summary: 'Recreate.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const refused = JSON.stringify({
+    ok: false,
+    error: { code: 'unavailable', message: 'stub says no' },
+  })
+
+  for (const [custom, expected] of [
+    ['Run', true],
+    ['  run ', true],
+    ['yes', false],
+    ['', false],
+  ] as const) {
+    const { ctx, tools } = context([], custom)
+    const broker = await fakeBroker(request =>
+      request.op === 'ops.describe' ? `${describe}\n` : `${refused}\n`,
+    )
+    try {
+      await registerTools(ctx, { socketPath: broker.socketPath })
+      const execution = tools[0].execute(
+        {},
+        { signal: new AbortController().signal },
+      )
+      if (expected) {
+        // Past the gate: the broker's own refusal is what comes back, not "not confirmed".
+        await assert.rejects(execution, /stub says no/u)
+      } else {
+        await assert.rejects(execution, /not confirmed/u)
+      }
+    } finally {
+      await broker.close()
+    }
   }
 })
