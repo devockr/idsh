@@ -54,6 +54,17 @@ export const DEFAULT_GIT = 'git'
 /** The fallback when none of the usual locations has `ip`. */
 export const DEFAULT_IP = 'ip'
 
+/** Where `ss` usually lives; the broker takes the first that exists. */
+export const SS_CANDIDATES = [
+  '/usr/bin/ss',
+  '/usr/sbin/ss',
+  '/sbin/ss',
+  '/bin/ss',
+] as const
+
+/** The fallback when none of the usual locations has `ss`. */
+export const DEFAULT_SS = 'ss'
+
 /** Where `ip` usually lives; the broker takes the first that exists. */
 export const IP_CANDIDATES = [
   '/usr/bin/ip',

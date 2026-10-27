@@ -290,6 +290,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'deploy.rollback',
         'deploy.recreate',
         'net.status',
+        'net.sockets',
         'disk.usage',
       ],
     )
@@ -1898,6 +1899,50 @@ echo "ip $*"
     })
     assert.equal(notString.ok, false)
     assert.equal(notString.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('net.sockets reads the ss tables it is asked for', async () => {
+  const host = await fakeHost()
+  const ssPath = path.join(host.root, 'ss')
+  await writeFile(
+    ssPath,
+    `#!/bin/sh
+echo "ss $*"
+`,
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    ssPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const all = await connection.request({ op: 'net.sockets', args: {} })
+    assert.equal(all.ok, true)
+    assert.match(
+      all.result ?? '',
+      /## listen\nss -tulpn\n## connections\nss -tunp/u,
+    )
+
+    const listen = await connection.request({
+      op: 'net.sockets',
+      args: { what: 'listen' },
+    })
+    assert.equal(listen.result, '## listen\nss -tulpn')
+
+    const refused = await connection.request({
+      op: 'net.sockets',
+      args: { what: 'sockets' },
+    })
+    assert.equal(refused.ok, false)
+    assert.equal(refused.error?.code, 'bad-argument')
   } finally {
     connection.close()
     await broker.close()

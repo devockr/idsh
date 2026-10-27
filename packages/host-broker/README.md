@@ -41,7 +41,8 @@ socket; do not use one. The unit's user also needs to reach the docker daemon, a
 `docker` from `PATH` — on DSM that is `/usr/local/bin/docker`, so pass `--docker /usr/local/bin/docker`.
 `net.status` looks for `ip` in the places a deployment installs it (`/usr/bin/ip`, `/usr/sbin/ip`,
 `/sbin/ip`, `/bin/ip`) and falls back to `ip` through `PATH`; a user unit's `PATH` need not carry
-`/usr/sbin`, so `--ip /usr/sbin/ip` is the override.
+`/usr/sbin`, so `--ip /usr/sbin/ip` is the override. `net.sockets` does the same for `ss`
+(`--ss`).
 
 A directory the broker creates is `0700` and the socket is chmodded `0600`, so only the uid running
 the broker can open it. An existing directory is not narrowed — the read-only fallback in
@@ -78,6 +79,7 @@ request.
 | `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                     |
 | `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                              |
 | `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route` (IPv4 and IPv6), `neigh` or `all`                       |
+| `net.sockets`     | the host's listening sockets and connections, read with `ss`; `what` picks `listen`, `connections` or `all` (the default)                         |
 | `disk.usage`      | `df -h`                                                                                                                                           |
 | `deploy.status`   | the deployment container: image, creation time and state                                                                                          |
 | `deploy.log`      | the tail of the deployment container log                                                                                                          |
