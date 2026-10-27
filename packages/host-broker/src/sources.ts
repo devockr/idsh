@@ -1054,10 +1054,12 @@ async function buildImage(
       { timeoutMs: remaining(deadline), logPath },
     )
   } catch (error) {
-    // A killed client does not stop its container: remove the one this run started.
+    // A killed client does not stop its container: remove the one this run started, with a context
+    // that is not the aborted one (that would cancel the cleanup too).
     const cid = await readFile(cidFile, 'utf8').catch(() => null)
     if (cid !== null && cid.trim() !== '') {
-      await docker(ctx, ['rm', '--force', cid.trim()]).catch(() => null)
+      const cleanup = { ...ctx, signal: undefined }
+      await docker(cleanup, ['rm', '--force', cid.trim()]).catch(() => null)
     }
     throw error
   }

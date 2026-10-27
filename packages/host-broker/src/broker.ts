@@ -310,12 +310,23 @@ async function answer(
   let op = '?'
   let requestId: string | undefined
   let args: Record<string, unknown> = {}
+  let release: (() => void) | undefined
+  let released = false
+  // One release for the whole request: the handler releases when nothing is deferred, the deferred
+  // work's own chain releases when it is.
+  const releaseOnce = (): void => {
+    if (released) {
+      return
+    }
+    released = true
+    release?.()
+  }
 
   const finish = async (
     response: BrokerResponse,
     outcome: { bytes: number; truncated: boolean; error?: string },
     after?: () => Promise<void> | void,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     try {
       await appendAudit(auditPath, {
         time: new Date(started).toISOString(),
@@ -337,17 +348,20 @@ async function answer(
           message: 'the audit log could not be written',
         },
       })
-      return
+      return false
     }
     await send(response)
-    if (after !== undefined) {
-      // The caller's container may be replaced by this work, so give the answer time to arrive.
-      await new Promise(resolve => {
-        setTimeout(resolve, AFTER_RESPONSE_DELAY_MS)
-      })
-      // A failed deferred step is recorded in its own log; the answer has already gone out.
-      await Promise.resolve(after()).catch(() => null)
+    if (after === undefined) {
+      return false
     }
+    // The answer is out; the deferred work runs detached from this handler, after a pause that lets
+    // the answer arrive, and whatever holds the request's lock releases when that work ends.
+    setTimeout(() => {
+      void Promise.resolve(after())
+        .catch(() => null)
+        .finally(releaseOnce)
+    }, AFTER_RESPONSE_DELAY_MS)
+    return true
   }
 
   try {
@@ -375,7 +389,8 @@ async function answer(
     const deadline = Date.now() + budget
     const controller = new AbortController()
     const requestContext = { ...context, signal: controller.signal }
-    const release = deployment.release
+    release = deployment.release
+    let deferred = false
     try {
       const execution = await execute(
         request,
@@ -385,7 +400,7 @@ async function answer(
         deadline,
         controller,
       )
-      await finish(
+      deferred = await finish(
         {
           ...(requestId === undefined ? {} : { id: requestId }),
           ok: true,
@@ -399,9 +414,11 @@ async function answer(
         execution.after,
       )
     } finally {
-      // The lock spans the deferred work too: `finish` awaits `after`, and a timed-out operation
-      // is stopped by its signal, not left running past this release.
-      release?.()
+      // When the answer carries deferred work, that work's chain releases the lock; otherwise this
+      // request is done as soon as its answer is written.
+      if (!deferred) {
+        releaseOnce()
+      }
     }
   } catch (error) {
     let fault: BrokerFault
