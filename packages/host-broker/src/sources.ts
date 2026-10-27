@@ -550,28 +550,32 @@ const NET_TABLES = ['addr', 'route', 'neigh'] as const
 const NET_WHAT = [...NET_TABLES, 'all'] as const
 
 type NetWhat = (typeof NET_WHAT)[number]
+type NetTable = (typeof NET_TABLES)[number]
+
+/** What each table renders. Adding a table to NET_TABLES fails to type-check until it is here. */
+const NET_RENDER: Record<
+  NetTable,
+  ReadonlyArray<{ label: string; args: readonly string[] }>
+> = {
+  addr: [{ label: 'addr', args: ['-br', 'addr'] }],
+  route: [
+    // `ip route` alone is IPv4: a dual-stack LAN needs both tables, labelled.
+    { label: 'route (ipv4)', args: ['-4', '-br', 'route'] },
+    { label: 'route (ipv6)', args: ['-6', '-br', 'route'] },
+  ],
+  neigh: [{ label: 'neigh', args: ['-br', 'neigh'] }],
+}
 
 async function netStatus(ctx: OpContext, what: NetWhat): Promise<string> {
   const sections: string[] = []
-  const render = async (
-    label: string,
-    args: readonly string[],
-  ): Promise<void> => {
-    const table = await runFixed(ctx, ctx.ipPath, args)
-    sections.push(`## ${label}`, table.trimEnd())
-  }
-  const wants = (table: (typeof NET_TABLES)[number]): boolean =>
-    what === 'all' || what === table
-  if (wants('addr')) {
-    await render('addr', ['-br', 'addr'])
-  }
-  if (wants('route')) {
-    // `ip route` alone is IPv4: a dual-stack LAN needs both tables, labelled.
-    await render('route (ipv4)', ['-4', '-br', 'route'])
-    await render('route (ipv6)', ['-6', '-br', 'route'])
-  }
-  if (wants('neigh')) {
-    await render('neigh', ['-br', 'neigh'])
+  for (const table of NET_TABLES) {
+    if (what !== 'all' && what !== table) {
+      continue
+    }
+    for (const section of NET_RENDER[table]) {
+      const output = await runFixed(ctx, ctx.ipPath, section.args)
+      sections.push(`## ${section.label}`, output.trimEnd())
+    }
   }
   return sections.join('\n')
 }
