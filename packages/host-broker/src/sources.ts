@@ -44,6 +44,8 @@ export interface OpContext {
   readonly checkout?: string
   /** The git client. Default `git`, resolved through the host's PATH. */
   readonly gitPath: string
+  /** The `ip` client `net.status` runs. */
+  readonly ipPath: string
   /** Where a detached operation writes its log; the audit directory. */
   readonly stateDir: string
   /** Where builds clone; unique to this broker's socket, swept at boot. */
@@ -541,6 +543,43 @@ function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now())
 }
 
+/* ---------------------------------------------------------------- net.status */
+
+/** The tables `net.status` can read; `all` means every one of them. */
+const NET_TABLES = ['addr', 'route', 'neigh'] as const
+const NET_WHAT = [...NET_TABLES, 'all'] as const
+
+type NetWhat = (typeof NET_WHAT)[number]
+type NetTable = (typeof NET_TABLES)[number]
+
+/** What each table renders. Adding a table to NET_TABLES fails to type-check until it is here. */
+const NET_RENDER: Record<
+  NetTable,
+  ReadonlyArray<{ label: string; args: readonly string[] }>
+> = {
+  addr: [{ label: 'addr', args: ['-br', 'addr'] }],
+  route: [
+    // `ip route` alone is IPv4: a dual-stack LAN needs both tables, labelled.
+    { label: 'route (ipv4)', args: ['-4', '-br', 'route'] },
+    { label: 'route (ipv6)', args: ['-6', '-br', 'route'] },
+  ],
+  neigh: [{ label: 'neigh', args: ['-br', 'neigh'] }],
+}
+
+async function netStatus(ctx: OpContext, what: NetWhat): Promise<string> {
+  const sections: string[] = []
+  for (const table of NET_TABLES) {
+    if (what !== 'all' && what !== table) {
+      continue
+    }
+    for (const section of NET_RENDER[table]) {
+      const output = await runFixed(ctx, ctx.ipPath, section.args)
+      sections.push(`## ${section.label}`, output.trimEnd())
+    }
+  }
+  return sections.join('\n')
+}
+
 /* ---------------------------------------------------------------- deploy.rollback */
 
 /** The image recorded before the last build; a build that never ran leaves no target. */
@@ -772,6 +811,29 @@ export const OPS: readonly OpDefinition[] = [
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
       })
+    },
+  },
+  {
+    name: 'net.status',
+    summary: "The host's addresses, routes and neighbours, read with ip.",
+    input: {
+      type: 'object',
+      properties: {
+        what: {
+          type: 'string',
+          enum: [...NET_WHAT],
+          description:
+            'Which table to read: addr, route, neigh, or all (the default).',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['what'])
+      // Asked for nothing means all of them; anything else must name one of the tables.
+      const what: NetWhat =
+        args['what'] === undefined ? 'all' : choice(args, 'what', NET_WHAT)
+      return netStatus(ctx, what)
     },
   },
   {

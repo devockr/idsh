@@ -289,6 +289,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'deploy.main',
         'deploy.rollback',
         'deploy.recreate',
+        'net.status',
         'disk.usage',
       ],
     )
@@ -1840,6 +1841,63 @@ esac
     assert.match(docker, /build --tag devockr\/idsh:dev --label idsh\.keep=1/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     assert.equal(rollback, ROLLBACK_TARGET + '\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('net.status reads the ip tables it is asked for', async () => {
+  const host = await fakeHost()
+  const ipPath = path.join(host.root, 'ip')
+  await writeFile(
+    ipPath,
+    `#!/bin/sh
+echo "ip $*"
+`,
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    ipPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const all = await connection.request({ op: 'net.status', args: {} })
+    assert.equal(all.ok, true)
+    assert.match(
+      all.result ?? '',
+      /## addr\nip -br addr\n## route \(ipv4\)\nip -4 -br route\n## route \(ipv6\)\nip -6 -br route\n## neigh\nip -br neigh/u,
+    )
+
+    const route = await connection.request({
+      op: 'net.status',
+      args: { what: 'route' },
+    })
+    assert.equal(route.ok, true)
+    assert.equal(
+      route.result,
+      '## route (ipv4)\nip -4 -br route\n## route (ipv6)\nip -6 -br route',
+    )
+
+    // An unknown string must not widen to "all": the published enum is the contract.
+    const unknown = await connection.request({
+      op: 'net.status',
+      args: { what: 'routes' },
+    })
+    assert.equal(unknown.ok, false)
+    assert.equal(unknown.error?.code, 'bad-argument')
+    assert.match(JSON.stringify(unknown.error), /what must be one of/u)
+
+    const notString = await connection.request({
+      op: 'net.status',
+      args: { what: 3 },
+    })
+    assert.equal(notString.ok, false)
+    assert.equal(notString.error?.code, 'bad-argument')
   } finally {
     connection.close()
     await broker.close()

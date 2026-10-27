@@ -51,6 +51,17 @@ export const DEFAULT_DOCKER = 'docker'
 /** The git client, unless the host says otherwise. */
 export const DEFAULT_GIT = 'git'
 
+/** The fallback when none of the usual locations has `ip`. */
+export const DEFAULT_IP = 'ip'
+
+/** Where `ip` usually lives; the broker takes the first that exists. */
+export const IP_CANDIDATES = [
+  '/usr/bin/ip',
+  '/usr/sbin/ip',
+  '/sbin/ip',
+  '/bin/ip',
+] as const
+
 /** Characters of the socket hash that name a build root: enough to keep two sockets apart. */
 export const BUILD_KEY_CHARS = 16
 
