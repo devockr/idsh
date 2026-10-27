@@ -279,7 +279,7 @@ async function confirmed(
       {
         id: 'confirm',
         header: 'Host operation',
-        question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}`,
+        question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}\n\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
         options: [
           { label: CONFIRM_OPTION, description: op.summary },
           { label: 'Cancel' },
