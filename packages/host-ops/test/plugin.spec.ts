@@ -359,12 +359,11 @@ void test('a typed answer confirms only when it names the Run option', async () 
         {},
         { signal: new AbortController().signal },
       )
-      if (expected) {
-        // Past the gate: the broker's own refusal is what comes back, not "not confirmed".
-        await assert.rejects(execution, /stub says no/u)
-      } else {
-        await assert.rejects(execution, /not confirmed/u)
-      }
+      // Past the gate the broker's own refusal comes back; before it, "not confirmed".
+      await assert.rejects(
+        execution,
+        expected ? /stub says no/u : /not confirmed/u,
+      )
     } finally {
       await broker.close()
     }
