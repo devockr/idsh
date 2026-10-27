@@ -1937,6 +1937,12 @@ echo "ss $*"
     })
     assert.equal(listen.result, '## listen\nss -tulpn')
 
+    const connections = await connection.request({
+      op: 'net.sockets',
+      args: { what: 'connections' },
+    })
+    assert.equal(connections.result, '## connections\nss -tunp')
+
     const refused = await connection.request({
       op: 'net.sockets',
       args: { what: 'sockets' },

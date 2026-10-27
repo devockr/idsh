@@ -12,7 +12,8 @@ with a small set of validated arguments.
 
 ```text
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
-         [--container <name>] [--docker <path>] [--git <path>] [--ip <path>] [--checkout <dir>]
+         [--container <name>] [--docker <path>] [--git <path>] [--ip <path>] [--ss <path>]
+         [--checkout <dir>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process

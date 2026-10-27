@@ -559,7 +559,7 @@ const SOCKET_RENDER: Record<
   { label: string; args: readonly string[] }
 > = {
   listen: { label: 'listen', args: ['-tulpn'] },
-  // No -l: every TCP/UDP socket, with its peer.
+  // No -l and no -a: the non-listening TCP/UDP sockets, with their peers.
   connections: { label: 'connections', args: ['-tunp'] },
 }
 
