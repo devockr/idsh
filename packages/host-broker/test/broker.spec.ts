@@ -285,6 +285,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'deploy.status',
         'deploy.log',
         'deploy.build',
+        'deploy.main',
         'deploy.rollback',
         'deploy.recreate',
         'disk.usage',
@@ -1760,6 +1761,72 @@ esac
     assert.match(docker, new RegExp('tag ' + ROLLBACK_TARGET, 'u'))
   } finally {
     socket.destroy()
+    await broker.close()
+  }
+})
+
+void test('deploy.main builds main and recreates from it', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$1" in
+  inspect) echo 'sha256:previousimage' ;;
+  compose) echo "$*" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.main', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(
+      answer.result ?? '',
+      /^built main \(aaaaaaaa1[0-9a-f]*\) as devockr\/idsh:dev; recreating/u,
+    )
+    const logPath = path.join(host.root, 'compose.log')
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('up -d --no-build')) {
+        break
+      }
+    }
+    assert.match(
+      log,
+      /compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
+    )
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    assert.equal(rollback, 'sha256:previousimage\n')
+  } finally {
+    connection.close()
     await broker.close()
   }
 })

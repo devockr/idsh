@@ -701,15 +701,27 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['pr', 'sha'])
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveBuildSource(ctx, args, deadline)
-      const dir = await prepareBuildSource(ctx, source, deadline)
-      try {
-        // Recorded before the build, so the tag moving is what makes this the rollback target.
-        const previous = await recordRollback(ctx)
-        await buildImage(ctx, dir, deadline)
-        return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
-      } finally {
-        // Best effort: a cleanup failure must not turn a tagged image into an error.
-        await rm(dir, { recursive: true, force: true }).catch(() => null)
+      const previous = await buildInto(ctx, source, deadline)
+      return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
+    },
+  },
+  {
+    name: 'deploy.main',
+    summary:
+      'Build the tip of main as :dev, then recreate the container from it.',
+    confirm: true,
+    serial: true,
+    timeoutMs: BUILD_TIMEOUT_MS,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      const checkout = requireCheckout(ctx)
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      const source = await resolveMainSource(ctx, deadline)
+      const previous = await buildInto(ctx, source, deadline)
+      return {
+        text: `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}`,
+        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
       }
     },
   },
@@ -812,6 +824,17 @@ interface BuildSource {
   readonly label: string
 }
 
+function findMain(heads: Array<{ sha: string; ref: string }>): {
+  sha: string
+  ref: string
+} {
+  const main = heads.find(entry => entry.ref === 'refs/heads/main')
+  if (main === undefined) {
+    throw new BrokerFault('unavailable', 'origin has no main branch')
+  }
+  return main
+}
+
 function parseLsRemote(text: string): Array<{ sha: string; ref: string }> {
   return text
     .split('\n')
@@ -851,10 +874,7 @@ async function resolveBuildSource(
   }
   requireCheckout(ctx)
   const heads = parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline))
-  const main = heads.find(entry => entry.ref === 'refs/heads/main')
-  if (main === undefined) {
-    throw new BrokerFault('unavailable', 'origin has no main branch')
-  }
+  const main = findMain(heads)
   if (pr !== undefined) {
     if (typeof pr !== 'number' || !Number.isInteger(pr) || pr < 1) {
       throw new BrokerFault('bad-argument', 'pr must be a positive integer')
@@ -901,6 +921,36 @@ async function resolveBuildSource(
     )
   }
   return { sha: matches[0], mainSha: main.sha, label: `sha ${sha}` }
+}
+
+/** The tip of main, resolved like any other source. */
+async function resolveMainSource(
+  ctx: OpContext,
+  deadline: number,
+): Promise<BuildSource> {
+  requireCheckout(ctx)
+  const main = findMain(
+    parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline)),
+  )
+  return { sha: main.sha, mainSha: main.sha, label: 'main' }
+}
+
+/** Prepare, build and clean up; returns the image the container ran before. */
+async function buildInto(
+  ctx: OpContext,
+  source: BuildSource,
+  deadline: number,
+): Promise<string> {
+  const dir = await prepareBuildSource(ctx, source, deadline)
+  try {
+    // Recorded before the build, so the tag moving is what makes this the rollback target.
+    const previous = await recordRollback(ctx)
+    await buildImage(ctx, dir, deadline)
+    return previous
+  } finally {
+    // Best effort: a cleanup failure must not turn a tagged image into an error.
+    await rm(dir, { recursive: true, force: true }).catch(() => null)
+  }
 }
 
 /** A clean clone of the source, with the root surface replaced by main's. */
