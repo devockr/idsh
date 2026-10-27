@@ -552,11 +552,26 @@ const NET_WHAT = [...NET_TABLES, 'all'] as const
 type NetWhat = (typeof NET_WHAT)[number]
 
 async function netStatus(ctx: OpContext, what: NetWhat): Promise<string> {
-  const parts = what === 'all' ? NET_TABLES : [what]
   const sections: string[] = []
-  for (const part of parts) {
-    const table = await runFixed(ctx, ctx.ipPath, ['-br', part])
-    sections.push(`## ${part}`, table.trimEnd())
+  const render = async (
+    label: string,
+    args: readonly string[],
+  ): Promise<void> => {
+    const table = await runFixed(ctx, ctx.ipPath, args)
+    sections.push(`## ${label}`, table.trimEnd())
+  }
+  const wants = (table: (typeof NET_TABLES)[number]): boolean =>
+    what === 'all' || what === table
+  if (wants('addr')) {
+    await render('addr', ['-br', 'addr'])
+  }
+  if (wants('route')) {
+    // `ip route` alone is IPv4: a dual-stack LAN needs both tables, labelled.
+    await render('route (ipv4)', ['-4', '-br', 'route'])
+    await render('route (ipv6)', ['-6', '-br', 'route'])
+  }
+  if (wants('neigh')) {
+    await render('neigh', ['-br', 'neigh'])
   }
   return sections.join('\n')
 }

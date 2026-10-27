@@ -1870,7 +1870,7 @@ echo "ip $*"
     assert.equal(all.ok, true)
     assert.match(
       all.result ?? '',
-      /## addr\nip -br addr\n## route\nip -br route\n## neigh\nip -br neigh/u,
+      /## addr\nip -br addr\n## route \(ipv4\)\nip -4 -br route\n## route \(ipv6\)\nip -6 -br route\n## neigh\nip -br neigh/u,
     )
 
     const route = await connection.request({
@@ -1878,7 +1878,10 @@ echo "ip $*"
       args: { what: 'route' },
     })
     assert.equal(route.ok, true)
-    assert.equal(route.result, '## route\nip -br route')
+    assert.equal(
+      route.result,
+      '## route (ipv4)\nip -4 -br route\n## route (ipv6)\nip -6 -br route',
+    )
 
     // An unknown string must not widen to "all": the published enum is the contract.
     const unknown = await connection.request({
