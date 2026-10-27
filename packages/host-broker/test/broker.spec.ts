@@ -234,6 +234,7 @@ interface DescribedOp {
   name: string
   input: { required?: string[] }
   confirm?: boolean
+  timeoutMs?: number
 }
 
 interface AuditEntry {
@@ -285,6 +286,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'deploy.status',
         'deploy.log',
         'deploy.build',
+        'deploy.main',
         'deploy.rollback',
         'deploy.recreate',
         'disk.usage',
@@ -930,6 +932,10 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
     const recreate = ops.find(op => op.name === 'deploy.recreate')
     assert.equal(recreate?.confirm, true)
     assert.equal(ops.find(op => op.name === 'deploy.rollback')?.confirm, true)
+    const main = ops.find(op => op.name === 'deploy.main')
+    assert.ok(main !== undefined)
+    assert.equal(main.confirm, true)
+    assert.equal(main.timeoutMs, 900_000)
 
     const answer = await connection.request({ op: 'deploy.recreate', args: {} })
     assert.equal(answer.ok, true)
@@ -1468,6 +1474,12 @@ esac
     const refused = await rolling.request({ op: 'deploy.rollback', args: {} })
     assert.equal(refused.ok, false)
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
+    const mainRefused = await rolling.request({ op: 'deploy.main', args: {} })
+    assert.equal(mainRefused.ok, false)
+    assert.match(
+      JSON.stringify(mainRefused.error),
+      /deployment is in progress/u,
+    )
     const built = await build
     assert.equal(built.ok, true, JSON.stringify(built.error))
     const again = await rolling.request({ op: 'deploy.rollback', args: {} })
@@ -1760,6 +1772,76 @@ esac
     assert.match(docker, new RegExp('tag ' + ROLLBACK_TARGET, 'u'))
   } finally {
     socket.destroy()
+    await broker.close()
+  }
+})
+
+void test('deploy.main builds main and recreates from it', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$1" in
+  inspect) echo '${ROLLBACK_TARGET}' ;;
+  compose) echo "$*" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.main', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(
+      answer.result ?? '',
+      /^built main \(aaaaaaaa1[0-9a-f]*\) as devockr\/idsh:dev; recreating/u,
+    )
+    // The acknowledgement is written before the deferred work runs: no log yet.
+    const logPath = path.join(host.root, 'compose.log')
+    await assert.rejects(readFile(logPath, 'utf8'))
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      log = await readFile(logPath, 'utf8').catch(() => '')
+      if (log.includes('up -d --no-build')) {
+        break
+      }
+    }
+    assert.match(
+      log,
+      /compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
+    )
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(docker, /build --tag devockr\/idsh:dev --label idsh\.keep=1/u)
+    const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
+    assert.equal(rollback, ROLLBACK_TARGET + '\n')
+  } finally {
+    connection.close()
     await broker.close()
   }
 })
