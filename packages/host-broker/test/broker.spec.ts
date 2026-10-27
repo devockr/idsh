@@ -291,6 +291,8 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'deploy.recreate',
         'net.status',
         'net.sockets',
+        'broker.status',
+        'broker.update',
         'disk.usage',
       ],
     )
@@ -1949,6 +1951,143 @@ echo "ss $*"
     })
     assert.equal(refused.ok, false)
     assert.equal(refused.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('broker.status reports the broker it is asked', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.status', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const fields = new Map(
+      (answer.result ?? '').split('\n').map(line => {
+        const at = line.indexOf('=')
+        return [line.slice(0, at), line.slice(at + 1)] as const
+      }),
+    )
+    assert.match(fields.get('version') ?? '', /^\d+\.\d+\.\d+/u)
+    assert.equal(fields.get('pid'), String(process.pid))
+    assert.match(fields.get('started') ?? '', /^\d{4}-\d{2}-\d{2}T/u)
+    assert.equal(fields.get('socket'), host.socketPath)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('broker.update runs the checkout steps and stops', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const pnpmLog = path.join(host.root, 'pnpm.log')
+  const gitPath = path.join(host.root, 'git')
+  const pnpmPath = path.join(host.root, 'pnpm')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$*" >> '${gitLog}'
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    pnpmPath,
+    `#!/bin/sh
+echo "$PWD $*" >> '${pnpmLog}'
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(path.join(checkout, 'packages', 'host-broker'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(checkout, 'packages', 'host-broker', 'package.json'),
+    '{"name":"@idsh/host-broker"}\n',
+  )
+  let stopped = 0
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath,
+    pnpmPath,
+    checkout,
+    stop: () => {
+      stopped += 1
+    },
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^updated from checkout/u)
+    assert.match(
+      await readFile(gitLog, 'utf8'),
+      /-C .*checkout pull --ff-only/u,
+    )
+    const pnpm = await readFile(pnpmLog, 'utf8')
+    assert.match(pnpm, /checkout install --frozen-lockfile/u)
+    assert.match(pnpm, /checkout --filter @idsh\/host-broker build/u)
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(stopped, 1)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a failed broker.update answers the failure and keeps running', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  const pnpmPath = path.join(host.root, 'pnpm')
+  await writeFile(gitPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  await writeFile(
+    pnpmPath,
+    `#!/bin/sh
+case "$*" in
+  *install*) echo 'registry down' >&2; exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(path.join(checkout, 'packages', 'host-broker'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(checkout, 'packages', 'host-broker', 'package.json'),
+    '{"name":"@idsh/host-broker"}\n',
+  )
+  let stopped = 0
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath,
+    pnpmPath,
+    checkout,
+    stop: () => {
+      stopped += 1
+    },
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /registry down/u)
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(stopped, 0)
   } finally {
     connection.close()
     await broker.close()

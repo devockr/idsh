@@ -11,6 +11,7 @@ import { constants as fsConstants } from 'node:fs'
 import {
   access,
   appendFile,
+  readFile,
   chmod,
   lstat,
   mkdir,
@@ -29,6 +30,7 @@ import {
   DEFAULT_EXEC_TIMEOUT_MS,
   DEFAULT_GIT,
   DEFAULT_IP,
+  DEFAULT_PNPM,
   DEFAULT_SS,
   IP_CANDIDATES,
   SS_CANDIDATES,
@@ -87,6 +89,10 @@ export interface BrokerOptions {
   readonly ipPath?: string
   /** The `ss` client `net.sockets` runs. Default: the first of the usual locations that exists. */
   readonly ssPath?: string
+  /** The pnpm client `broker.update` runs. Default `pnpm`, resolved through the host's PATH. */
+  readonly pnpmPath?: string
+  /** How `broker.update` stops the process; the tests pass their own, the CLI exits. */
+  readonly stop?: () => void
   /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
   readonly checkout?: string
   /** Requests per operation per minute. Default 60. */
@@ -122,6 +128,7 @@ const DEFAULTS = {
   container: DEFAULT_CONTAINER,
   dockerPath: DEFAULT_DOCKER,
   gitPath: DEFAULT_GIT,
+  pnpmPath: DEFAULT_PNPM,
   rateLimitPerMinute: 60,
   execTimeoutMs: DEFAULT_EXEC_TIMEOUT_MS,
 } as const
@@ -173,6 +180,13 @@ export async function startBroker(
     .slice(0, BUILD_KEY_CHARS)
   const buildRoot = path.join(path.dirname(auditPath), 'build', buildKey)
   const deployLock = new DeployLock()
+  const pnpmPath = options.pnpmPath ?? DEFAULTS.pnpmPath
+  const packageFile = new URL('../package.json', import.meta.url)
+  const brokerVersion =
+    (JSON.parse(await readFile(packageFile, 'utf8')) as { version?: string })
+      .version ?? 'unknown'
+  const startedAt = Date.now()
+  const stopHolder: { stop?: () => void } = {}
   const context: OpContext = {
     logDir,
     procDir,
@@ -182,6 +196,12 @@ export async function startBroker(
     gitPath,
     ipPath,
     ssPath,
+    pnpmPath,
+    brokerVersion,
+    startedAt,
+    socketPath: options.socketPath,
+    auditPath,
+    stop: options.stop ?? (() => stopHolder.stop?.()),
     stateDir: path.dirname(auditPath),
     buildRoot,
     deployLock,
@@ -213,6 +233,9 @@ export async function startBroker(
     socket.on('close', () => sockets.delete(socket))
     serve(socket, context, limiter, auditPath, now)
   })
+  stopHolder.stop = () => {
+    server.close()
+  }
   await listen(server, options.socketPath)
   try {
     await chmod(options.socketPath, SOCKET_MODE)

@@ -29,6 +29,7 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --git <path>           The git client deploy.build runs (default git)
   --ip <path>            The ip client net.status runs (default: the usual locations)
   --ss <path>            The ss client net.sockets runs (default: the usual locations)
+  --pnpm <path>          The pnpm client broker.update runs (default pnpm)
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
       git: { type: 'string' },
       ip: { type: 'string' },
       ss: { type: 'string' },
+      pnpm: { type: 'string' },
       checkout: { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
@@ -103,7 +105,13 @@ async function main(): Promise<void> {
     ...(values.git === undefined ? {} : { gitPath: values.git }),
     ...(values.ip === undefined ? {} : { ipPath: values.ip }),
     ...(values.ss === undefined ? {} : { ssPath: values.ss }),
+    ...(values.pnpm === undefined ? {} : { pnpmPath: values.pnpm }),
     ...(values.checkout === undefined ? {} : { checkout: values.checkout }),
+    // The supervisor restarts the process; exiting is what makes it read the new build.
+    stop: () => {
+      // eslint-disable-next-line n/no-process-exit -- a supervisor restarts an exited service
+      process.exit(0)
+    },
     rateLimitPerMinute: number(values['rate-limit'], 60, '--rate-limit'),
     execTimeoutMs: number(
       values['exec-timeout'],

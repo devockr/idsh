@@ -48,6 +48,16 @@ export interface OpContext {
   readonly ipPath: string
   /** The `ss` client `net.sockets` runs. */
   readonly ssPath: string
+  /** The pnpm client `broker.update` runs. */
+  readonly pnpmPath: string
+  /** The broker's own version, from its package.json. */
+  readonly brokerVersion: string
+  /** When the broker booted, for `broker.status`. */
+  readonly startedAt: number
+  readonly socketPath: string
+  readonly auditPath: string
+  /** Stop the broker, so its supervisor starts the new build. */
+  readonly stop: () => void
   /** Where a detached operation writes its log; the audit directory. */
   readonly stateDir: string
   /** Where builds clone; unique to this broker's socket, swept at boot. */
@@ -545,6 +555,59 @@ function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now())
 }
 
+/* ---------------------------------------------------------------- broker.status / broker.update */
+
+const BROKER_PACKAGE = '@idsh/host-broker'
+
+/** A checkout that carries the broker's own source is the self-update source; otherwise npm. */
+async function brokerUpdateSource(ctx: OpContext): Promise<'checkout' | 'npm'> {
+  if (ctx.checkout === undefined) {
+    return 'npm'
+  }
+  try {
+    await stat(path.join(ctx.checkout, 'packages/host-broker/package.json'))
+    return 'checkout'
+  } catch {
+    return 'npm'
+  }
+}
+
+interface UpdateStep {
+  readonly program: string
+  readonly args: readonly string[]
+  readonly cwd?: string
+}
+
+function brokerUpdate(
+  ctx: OpContext,
+  source: 'checkout' | 'npm',
+): UpdateStep[] {
+  if (source === 'checkout' && ctx.checkout !== undefined) {
+    return [
+      {
+        program: ctx.gitPath,
+        args: ['-C', ctx.checkout, 'pull', '--ff-only'],
+      },
+      {
+        program: ctx.pnpmPath,
+        args: ['install', '--frozen-lockfile'],
+        cwd: ctx.checkout,
+      },
+      {
+        program: ctx.pnpmPath,
+        args: ['--filter', BROKER_PACKAGE, 'build'],
+        cwd: ctx.checkout,
+      },
+    ]
+  }
+  return [
+    {
+      program: ctx.pnpmPath,
+      args: ['add', '--global', `${BROKER_PACKAGE}@latest`],
+    },
+  ]
+}
+
 /* ---------------------------------------------------------------- net.sockets */
 
 /** The socket tables `net.sockets` can read. */
@@ -889,6 +952,49 @@ export const OPS: readonly OpDefinition[] = [
       const what: SocketWhat =
         args['what'] === undefined ? 'all' : choice(args, 'what', SOCKET_WHAT)
       return netSockets(ctx, what)
+    },
+  },
+  {
+    name: 'broker.status',
+    summary:
+      'This broker: its version, process, start time, socket, audit file and checkout.',
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    run(args, ctx) {
+      rejectUnknown(args, [])
+      return Promise.resolve(
+        [
+          `version=${ctx.brokerVersion}`,
+          `pid=${String(process.pid)}`,
+          `started=${new Date(ctx.startedAt).toISOString()}`,
+          `socket=${ctx.socketPath}`,
+          `audit=${ctx.auditPath}`,
+          `checkout=${ctx.checkout ?? ''}`,
+        ].join('\n'),
+      )
+    },
+  },
+  {
+    name: 'broker.update',
+    summary:
+      'Update the broker from its checkout (or npm) and let its supervisor restart it.',
+    confirm: true,
+    serial: true,
+    timeoutMs: BUILD_TIMEOUT_MS,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      const source = await brokerUpdateSource(ctx)
+      // Synchronous on purpose: a failed step must be the answer, not a silent no-op behind it.
+      for (const step of brokerUpdate(ctx, source)) {
+        await runFixed(ctx, step.program, step.args, {
+          timeoutMs: BUILD_TIMEOUT_MS,
+          ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
+        })
+      }
+      return {
+        text: `updated from ${source}; the broker exits so its supervisor starts the new build`,
+        after: () => ctx.stop(),
+      }
     },
   },
   {

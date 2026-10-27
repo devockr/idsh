@@ -62,6 +62,9 @@ export const IP_CANDIDATES = [
   '/bin/ip',
 ] as const
 
+/** The pnpm client `broker.update` runs, unless the host says otherwise. */
+export const DEFAULT_PNPM = 'pnpm'
+
 /** The fallback when none of the usual locations has `ss`. */
 export const DEFAULT_SS = 'ss'
 
