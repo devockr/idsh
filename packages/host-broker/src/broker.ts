@@ -358,7 +358,11 @@ async function answer(
       })
       return false
     }
-    await send(response)
+    try {
+      await send(response)
+    } catch {
+      // A lost answer is not a failed operation: the audit line stands and the deferred work runs.
+    }
     if (after === undefined) {
       return false
     }
