@@ -8,4 +8,6 @@ empty or multi-line target is refused before anything is queued; a target docker
 on the tag, so nothing is acknowledged for a rollback that cannot happen.
 
 Builds, recreates and rollbacks now share one deployment lock: a build cannot retag `:dev` while a
-recreate's compose is starting, and a rollback's tag cannot land under a running build.
+recreate's compose is starting, and a rollback's tag cannot land under a running build. A queued
+operation waits at most two seconds for the lock and then answers `unavailable`; one whose answer
+times out is stopped, so it cannot finish its work behind the answer.

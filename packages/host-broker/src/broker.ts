@@ -24,9 +24,9 @@ import {
   BUILD_KEY_CHARS,
   DEFAULT_CONTAINER,
   DEFAULT_DOCKER,
-  DEPLOY_ACQUIRE_MS,
-  DEFAULT_GIT,
   DEFAULT_EXEC_TIMEOUT_MS,
+  DEFAULT_GIT,
+  DEPLOY_ACQUIRE_MS,
   DIRECTORY_MODE,
   FILE_MODE,
   FORBIDDEN_DIRECTORY_BITS,
@@ -496,8 +496,8 @@ function faultAnswer(
 }
 
 /**
- * Take the deployment lock when the operation asks for it. A waiter that cannot get in within its
- * own budget answers with the fault instead of queueing indefinitely.
+ * Take the deployment lock when the operation asks for it. A waiter that cannot get in within the
+ * acquisition budget answers with the fault instead of queueing indefinitely.
  */
 async function acquireDeployment(
   context: OpContext,

@@ -722,13 +722,7 @@ export const OPS: readonly OpDefinition[] = [
     input: { type: 'object', properties: {}, additionalProperties: false },
     async run(args, ctx) {
       rejectUnknown(args, [])
-      const checkout = ctx.checkout
-      if (checkout === undefined) {
-        throw new BrokerFault(
-          'unavailable',
-          'no checkout configured; start the broker with --checkout',
-        )
-      }
+      const checkout = requireCheckout(ctx)
       const target = await rollbackTarget(ctx)
       // Read-only: a target docker no longer has must fail before anything is acknowledged.
       await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target])
@@ -761,15 +755,7 @@ export const OPS: readonly OpDefinition[] = [
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {
       rejectUnknown(args, [])
-      if (ctx.checkout === undefined) {
-        return Promise.reject(
-          new BrokerFault(
-            'unavailable',
-            'no checkout configured; start the broker with --checkout',
-          ),
-        )
-      }
-      const checkout = ctx.checkout
+      const checkout = requireCheckout(ctx)
       return Promise.resolve({
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
@@ -804,6 +790,17 @@ export function describeOps(): string {
     null,
     2,
   )
+}
+
+/** The deployment checkout, or the fault that says why a deploy operation cannot run. */
+function requireCheckout(ctx: OpContext): string {
+  if (ctx.checkout === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      'no checkout configured; start the broker with --checkout',
+    )
+  }
+  return ctx.checkout
 }
 
 /* ---------------------------------------------------------------- deploy.build */
@@ -852,12 +849,7 @@ async function resolveBuildSource(
   if ((pr === undefined) === (sha === undefined)) {
     throw new BrokerFault('bad-argument', 'give exactly one of pr or sha')
   }
-  if (ctx.checkout === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'no checkout configured; start the broker with --checkout',
-    )
-  }
+  requireCheckout(ctx)
   const heads = parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline))
   const main = heads.find(entry => entry.ref === 'refs/heads/main')
   if (main === undefined) {
@@ -917,13 +909,7 @@ async function prepareBuildSource(
   source: BuildSource,
   deadline: number,
 ): Promise<string> {
-  const checkout = ctx.checkout
-  if (checkout === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'no checkout configured; start the broker with --checkout',
-    )
-  }
+  const checkout = requireCheckout(ctx)
   const root = ctx.buildRoot
   await mkdir(root, { recursive: true, mode: DIRECTORY_MODE })
   // The checkout may never have fetched the source: freshen its refs, then clone its objects.
