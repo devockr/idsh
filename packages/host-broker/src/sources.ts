@@ -576,9 +576,19 @@ function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
   return relative !== '' && !relative.startsWith('..') ? 'checkout' : 'npm'
 }
 
-/** The prefix an npm-installed `bin/idsh-host` came from. */
-function installPrefix(ctx: OpContext): string {
-  return path.dirname(path.dirname(path.resolve(ctx.entryPath)))
+/**
+ * The npm prefix the running entry came from: `<prefix>/bin/idsh-host` or a package path under
+ * `<prefix>/lib/node_modules`. Anything else has no prefix to install into.
+ */
+function installPrefix(ctx: OpContext): string | undefined {
+  const entry = path.resolve(ctx.entryPath)
+  const modules = `${path.sep}lib${path.sep}node_modules${path.sep}`
+  const at = entry.indexOf(modules)
+  if (at > 0) {
+    return entry.slice(0, at)
+  }
+  const bin = path.dirname(entry)
+  return path.basename(bin) === 'bin' ? path.dirname(bin) : undefined
 }
 
 interface UpdateStep {
@@ -611,6 +621,13 @@ function brokerUpdate(
       },
     ]
   }
+  const prefix = installPrefix(ctx)
+  if (prefix === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      `cannot tell which npm prefix ${ctx.entryPath} belongs to; update the broker the way it was installed`,
+    )
+  }
   return [
     {
       // The unit runs `<prefix>/bin/idsh-host`, so the update has to land in that prefix.
@@ -619,7 +636,7 @@ function brokerUpdate(
         'install',
         '--global',
         '--prefix',
-        installPrefix(ctx),
+        prefix,
         `${BROKER_PACKAGE}@latest`,
       ],
     },

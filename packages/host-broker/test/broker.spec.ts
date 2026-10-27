@@ -2020,7 +2020,7 @@ void test('broker.update runs the checkout steps and stops', async () => {
   await writeFile(
     gitPath,
     `#!/bin/sh
-echo "$*" >> '${gitLog}'
+echo "$PWD $*" >> '${gitLog}'
 `,
     { mode: 0o755 },
   )
@@ -2058,7 +2058,7 @@ echo "$PWD $*" >> '${pnpmLog}'
     const answer = await connection.request({ op: 'broker.update', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     assert.match(answer.result ?? '', /^updated from checkout/u)
-    assert.match(await readFile(gitLog, 'utf8'), /^pull --ff-only$/mu)
+    assert.match(await readFile(gitLog, 'utf8'), /checkout pull --ff-only$/mu)
     const pnpm = await readFile(pnpmLog, 'utf8')
     assert.match(pnpm, /checkout install --frozen-lockfile/u)
     assert.match(pnpm, /checkout --filter @idsh\/host-broker build/u)
@@ -2331,5 +2331,54 @@ esac
   } finally {
     slow.close()
     admin.close()
+  }
+})
+
+void test('broker.update derives the prefix from a package path', async () => {
+  const host = await fakeHost()
+  const npmLog = path.join(host.root, 'npm.log')
+  const npmPath = path.join(host.root, 'npm')
+  await writeFile(
+    npmPath,
+    `#!/bin/sh
+echo "$*" >> '${npmLog}'
+`,
+    { mode: 0o755 },
+  )
+  const prefix = path.join(host.root, 'prefix')
+  let stopped = 0
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    npmPath,
+    entryPath: path.join(
+      prefix,
+      'lib',
+      'node_modules',
+      '@idsh',
+      'host-broker',
+      'lib',
+      'cli.js',
+    ),
+    stop: () => {
+      stopped += 1
+    },
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const npmText = await readFile(npmLog, 'utf8')
+    assert.equal(
+      npmText.trim(),
+      `install --global --prefix ${prefix} @idsh/host-broker@latest`,
+    )
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(stopped, 1)
+  } finally {
+    connection.close()
+    await broker.close()
   }
 })

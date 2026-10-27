@@ -85,22 +85,22 @@ request.
 
 ## Operations (first slice)
 
-| op                | behaviour                                                                                                                                             |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                         |
-| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                                  |
-| `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route` (IPv4 and IPv6), `neigh` or `all`                           |
-| `net.sockets`     | the host's listening sockets and connections, read with `ss`; `what` picks `listen`, `connections` or `all` (the default)                             |
-| `disk.usage`      | `df -h`                                                                                                                                               |
-| `broker.status`   | this broker: version, pid, start time, socket, audit file and checkout                                                                                |
-| `broker.update`   | updates the broker from `--checkout` (`git pull`, `pnpm install`, `pnpm --filter @idsh/host-broker build`) or from npm, then exits for its supervisor |
-| `deploy.status`   | the deployment container: image, creation time and state                                                                                              |
-| `deploy.log`      | the tail of the deployment container log                                                                                                              |
-| `deploy.build`    | builds `:dev` from a PR head or an origin branch tip; the six root-surface files come from `main`, and the previous image id is kept for rollback     |
-| `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                               |
-| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                       |
-| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                   |
-| `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                        |
+| op                | behaviour                                                                                                                                                                                                                                                            |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                                                                                                                                        |
+| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                                                                                                                                                 |
+| `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route` (IPv4 and IPv6), `neigh` or `all`                                                                                                                                          |
+| `net.sockets`     | the host's listening sockets and connections, read with `ss`; `what` picks `listen`, `connections` or `all` (the default)                                                                                                                                            |
+| `disk.usage`      | `df -h`                                                                                                                                                                                                                                                              |
+| `broker.status`   | this broker: version, pid, start time, socket, audit file and checkout                                                                                                                                                                                               |
+| `broker.update`   | updates the broker where its own entry lives: run from `--checkout` it pulls and rebuilds there (`git pull`, `pnpm install`, `pnpm --filter @idsh/host-broker build`), under an npm prefix it installs the published package there; then it exits for its supervisor |
+| `deploy.status`   | the deployment container: image, creation time and state                                                                                                                                                                                                             |
+| `deploy.log`      | the tail of the deployment container log                                                                                                                                                                                                                             |
+| `deploy.build`    | builds `:dev` from a PR head or an origin branch tip; the six root-surface files come from `main`, and the previous image id is kept for rollback                                                                                                                    |
+| `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                                                                                                                                              |
+| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                                                                                                      |
+| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                                                                                                                  |
+| `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                                                                                                                                       |
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing
