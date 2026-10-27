@@ -359,20 +359,14 @@ async function answer(
     const deadline = Date.now() + budget
     const deployment = await acquireDeployment(context, definition, budget)
     if (deployment.fault !== undefined) {
-      await finish(
-        {
-          ...(requestId === undefined ? {} : { id: requestId }),
-          ok: false,
-          error: {
-            code: deployment.fault.code,
-            message: deployment.fault.message,
-          },
-        },
-        { bytes: 0, truncated: false, error: deployment.fault.code },
-      )
+      await finish(faultAnswer(deployment.fault, requestId), {
+        bytes: 0,
+        truncated: false,
+        error: deployment.fault.code,
+      })
       return
     }
-    const release = deployment.release
+    const hold = deployment.hold
     try {
       const execution = await execute(
         request,
@@ -395,7 +389,11 @@ async function answer(
         execution.after,
       )
     } finally {
-      release?.()
+      // Only when the operation never started does the answer release; otherwise it releases when
+      // its own work settles.
+      if (hold !== undefined && !hold.started) {
+        hold.release()
+      }
     }
   } catch (error) {
     let fault: BrokerFault
@@ -406,14 +404,11 @@ async function answer(
         error instanceof Error ? error.message : 'the operation failed'
       fault = new BrokerFault('internal', message)
     }
-    await finish(
-      {
-        ...(requestId === undefined ? {} : { id: requestId }),
-        ok: false,
-        error: { code: fault.code, message: fault.message },
-      },
-      { bytes: 0, truncated: false, error: fault.code },
-    )
+    await finish(faultAnswer(fault, requestId), {
+      bytes: 0,
+      truncated: false,
+      error: fault.code,
+    })
   }
 }
 
@@ -424,6 +419,7 @@ async function execute(
   limiter: RateLimiter,
   started: number,
   deadline: number,
+  hold?: DeploymentHold,
 ): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
@@ -449,7 +445,7 @@ async function execute(
   const raw =
     definition === undefined
       ? describeOps()
-      : await runOp(definition, request.args, context, deadline)
+      : await runOp(definition, request.args, context, deadline, hold)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
     definition === undefined
@@ -461,6 +457,24 @@ async function execute(
   }
 }
 
+/** One failed answer, with the request id when the caller sent one. */
+function faultAnswer(
+  fault: BrokerFault,
+  requestId: string | undefined,
+): BrokerResponse {
+  return {
+    ...(requestId === undefined ? {} : { id: requestId }),
+    ok: false,
+    error: { code: fault.code, message: fault.message },
+  }
+}
+
+/** The lock a serial operation holds; `started` says whether the work has begun. */
+interface DeploymentHold {
+  readonly release: () => void
+  started: boolean
+}
+
 /**
  * Take the deployment lock when the operation asks for it. A waiter that cannot get in within its
  * own budget answers with the fault instead of queueing indefinitely.
@@ -469,12 +483,17 @@ async function acquireDeployment(
   context: OpContext,
   definition: OpDefinition | undefined,
   budget: number,
-): Promise<{ release?: () => void; fault?: BrokerFault }> {
+): Promise<{ hold?: DeploymentHold; fault?: BrokerFault }> {
   if (definition?.serial !== true) {
     return {}
   }
   try {
-    return { release: await context.deployLock.acquire(budget) }
+    return {
+      hold: {
+        release: await context.deployLock.acquire(budget),
+        started: false,
+      },
+    }
   } catch (error) {
     if (error instanceof BrokerFault) {
       return { fault: error }
@@ -490,11 +509,19 @@ function runOp(
   args: Record<string, unknown>,
   context: OpContext,
   deadline: number,
+  hold?: DeploymentHold,
 ): Promise<Execution | string> {
   // The lock wait comes out of the same budget, so a queued deployment cannot start after its
   // caller has already been told the operation timed out.
+  const running = op.run(args, context)
+  if (hold !== undefined) {
+    hold.started = true
+    // A caller timeout must not release the lock while the work is still running: the operation
+    // releases it when *it* settles, whichever way that went.
+    void running.finally(() => hold.release()).catch(() => null)
+  }
   return withTimeout(
-    op.run(args, context),
+    running,
     Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS,
   )
 }

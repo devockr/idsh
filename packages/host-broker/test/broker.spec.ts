@@ -1558,9 +1558,12 @@ echo "$*" >> '${dockerLog}'
   const checkout = path.join(host.root, 'checkout')
   await mkdir(checkout)
   await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
+  // A directory where the audit file belongs: appending fails even when the tests run as root.
+  const auditPath = path.join(host.root, 'audit-directory')
+  await mkdir(auditPath)
   const broker = await startBroker({
     socketPath: host.socketPath,
-    auditPath: host.auditPath,
+    auditPath,
     logDir: host.logDir,
     procDir: host.procDir,
     dockerPath,
@@ -1568,13 +1571,10 @@ echo "$*" >> '${dockerLog}'
   })
   const connection = client(host.socketPath)
   try {
-    await writeFile(host.auditPath, '')
-    await chmod(host.auditPath, 0o400)
     const answer = await connection.request({ op: 'deploy.rollback', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /audit/u)
   } finally {
-    await chmod(host.auditPath, 0o600).catch(() => null)
     await new Promise(resolve => setTimeout(resolve, 700))
     connection.close()
     await broker.close()
