@@ -594,8 +594,10 @@ function brokerUpdate(
   if (source === 'checkout' && ctx.checkout !== undefined) {
     return [
       {
+        // The checkout is `git`'s default cwd, and a step's budget is what is left of the op's.
         program: ctx.gitPath,
-        args: ['-C', ctx.checkout, 'pull', '--ff-only'],
+        args: ['pull', '--ff-only'],
+        cwd: ctx.checkout,
       },
       {
         program: ctx.pnpmPath,

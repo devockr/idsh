@@ -2058,10 +2058,7 @@ echo "$PWD $*" >> '${pnpmLog}'
     const answer = await connection.request({ op: 'broker.update', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     assert.match(answer.result ?? '', /^updated from checkout/u)
-    assert.match(
-      await readFile(gitLog, 'utf8'),
-      /-C .*checkout pull --ff-only/u,
-    )
+    assert.match(await readFile(gitLog, 'utf8'), /^pull --ff-only$/mu)
     const pnpm = await readFile(pnpmLog, 'utf8')
     assert.match(pnpm, /checkout install --frozen-lockfile/u)
     assert.match(pnpm, /checkout --filter @idsh\/host-broker build/u)
@@ -2140,6 +2137,15 @@ echo "$*" >> '${npmLog}'
   )
   const prefix = path.join(host.root, 'prefix')
   await mkdir(path.join(prefix, 'bin'), { recursive: true })
+  // A checkout is present, but the broker runs from <prefix>/bin: the comparison decides.
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(path.join(checkout, 'packages', 'host-broker'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(checkout, 'packages', 'host-broker', 'package.json'),
+    '{"name":"@idsh/host-broker"}',
+  )
   let stopped = 0
   const broker = await startBroker({
     socketPath: host.socketPath,
@@ -2147,6 +2153,7 @@ echo "$*" >> '${npmLog}'
     logDir: host.logDir,
     procDir: host.procDir,
     npmPath,
+    checkout,
     entryPath: path.join(prefix, 'bin', 'idsh-host'),
     stop: () => {
       stopped += 1
@@ -2238,5 +2245,91 @@ echo "$*" >> '${pnpmLog}'
     deployment.close()
     admin.close()
     await broker.close()
+  }
+})
+
+void test('an update drains the request in flight before it stops', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  const pnpmPath = path.join(host.root, 'pnpm')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  logs) sleep 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(gitPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  await writeFile(pnpmPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(path.join(checkout, 'packages', 'host-broker'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(checkout, 'packages', 'host-broker', 'package.json'),
+    '{"name":"@idsh/host-broker"}\n',
+  )
+  await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    pnpmPath,
+    checkout,
+    entryPath: path.join(checkout, 'packages', 'host-broker', 'lib', 'cli.js'),
+  })
+  const slow = client(host.socketPath)
+  const admin = client(host.socketPath)
+  try {
+    // One connection is inside a slow answer when the update is answered on another.
+    const pending = slow.request({ op: 'deploy.log', args: { lines: 5 } })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const updated = await admin.request({ op: 'broker.update', args: {} })
+    assert.equal(updated.ok, true, JSON.stringify(updated.error))
+    const slowAnswer = await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => {
+          reject(new Error('the slow answer was lost'))
+        }, 5000)
+      }),
+    ])
+    assert.equal(slowAnswer.ok, true, JSON.stringify(slowAnswer.error))
+
+    // The shutdown destroys the sockets and unlinks the path once the slow answer is done.
+    let gone = false
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const present = await stat(host.socketPath).then(
+        () => true,
+        () => false,
+      )
+      if (!present) {
+        gone = true
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    assert.ok(gone, 'the socket stays after the shutdown')
+
+    const auditText = await readFile(host.auditPath, 'utf8')
+    const lines = auditText.trim().split('\n')
+    assert.equal(lines.length, 2, auditText)
+    // The update answers first; the slow request's line follows once it is drained.
+    assert.ok(
+      lines.some(line => /"op":"deploy\.log".*"ok":true/u.test(line)),
+      auditText,
+    )
+    assert.ok(
+      lines.some(line => /"op":"broker\.update".*"ok":true/u.test(line)),
+      auditText,
+    )
+  } finally {
+    slow.close()
+    admin.close()
   }
 })

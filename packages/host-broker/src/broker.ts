@@ -250,9 +250,6 @@ export async function startBroker(
       },
     })
   })
-  stopHolder.stop = () => {
-    server.close()
-  }
   await listen(server, options.socketPath)
   try {
     await chmod(options.socketPath, SOCKET_MODE)
