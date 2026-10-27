@@ -330,6 +330,15 @@ async function answer(
     release?.()
   }
 
+  /** Write an answer; a caller that hung up has lost it, which is not a failed operation. */
+  const deliver = async (response: BrokerResponse): Promise<void> => {
+    try {
+      await send(response)
+    } catch {
+      // The audit line stands and any deferred work still runs.
+    }
+  }
+
   const finish = async (
     response: BrokerResponse,
     outcome: { bytes: number; truncated: boolean; error?: string },
@@ -348,7 +357,7 @@ async function answer(
       })
     } catch {
       // An unaudited action is not allowed to look like a successful one.
-      await send({
+      await deliver({
         ...(requestId === undefined ? {} : { id: requestId }),
         ok: false,
         error: {
@@ -358,11 +367,7 @@ async function answer(
       })
       return false
     }
-    try {
-      await send(response)
-    } catch {
-      // A lost answer is not a failed operation: the audit line stands and the deferred work runs.
-    }
+    await deliver(response)
     if (after === undefined) {
       return false
     }
