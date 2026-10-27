@@ -258,16 +258,16 @@ function asOp(value: unknown): DescribedOp {
   }
 }
 
+/** The person's answer: Run, or the reply they typed instead of choosing. */
+type Confirmation = { ok: false; reply?: string } | { ok: true }
+
 /**
  * Ask the person before a destructive operation.
  *
  * The question is asked inside the tool call and blocks: the answer comes from the question
- * service, so the model cannot fabricate one. Anything other than the explicit "Run" option —
- * cancel, a skipped question, an empty answer — means no.
+ * service, so the model cannot fabricate one. Only the explicit "Run" option approves; a typed
+ * answer is a reply, passed back so the assistant can answer it and ask again.
  */
-/** The person's answer: Run, or the reply they typed instead of choosing. */
-type Confirmation = { ok: false; reply?: string } | { ok: true }
-
 async function confirmed(
   ctx: HostContext,
   op: DescribedOp,
