@@ -34,6 +34,7 @@ import {
   MAX_AUDIT_ARGS_CHARS,
   MAX_LINE_BYTES,
   MAX_TIMER_MS,
+  SEND_TIMEOUT_MS,
   SOCKET_MODE,
   TIMEOUT_SLACK_MS,
 } from './constants.ts'
@@ -223,12 +224,15 @@ function serve(
   const sendAndWait = (response: BrokerResponse): Promise<void> =>
     new Promise((resolve, reject) => {
       if (closed || socket.destroyed) {
-        reject(
-          new Error('the answer could not be written: the connection is gone'),
-        )
+        // A caller that hung up has lost its answer; that is not a failed operation.
+        resolve()
         return
       }
+      // A write that has not flushed by now counts as a lost answer too, so a stalled socket cannot
+      // keep the deferred work (and the deployment lock) waiting.
+      const timer = setTimeout(() => resolve(), SEND_TIMEOUT_MS)
       socket.write(encode(response), error => {
+        clearTimeout(timer)
         if (error === undefined || error === null) {
           resolve()
         } else {
