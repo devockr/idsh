@@ -24,6 +24,7 @@ import {
   BUILD_KEY_CHARS,
   DEFAULT_CONTAINER,
   DEFAULT_DOCKER,
+  DEPLOY_ACQUIRE_MS,
   DEFAULT_GIT,
   DEFAULT_EXEC_TIMEOUT_MS,
   DIRECTORY_MODE,
@@ -356,8 +357,13 @@ async function answer(
     args = request.args
     const definition = findOp(request.op)
     const budget = definition?.timeoutMs ?? context.execTimeoutMs
-    const deadline = Date.now() + budget
-    const deployment = await acquireDeployment(context, definition, budget)
+    // The wait for the lock is bounded on its own: a granted operation gets its whole work budget,
+    // counted from the moment it is admitted.
+    const deployment = await acquireDeployment(
+      context,
+      definition,
+      DEPLOY_ACQUIRE_MS,
+    )
     if (deployment.fault !== undefined) {
       await finish(faultAnswer(deployment.fault, requestId), {
         bytes: 0,
@@ -366,14 +372,19 @@ async function answer(
       })
       return
     }
+    const deadline = Date.now() + budget
+    const controller = new AbortController()
+    const requestContext = { ...context, signal: controller.signal }
     const hold = deployment.hold
     try {
       const execution = await execute(
         request,
-        context,
+        requestContext,
         limiter,
         started,
         deadline,
+        hold,
+        controller,
       )
       await finish(
         {
@@ -420,6 +431,7 @@ async function execute(
   started: number,
   deadline: number,
   hold?: DeploymentHold,
+  controller?: AbortController,
 ): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
@@ -445,7 +457,14 @@ async function execute(
   const raw =
     definition === undefined
       ? describeOps()
-      : await runOp(definition, request.args, context, deadline, hold)
+      : await runOp(
+          definition,
+          request.args,
+          context,
+          deadline,
+          hold,
+          controller,
+        )
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
     definition === undefined
@@ -510,9 +529,8 @@ function runOp(
   context: OpContext,
   deadline: number,
   hold?: DeploymentHold,
+  controller?: AbortController,
 ): Promise<Execution | string> {
-  // The lock wait comes out of the same budget, so a queued deployment cannot start after its
-  // caller has already been told the operation timed out.
   const running = op.run(args, context)
   if (hold !== undefined) {
     hold.started = true
@@ -520,10 +538,14 @@ function runOp(
     // releases it when *it* settles, whichever way that went.
     void running.finally(() => hold.release()).catch(() => null)
   }
-  return withTimeout(
+  const bounded = withTimeout(
     running,
     Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS,
   )
+  // A timed-out operation is also stopped: the program's group is killed through the signal, so it
+  // cannot keep working (or retag an image) after the answer.
+  void bounded.catch(() => controller?.abort())
+  return bounded
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {

@@ -1506,7 +1506,7 @@ esac
     dockerPath,
     `#!/bin/sh
 case "$1" in
-  run) sleep 0.8 ;;
+  run) sleep 2.5 ;;
   inspect) echo '${ROLLBACK_TARGET}' ;;
 esac
 `,
@@ -1523,7 +1523,6 @@ esac
     dockerPath,
     gitPath,
     checkout,
-    execTimeoutMs: 300,
   })
   const building = client(host.socketPath)
   const rolling = client(host.socketPath)

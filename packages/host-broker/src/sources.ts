@@ -50,6 +50,8 @@ export interface OpContext {
   readonly buildRoot: string
   /** Serializes builds, recreates and rollbacks: one retag at a time. */
   readonly deployLock: DeployLock
+  /** Aborted when the caller has waited as long as it will; programs stop with it. */
+  readonly signal?: AbortSignal
 }
 
 /** An answer plus work that must not start until that answer has been written. */
@@ -106,6 +108,11 @@ function runFixed(
 ): Promise<string> {
   const keep = options.keep ?? 'head'
   const timeoutMs = options.timeoutMs ?? ctx.execTimeoutMs
+  if (ctx.signal?.aborted === true) {
+    return Promise.reject(
+      new BrokerFault('timeout', 'the operation was cancelled'),
+    )
+  }
   return new Promise((resolve, reject) => {
     let logChain: Promise<unknown> = Promise.resolve()
     const child = spawn(program, args, {
@@ -130,6 +137,7 @@ function runFixed(
       if (state.timer !== undefined) {
         clearTimeout(state.timer)
       }
+      ctx.signal?.removeEventListener('abort', onAbort)
       // The answer waits for the log to be complete, so a reader never sees a torn tail.
       void logChain.finally(() => {
         if (failure === undefined) {
@@ -139,6 +147,19 @@ function runFixed(
         }
       })
     }
+    // The caller's deadline aborts the request context: the program goes with it, so a timed-out
+    // build cannot retag an image after its answer.
+    function onAbort(): void {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL')
+        } catch {
+          child.kill('SIGKILL')
+        }
+      }
+      settle(new BrokerFault('timeout', 'the operation was cancelled'))
+    }
+    ctx.signal?.addEventListener('abort', onAbort, { once: true })
     const collect = (chunk: Buffer): void => {
       if (options.logPath !== undefined) {
         // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
@@ -685,18 +706,7 @@ export const OPS: readonly OpDefinition[] = [
         // Recorded before the build, so the tag moving is what makes this the rollback target.
         const previous = await recordRollback(ctx)
         await buildImage(ctx, dir, deadline)
-        return [
-          'built ',
-          source.label,
-          ' (',
-          source.sha,
-          ') as ',
-          BUILD_IMAGE,
-          '; main ',
-          source.mainSha,
-          '; previous image ',
-          previous,
-        ].join('')
+        return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
       } finally {
         // Best effort: a cleanup failure must not turn a tagged image into an error.
         await rm(dir, { recursive: true, force: true }).catch(() => null)
@@ -723,10 +733,7 @@ export const OPS: readonly OpDefinition[] = [
       // Read-only: a target docker no longer has must fail before anything is acknowledged.
       await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target])
       return {
-        text:
-          'rollback queued to ' +
-          target +
-          '; the session drops when the container is replaced',
+        text: `rollback queued to ${target}; the session drops when the container is replaced`,
         after: async () => {
           try {
             await docker(ctx, ['tag', target, BUILD_IMAGE])
@@ -735,7 +742,7 @@ export const OPS: readonly OpDefinition[] = [
               error instanceof Error ? error.message : String(error)
             await appendFile(
               path.join(ctx.stateDir, 'compose.log'),
-              'rollback tag failed: ' + message + '\n',
+              `rollback tag failed: ${message}\n`,
               { mode: FILE_MODE },
             ).catch(() => null)
             throw error
@@ -764,9 +771,7 @@ export const OPS: readonly OpDefinition[] = [
       }
       const checkout = ctx.checkout
       return Promise.resolve({
-        text:
-          'recreate queued; the session drops when the container is replaced. compose log: ' +
-          path.join(ctx.stateDir, 'compose.log'),
+        text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
       })
     },
