@@ -65,6 +65,9 @@ export const IP_CANDIDATES = [
 /** The pnpm client `broker.update` runs, unless the host says otherwise. */
 export const DEFAULT_PNPM = 'pnpm'
 
+/** The npm client the published-package update runs. */
+export const DEFAULT_NPM = 'npm'
+
 /** The fallback when none of the usual locations has `ss`. */
 export const DEFAULT_SS = 'ss'
 
@@ -78,6 +81,9 @@ export const SS_CANDIDATES = [
 
 /** Characters of the socket hash that name a build root: enough to keep two sockets apart. */
 export const BUILD_KEY_CHARS = 16
+
+/** How long a shutdown waits for requests that are already being answered. */
+export const DRAIN_TIMEOUT_MS = 5000
 
 /** A stalled answer write must not hold the deployment lock either; the answer is lost. */
 export const SEND_TIMEOUT_MS = 5000

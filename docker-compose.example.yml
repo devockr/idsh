@@ -75,7 +75,8 @@ networks:
     #
     # The default is a placeholder: a ULA (RFC 4193, `fc00::/7`) is private and has nothing to do
     # with your ISP prefix, so override `DSH_IPV6_SUBNET` in .env or your shell when it collides
-    # with a network or route on the host (check `docker network inspect` and `ip -6 route`).
+    # with a network or route on the host (check `docker network inspect` and `ip -6 route`); a
+    # second deployment on the same host collides on this default too, so give each its own.
     # Nothing here matches the host's global prefix on purpose: the kernel's per-network
     # `disable_ipv6` follows the network, so the image needs no change, and container traffic is
     # routed/NATed by the host like any other private subnet. Remove the whole block to keep the

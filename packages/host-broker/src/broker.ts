@@ -31,7 +31,9 @@ import {
   DEFAULT_EXEC_TIMEOUT_MS,
   DEFAULT_GIT,
   DEFAULT_IP,
+  DEFAULT_NPM,
   DEFAULT_PNPM,
+  DRAIN_TIMEOUT_MS,
   DEFAULT_SS,
   IP_CANDIDATES,
   SS_CANDIDATES,
@@ -92,6 +94,10 @@ export interface BrokerOptions {
   readonly ssPath?: string
   /** The pnpm client `broker.update` runs. Default `pnpm`, resolved through the host's PATH. */
   readonly pnpmPath?: string
+  /** The npm client the published-package update runs. Default `npm`. */
+  readonly npmPath?: string
+  /** The program this broker runs from; defaults to argv[1]. */
+  readonly entryPath?: string
   /** How `broker.update` stops the process; the tests pass their own, the CLI exits. */
   readonly stop?: () => void
   /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
@@ -130,6 +136,7 @@ const DEFAULTS = {
   dockerPath: DEFAULT_DOCKER,
   gitPath: DEFAULT_GIT,
   pnpmPath: DEFAULT_PNPM,
+  npmPath: DEFAULT_NPM,
   rateLimitPerMinute: 60,
   execTimeoutMs: DEFAULT_EXEC_TIMEOUT_MS,
 } as const
@@ -182,8 +189,10 @@ export async function startBroker(
   const buildRoot = path.join(path.dirname(auditPath), 'build', buildKey)
   const deployLock = new DeployLock()
   const pnpmPath = options.pnpmPath ?? DEFAULTS.pnpmPath
+  const npmPath = options.npmPath ?? DEFAULTS.npmPath
+  const entryPath = options.entryPath ?? process.argv.at(1) ?? ''
   const brokerVersion = packageJson.version || 'unknown'
-  const startedAt = Date.now()
+  const startedAt = now()
   const stopHolder: { stop?: () => void } = {}
   const context: OpContext = {
     logDir,
@@ -195,6 +204,8 @@ export async function startBroker(
     ipPath,
     ssPath,
     pnpmPath,
+    npmPath,
+    entryPath,
     brokerVersion,
     startedAt,
     socketPath: options.socketPath,
@@ -226,10 +237,18 @@ export async function startBroker(
   await mkdir(buildRoot, { recursive: true, mode: DIRECTORY_MODE }).catch(
     () => null,
   )
+  let inFlight = 0
   const server = net.createServer(socket => {
     sockets.add(socket)
     socket.on('close', () => sockets.delete(socket))
-    serve(socket, context, limiter, auditPath, now)
+    serve(socket, context, limiter, auditPath, now, {
+      start: () => {
+        inFlight += 1
+      },
+      end: () => {
+        inFlight -= 1
+      },
+    })
   })
   stopHolder.stop = () => {
     server.close()
@@ -247,24 +266,43 @@ export async function startBroker(
     throw error
   }
 
-  return {
-    async close() {
-      for (const socket of sockets) {
-        socket.destroy()
-      }
-      await new Promise<void>(resolve => server.close(() => resolve()))
-      await unlink(options.socketPath).catch(() => null)
-    },
+  /** Let requests that are already being answered finish before the sockets go. */
+  const drain = async (): Promise<void> => {
+    const deadline = Date.now() + DRAIN_TIMEOUT_MS
+    while (inFlight > 0 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
   }
+  const shutdown = async (): Promise<void> => {
+    await drain()
+    for (const socket of sockets) {
+      socket.destroy()
+    }
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    await unlink(options.socketPath).catch(() => null)
+  }
+  stopHolder.stop = () => {
+    // Let this answer finish first: the stop is called from inside one.
+    setTimeout(() => {
+      void shutdown()
+    }, 50)
+  }
+  return { close: shutdown }
 }
 
 /** Answer one connection, one request at a time, so responses stay in request order. */
+interface Tracker {
+  start: () => void
+  end: () => void
+}
+
 function serve(
   socket: net.Socket,
   context: OpContext,
   limiter: RateLimiter,
   auditPath: string,
   now: () => number,
+  tracker: Tracker,
 ): void {
   let closed = false
   const endWith = (response: BrokerResponse): void => {
@@ -298,7 +336,17 @@ function serve(
   const reader = createLineReader({
     onLine(line) {
       queue = queue
-        .then(() => answer(line, sendAndWait, context, limiter, auditPath, now))
+        .then(() => {
+          tracker.start()
+          return answer(
+            line,
+            sendAndWait,
+            context,
+            limiter,
+            auditPath,
+            now,
+          ).finally(() => tracker.end())
+        })
         .catch(() => {
           // One broken request must not stall every later one on this connection.
         })

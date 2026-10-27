@@ -936,6 +936,12 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
     const recreate = ops.find(op => op.name === 'deploy.recreate')
     assert.equal(recreate?.confirm, true)
     assert.equal(ops.find(op => op.name === 'deploy.rollback')?.confirm, true)
+    const update = ops.find(op => op.name === 'broker.update')
+    assert.ok(update !== undefined)
+    assert.equal(update.confirm, true)
+    assert.equal(update.timeoutMs, 900_000)
+    assert.ok(ops.some(op => op.name === 'broker.status'))
+
     const main = ops.find(op => op.name === 'deploy.main')
     assert.ok(main !== undefined)
     assert.equal(main.confirm, true)
@@ -1959,11 +1965,26 @@ echo "ss $*"
 
 void test('broker.status reports the broker it is asked', async () => {
   const host = await fakeHost()
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(path.join(checkout, 'packages', 'host-broker'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(checkout, 'packages', 'host-broker', 'package.json'),
+    '{"name":"@idsh/host-broker"}\n',
+  )
+  const version = (
+    JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { version?: string }
+  ).version
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
     logDir: host.logDir,
     procDir: host.procDir,
+    now: () => 1_700_000_000_000,
+    checkout,
   })
   const connection = client(host.socketPath)
   try {
@@ -1975,10 +1996,15 @@ void test('broker.status reports the broker it is asked', async () => {
         return [line.slice(0, at), line.slice(at + 1)] as const
       }),
     )
-    assert.match(fields.get('version') ?? '', /^\d+\.\d+\.\d+/u)
+    assert.equal(fields.get('version'), version)
     assert.equal(fields.get('pid'), String(process.pid))
-    assert.match(fields.get('started') ?? '', /^\d{4}-\d{2}-\d{2}T/u)
+    assert.equal(
+      fields.get('started'),
+      new Date(1_700_000_000_000).toISOString(),
+    )
     assert.equal(fields.get('socket'), host.socketPath)
+    assert.equal(fields.get('audit'), host.auditPath)
+    assert.equal(fields.get('checkout'), checkout)
   } finally {
     connection.close()
     await broker.close()
@@ -2022,6 +2048,7 @@ echo "$PWD $*" >> '${pnpmLog}'
     gitPath,
     pnpmPath,
     checkout,
+    entryPath: path.join(checkout, 'packages', 'host-broker', 'lib', 'cli.js'),
     stop: () => {
       stopped += 1
     },
@@ -2077,6 +2104,7 @@ esac
     gitPath,
     pnpmPath,
     checkout,
+    entryPath: path.join(checkout, 'packages', 'host-broker', 'lib', 'cli.js'),
     stop: () => {
       stopped += 1
     },
@@ -2090,6 +2118,120 @@ esac
     assert.equal(stopped, 0)
   } finally {
     connection.close()
+    await broker.close()
+  }
+})
+
+void test('broker.update without a checkout uses the published package', async () => {
+  const host = await fakeHost()
+  const npmLog = path.join(host.root, 'npm.log')
+  const npmPath = path.join(host.root, 'npm')
+  await writeFile(
+    npmPath,
+    `#!/bin/sh
+echo "$*" >> '${npmLog}'
+`,
+    { mode: 0o755 },
+  )
+  const prefix = path.join(host.root, 'prefix')
+  await mkdir(path.join(prefix, 'bin'), { recursive: true })
+  let stopped = 0
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    npmPath,
+    entryPath: path.join(prefix, 'bin', 'idsh-host'),
+    stop: () => {
+      stopped += 1
+    },
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^updated from npm/u)
+    const npmText = await readFile(npmLog, 'utf8')
+    const npm = npmText.trim()
+    assert.equal(
+      npm,
+      `install --global --prefix ${prefix} @idsh/host-broker@latest`,
+    )
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(stopped, 1)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a deployment in flight refuses a broker update', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const pnpmPath = path.join(host.root, 'pnpm')
+  const pnpmLog = path.join(host.root, 'pnpm.log')
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  inspect) echo 'sha256:pre vious' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    pnpmPath,
+    `#!/bin/sh
+echo "$*" >> '${pnpmLog}'
+`,
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(path.join(checkout, 'packages', 'host-broker'), {
+    recursive: true,
+  })
+  await writeFile(
+    path.join(checkout, 'packages', 'host-broker', 'package.json'),
+    '{"name":"@idsh/host-broker"}\n',
+  )
+  let stopped = 0
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    pnpmPath,
+    checkout,
+    entryPath: path.join(checkout, 'packages', 'host-broker', 'lib', 'cli.js'),
+    stop: () => {
+      stopped += 1
+    },
+  })
+  const deployment = client(host.socketPath)
+  const admin = client(host.socketPath)
+  try {
+    const recreate = await deployment.request({
+      op: 'deploy.recreate',
+      args: {},
+    })
+    assert.equal(recreate.ok, true, JSON.stringify(recreate.error))
+    // The recreate's compose is still running: the update must be refused, not queued.
+    const refused = await admin.request({ op: 'broker.update', args: {} })
+    assert.equal(refused.ok, false)
+    assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    const allowed = await admin.request({ op: 'broker.update', args: {} })
+    assert.equal(allowed.ok, true, JSON.stringify(allowed.error))
+    await new Promise(resolve => setTimeout(resolve, 700))
+    assert.equal(stopped, 1)
+  } finally {
+    deployment.close()
+    admin.close()
     await broker.close()
   }
 })

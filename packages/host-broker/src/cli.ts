@@ -30,7 +30,9 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --ip <path>            The ip client net.status runs (default: the usual locations)
   --ss <path>            The ss client net.sockets runs (default: the usual locations)
   --pnpm <path>          The pnpm client broker.update runs (default pnpm)
-  --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml
+  --npm <path>           The npm client broker.update runs (default npm)
+  --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml;
+                          also the source broker.update rebuilds from when the CLI runs inside it
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
@@ -76,6 +78,7 @@ async function main(): Promise<void> {
       ip: { type: 'string' },
       ss: { type: 'string' },
       pnpm: { type: 'string' },
+      npm: { type: 'string' },
       checkout: { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
@@ -93,6 +96,7 @@ async function main(): Promise<void> {
     return
   }
 
+  const handlers: { shutdown?: () => void } = {}
   const broker = await startBroker({
     socketPath: values.socket,
     auditPath: values.audit,
@@ -106,12 +110,10 @@ async function main(): Promise<void> {
     ...(values.ip === undefined ? {} : { ipPath: values.ip }),
     ...(values.ss === undefined ? {} : { ssPath: values.ss }),
     ...(values.pnpm === undefined ? {} : { pnpmPath: values.pnpm }),
+    ...(values.npm === undefined ? {} : { npmPath: values.npm }),
     ...(values.checkout === undefined ? {} : { checkout: values.checkout }),
-    // The supervisor restarts the process; exiting is what makes it read the new build.
-    stop: () => {
-      // eslint-disable-next-line n/no-process-exit -- a supervisor restarts an exited service
-      process.exit(0)
-    },
+    // The supervisor restarts the process once it has drained; that is the self-update hand-off.
+    stop: () => handlers.shutdown?.(),
     rateLimitPerMinute: number(values['rate-limit'], 60, '--rate-limit'),
     execTimeoutMs: number(
       values['exec-timeout'],
@@ -124,13 +126,7 @@ async function main(): Promise<void> {
 
   process.stderr.write(`idsh-host: listening on ${values.socket}\n`)
 
-  let stopping = false
-  const stop = (signal: NodeJS.Signals): void => {
-    if (stopping) {
-      return
-    }
-    stopping = true
-    process.stderr.write(`idsh-host: ${signal}, closing\n`)
+  handlers.shutdown = () => {
     void broker.close().then(
       () => {
         process.exitCode = 0
@@ -139,6 +135,16 @@ async function main(): Promise<void> {
         process.exitCode = 1
       },
     )
+  }
+
+  let stopping = false
+  const stop = (signal: NodeJS.Signals): void => {
+    if (stopping) {
+      return
+    }
+    stopping = true
+    process.stderr.write(`idsh-host: ${signal}, closing\n`)
+    handlers.shutdown?.()
   }
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)

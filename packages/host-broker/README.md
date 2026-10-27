@@ -13,7 +13,7 @@ with a small set of validated arguments.
 ```text
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
          [--container <name>] [--docker <path>] [--git <path>]
-         [--ip <path>] [--ss <path>] [--pnpm <path>] [--checkout <dir>]
+         [--ip <path>] [--ss <path>] [--pnpm <path>] [--npm <path>] [--checkout <dir>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -38,9 +38,14 @@ systemctl --user enable --now idsh-host
 loginctl enable-linger "$USER" # keep it running without a login session
 ```
 
-`Restart=always` is what makes `broker.update` work: that operation installs the new build and
-exits, and the unit starts the new one. Without a supervisor, the update changes the files but
-nothing restarts.
+`Restart=always` is what makes `broker.update` work: that operation installs the new build, answers,
+drains the requests in flight and exits, and the unit starts the new one. Without a supervisor the
+CLI still exits after the update, so the broker is gone rather than still running the old build.
+
+How the update installs depends on what the process is running from — it reads its own entry. Run
+from `--checkout` (`.../packages/host-broker/lib/cli.js`), it pulls and rebuilds there, so the unit
+must start that file. Installed under a prefix with `bin/idsh-host`, it runs
+`npm install --global --prefix <prefix> @idsh/host-broker@latest` for that same prefix.
 
 A system unit would default to root, which changes both whose files it reads and who may open the
 socket; do not use one. The unit's user also needs to reach the docker daemon, and the broker runs

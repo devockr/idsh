@@ -50,6 +50,10 @@ export interface OpContext {
   readonly ssPath: string
   /** The pnpm client `broker.update` runs. */
   readonly pnpmPath: string
+  /** The npm client the published-package update runs. */
+  readonly npmPath: string
+  /** The program this broker is running from; decides how to update it. */
+  readonly entryPath: string
   /** The broker's own version, from its package.json. */
   readonly brokerVersion: string
   /** When the broker booted, for `broker.status`. */
@@ -559,17 +563,22 @@ function remaining(deadline: number): number {
 
 const BROKER_PACKAGE = '@idsh/host-broker'
 
-/** A checkout that carries the broker's own source is the self-update source; otherwise npm. */
-async function brokerUpdateSource(ctx: OpContext): Promise<'checkout' | 'npm'> {
+/**
+ * How this broker was installed, read from the program it is running: inside the checkout it
+ * builds there (the entry it is running from), otherwise the published package is what to update.
+ */
+function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
   if (ctx.checkout === undefined) {
     return 'npm'
   }
-  try {
-    await stat(path.join(ctx.checkout, 'packages/host-broker/package.json'))
-    return 'checkout'
-  } catch {
-    return 'npm'
-  }
+  const entry = path.resolve(ctx.entryPath)
+  const relative = path.relative(ctx.checkout, entry)
+  return relative !== '' && !relative.startsWith('..') ? 'checkout' : 'npm'
+}
+
+/** The prefix an npm-installed `bin/idsh-host` came from. */
+function installPrefix(ctx: OpContext): string {
+  return path.dirname(path.dirname(path.resolve(ctx.entryPath)))
 }
 
 interface UpdateStep {
@@ -602,8 +611,15 @@ function brokerUpdate(
   }
   return [
     {
-      program: ctx.pnpmPath,
-      args: ['add', '--global', `${BROKER_PACKAGE}@latest`],
+      // The unit runs `<prefix>/bin/idsh-host`, so the update has to land in that prefix.
+      program: ctx.npmPath,
+      args: [
+        'install',
+        '--global',
+        '--prefix',
+        installPrefix(ctx),
+        `${BROKER_PACKAGE}@latest`,
+      ],
     },
   ]
 }
@@ -983,11 +999,13 @@ export const OPS: readonly OpDefinition[] = [
     input: { type: 'object', properties: {}, additionalProperties: false },
     async run(args, ctx) {
       rejectUnknown(args, [])
-      const source = await brokerUpdateSource(ctx)
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      const source = brokerUpdateSource(ctx)
       // Synchronous on purpose: a failed step must be the answer, not a silent no-op behind it.
+      // Each step gets what is left of the one budget, like the build.
       for (const step of brokerUpdate(ctx, source)) {
         await runFixed(ctx, step.program, step.args, {
-          timeoutMs: BUILD_TIMEOUT_MS,
+          timeoutMs: remaining(deadline),
           ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
         })
       }
