@@ -78,6 +78,7 @@ request.
 | `deploy.status`   | the deployment container: image, creation time and state                                                                                          |
 | `deploy.log`      | the tail of the deployment container log                                                                                                          |
 | `deploy.build`    | builds `:dev` from a PR head or an origin branch tip; the six root-surface files come from `main`, and the previous image id is kept for rollback |
+| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                   |
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                               |
 | `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                    |
 
@@ -93,7 +94,10 @@ to escape, nothing that can backtrack.
 - **Rate**: 60 requests per operation per minute by default; the refusal is `too-many-requests`.
 - **Time**: 10 seconds per operation by default; a program that outlives it answers `timeout`, and
   its process group is stopped with it, so whatever it started goes too. An operation may publish a
-  longer `timeoutMs` (the build takes up to 15 minutes), and the plugin then waits that long.
+  longer `timeoutMs` (the build takes up to 15 minutes), and the plugin then waits that long. A
+  serialized operation that finds another deployment running answers `unavailable` — stop it or wait
+  for it, then run the operation again; nothing queues. When the answer's deadline passes, the
+  request's signal stops the program it started, so nothing retags an image behind a failed answer.
 - **Buffer**: one program may write 1 MiB. Past that a tail operation keeps the last 1 MiB (the
   oldest bytes are dropped) and a head operation the first 1 MiB (the newest are), then the answer
   cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.
@@ -107,11 +111,13 @@ to escape, nothing that can backtrack.
 
 ## What is not here yet
 
-`deploy.rollback`, the router operations and the `run` allowlist are phase‑1/phase‑3 work in
-`ROADMAP.md`. `deploy.recreate` is the first destructive operation: it runs one fixed
-`docker compose` in `--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`),
-and the plugin asks the person before calling it. It is acknowledged first and launched detached, so
-the answer arrives before the container is replaced; `<stateDir>/compose.log` records the outcome.
+The router operations and the `run` allowlist are phase‑1/phase‑3 work in `ROADMAP.md`.
+`deploy.recreate` is the first destructive operation: it runs one fixed `docker compose` in
+`--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`), and the plugin
+asks the person before calling it. `deploy.build` records the rollback target, and `deploy.rollback`
+uses the recreate path with that image; one deployment lock serializes the three. A recreate is
+acknowledged first and launched detached, so the answer arrives before the container is replaced;
+`<stateDir>/compose.log` records the outcome.
 
 ## Not in the image
 

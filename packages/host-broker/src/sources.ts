@@ -22,6 +22,7 @@ import path from 'node:path'
 
 import {
   BUILD_TIMEOUT_MS,
+  COMPOSE_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
   MAX_ERROR_CHARS,
@@ -29,6 +30,7 @@ import {
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
 } from './constants.ts'
+import type { DeployLock } from './deploy-lock.ts'
 import type { Keep } from './limits.ts'
 import { BrokerFault } from './protocol.ts'
 
@@ -46,6 +48,10 @@ export interface OpContext {
   readonly stateDir: string
   /** Where builds clone; unique to this broker's socket, swept at boot. */
   readonly buildRoot: string
+  /** Serializes builds, recreates and rollbacks: one retag at a time. */
+  readonly deployLock: DeployLock
+  /** Aborted when the caller has waited as long as it will; programs stop with it. */
+  readonly signal?: AbortSignal
 }
 
 /** An answer plus work that must not start until that answer has been written. */
@@ -66,6 +72,8 @@ export interface OpDefinition {
   readonly confirm?: boolean
   /** How long the operation may take; defaults to the broker's per-program deadline. */
   readonly timeoutMs?: number
+  /** Runs under the deployment lock: no build, recreate or rollback overlaps it. */
+  readonly serial?: boolean
   run(
     args: Record<string, unknown>,
     ctx: OpContext,
@@ -100,6 +108,11 @@ function runFixed(
 ): Promise<string> {
   const keep = options.keep ?? 'head'
   const timeoutMs = options.timeoutMs ?? ctx.execTimeoutMs
+  if (ctx.signal?.aborted === true) {
+    return Promise.reject(
+      new BrokerFault('timeout', 'the operation was cancelled'),
+    )
+  }
   return new Promise((resolve, reject) => {
     let logChain: Promise<unknown> = Promise.resolve()
     const child = spawn(program, args, {
@@ -124,6 +137,7 @@ function runFixed(
       if (state.timer !== undefined) {
         clearTimeout(state.timer)
       }
+      ctx.signal?.removeEventListener('abort', onAbort)
       // The answer waits for the log to be complete, so a reader never sees a torn tail.
       void logChain.finally(() => {
         if (failure === undefined) {
@@ -133,6 +147,19 @@ function runFixed(
         }
       })
     }
+    // The caller's deadline aborts the request context: the program goes with it, so a timed-out
+    // build cannot retag an image after its answer.
+    function onAbort(): void {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL')
+        } catch {
+          child.kill('SIGKILL')
+        }
+      }
+      settle(new BrokerFault('timeout', 'the operation was cancelled'))
+    }
+    ctx.signal?.addEventListener('abort', onAbort, { once: true })
     const collect = (chunk: Buffer): void => {
       if (options.logPath !== undefined) {
         // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
@@ -450,6 +477,30 @@ async function composeDetached(
       noteFailure(logPath, error)
     })
     child.unref()
+    // The caller holds the deployment lock until compose is done, so a compose that never returns
+    // must not hold it forever.
+    const timer = setTimeout(() => {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL')
+        } catch {
+          child.kill('SIGKILL')
+        }
+      }
+      void appendFile(
+        logPath,
+        `compose did not finish within ${String(COMPOSE_TIMEOUT_MS)} ms\n`,
+        { mode: FILE_MODE },
+      ).catch(() => null)
+    }, COMPOSE_TIMEOUT_MS)
+    try {
+      await new Promise<void>(resolve => {
+        child.once('error', () => resolve())
+        child.once('exit', () => resolve())
+      })
+    } finally {
+      clearTimeout(timer)
+    }
   } finally {
     await log.close()
   }
@@ -475,6 +526,9 @@ const BUILD_IMAGE = 'devockr/idsh:dev'
 
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
 
+/** What `recordRollback` writes: an image id or a manifest digest. */
+const IMAGE_REFERENCE = /^(?:sha256:[0-9a-f]{64}|[^\s@]+@sha256:[0-9a-f]{64})$/u
+
 /** A spawn failure the answer already left behind: record it where the operator will look. */
 function noteFailure(logPath: string, error: Error): void {
   void appendFile(logPath, `spawn failed: ${error.message}\n`, {
@@ -485,6 +539,40 @@ function noteFailure(logPath: string, error: Error): void {
 /** What is left of one operation's budget. */
 function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now())
+}
+
+/* ---------------------------------------------------------------- deploy.rollback */
+
+/** The image recorded before the last build; a build that never ran leaves no target. */
+async function rollbackTarget(ctx: OpContext): Promise<string> {
+  let text: string
+  try {
+    text = await readFile(path.join(ctx.stateDir, 'rollback'), 'utf8')
+  } catch {
+    throw new BrokerFault(
+      'unavailable',
+      'no rollback target recorded; run deploy.build first',
+    )
+  }
+  // One line, plus the newline recordRollback writes; any other break is a broken file.
+  const lines = text.split('\n')
+  if (lines.at(-1) === '') {
+    lines.pop()
+  }
+  if (lines.length !== 1) {
+    throw new BrokerFault(
+      'unavailable',
+      `the rollback file does not name one image: ${JSON.stringify(text)}`,
+    )
+  }
+  const target = (lines[0] ?? '').trim()
+  if (!IMAGE_REFERENCE.test(target)) {
+    throw new BrokerFault(
+      'unavailable',
+      `the rollback file does not name an image: ${JSON.stringify(target)}`,
+    )
+  }
+  return target
 }
 
 /* ------------------------------------------------------------------ the table */
@@ -592,6 +680,7 @@ export const OPS: readonly OpDefinition[] = [
     summary:
       'Build the :dev image from a PR head or the tip of an origin branch; the root files stay at main.',
     confirm: true,
+    serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
     input: {
       type: 'object',
@@ -625,22 +714,48 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
   {
+    name: 'deploy.rollback',
+    summary:
+      'Retag :dev to the image recorded before the last build, then recreate from it.',
+    confirm: true,
+    serial: true,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      const checkout = requireCheckout(ctx)
+      const target = await rollbackTarget(ctx)
+      // Read-only: a target docker no longer has must fail before anything is acknowledged.
+      await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target])
+      return {
+        text: `rollback queued to ${target}; the session drops when the container is replaced`,
+        after: async () => {
+          try {
+            await docker(ctx, ['tag', target, BUILD_IMAGE])
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error)
+            await appendFile(
+              path.join(ctx.stateDir, 'compose.log'),
+              `rollback tag failed: ${message}\n`,
+              { mode: FILE_MODE },
+            ).catch(() => null)
+            throw error
+          }
+          await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+        },
+      }
+    },
+  },
+  {
     name: 'deploy.recreate',
     summary:
       'Recreate the deployment container from the current :dev image, without building.',
     confirm: true,
+    serial: true,
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {
       rejectUnknown(args, [])
-      if (ctx.checkout === undefined) {
-        return Promise.reject(
-          new BrokerFault(
-            'unavailable',
-            'no checkout configured; start the broker with --checkout',
-          ),
-        )
-      }
-      const checkout = ctx.checkout
+      const checkout = requireCheckout(ctx)
       return Promise.resolve({
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
@@ -675,6 +790,17 @@ export function describeOps(): string {
     null,
     2,
   )
+}
+
+/** The deployment checkout, or the fault that says why a deploy operation cannot run. */
+function requireCheckout(ctx: OpContext): string {
+  if (ctx.checkout === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      'no checkout configured; start the broker with --checkout',
+    )
+  }
+  return ctx.checkout
 }
 
 /* ---------------------------------------------------------------- deploy.build */
@@ -723,12 +849,7 @@ async function resolveBuildSource(
   if ((pr === undefined) === (sha === undefined)) {
     throw new BrokerFault('bad-argument', 'give exactly one of pr or sha')
   }
-  if (ctx.checkout === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'no checkout configured; start the broker with --checkout',
-    )
-  }
+  requireCheckout(ctx)
   const heads = parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline))
   const main = heads.find(entry => entry.ref === 'refs/heads/main')
   if (main === undefined) {
@@ -788,13 +909,7 @@ async function prepareBuildSource(
   source: BuildSource,
   deadline: number,
 ): Promise<string> {
-  const checkout = ctx.checkout
-  if (checkout === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'no checkout configured; start the broker with --checkout',
-    )
-  }
+  const checkout = requireCheckout(ctx)
   const root = ctx.buildRoot
   await mkdir(root, { recursive: true, mode: DIRECTORY_MODE })
   // The checkout may never have fetched the source: freshen its refs, then clone its objects.
@@ -925,10 +1040,12 @@ async function buildImage(
       { timeoutMs: remaining(deadline), logPath },
     )
   } catch (error) {
-    // A killed client does not stop its container: remove the one this run started.
+    // A killed client does not stop its container: remove the one this run started, with a context
+    // that is not the aborted one (that would cancel the cleanup too).
     const cid = await readFile(cidFile, 'utf8').catch(() => null)
     if (cid !== null && cid.trim() !== '') {
-      await docker(ctx, ['rm', '--force', cid.trim()]).catch(() => null)
+      const cleanup = { ...ctx, signal: undefined }
+      await docker(cleanup, ['rm', '--force', cid.trim()]).catch(() => null)
     }
     throw error
   }

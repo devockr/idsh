@@ -24,8 +24,8 @@ import {
   BUILD_KEY_CHARS,
   DEFAULT_CONTAINER,
   DEFAULT_DOCKER,
-  DEFAULT_GIT,
   DEFAULT_EXEC_TIMEOUT_MS,
+  DEFAULT_GIT,
   DIRECTORY_MODE,
   FILE_MODE,
   FORBIDDEN_DIRECTORY_BITS,
@@ -34,9 +34,11 @@ import {
   MAX_AUDIT_ARGS_CHARS,
   MAX_LINE_BYTES,
   MAX_TIMER_MS,
+  SEND_TIMEOUT_MS,
   SOCKET_MODE,
   TIMEOUT_SLACK_MS,
 } from './constants.ts'
+import { DeployLock } from './deploy-lock.ts'
 import { capOutput, RateLimiter, type Capped } from './limits.ts'
 import {
   BrokerFault,
@@ -141,6 +143,7 @@ export async function startBroker(
     .digest('hex')
     .slice(0, BUILD_KEY_CHARS)
   const buildRoot = path.join(path.dirname(auditPath), 'build', buildKey)
+  const deployLock = new DeployLock()
   const context: OpContext = {
     logDir,
     procDir,
@@ -150,6 +153,7 @@ export async function startBroker(
     gitPath,
     stateDir: path.dirname(auditPath),
     buildRoot,
+    deployLock,
     ...(checkout === undefined ? {} : { checkout }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
@@ -216,14 +220,25 @@ function serve(
     // that never closes cannot keep the descriptor.
     socket.end(encode(response), () => socket.destroy())
   }
-  /** Write an answer and resolve once it is flushed, so a deferred action can wait for it. */
+  /** Write an answer and settle once it is flushed; a write that cannot happen is a failure. */
   const sendAndWait = (response: BrokerResponse): Promise<void> =>
-    new Promise(resolve => {
+    new Promise((resolve, reject) => {
       if (closed || socket.destroyed) {
+        // A caller that hung up has lost its answer; that is not a failed operation.
         resolve()
         return
       }
-      socket.write(encode(response), () => resolve())
+      // A write that has not flushed by now counts as a lost answer too, so a stalled socket cannot
+      // keep the deferred work (and the deployment lock) waiting.
+      const timer = setTimeout(() => resolve(), SEND_TIMEOUT_MS)
+      socket.write(encode(response), error => {
+        clearTimeout(timer)
+        if (error === undefined || error === null) {
+          resolve()
+        } else {
+          reject(error)
+        }
+      })
     })
 
   let queue: Promise<void> = Promise.resolve()
@@ -306,12 +321,32 @@ async function answer(
   let op = '?'
   let requestId: string | undefined
   let args: Record<string, unknown> = {}
+  let release: (() => void) | undefined
+  let released = false
+  // One release for the whole request: the handler releases when nothing is deferred, the deferred
+  // work's own chain releases when it is.
+  const releaseOnce = (): void => {
+    if (released) {
+      return
+    }
+    released = true
+    release?.()
+  }
+
+  /** Write an answer; a caller that hung up has lost it, which is not a failed operation. */
+  const deliver = async (response: BrokerResponse): Promise<void> => {
+    try {
+      await send(response)
+    } catch {
+      // The audit line stands and any deferred work still runs.
+    }
+  }
 
   const finish = async (
     response: BrokerResponse,
     outcome: { bytes: number; truncated: boolean; error?: string },
     after?: () => Promise<void> | void,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     try {
       await appendAudit(auditPath, {
         time: new Date(started).toISOString(),
@@ -325,7 +360,7 @@ async function answer(
       })
     } catch {
       // An unaudited action is not allowed to look like a successful one.
-      await send({
+      await deliver({
         ...(requestId === undefined ? {} : { id: requestId }),
         ok: false,
         error: {
@@ -333,15 +368,21 @@ async function answer(
           message: 'the audit log could not be written',
         },
       })
-      return
+      return false
     }
-    await send(response)
-    if (after !== undefined) {
-      // The caller's container may be replaced by this work, so give the answer time to arrive.
-      setTimeout(() => {
-        void Promise.resolve(after()).catch(() => null)
-      }, AFTER_RESPONSE_DELAY_MS)
+    await deliver(response)
+    if (after === undefined) {
+      return false
     }
+    // The answer is out; the deferred work runs detached from this handler, after a pause that lets
+    // the answer arrive, and whatever holds the request's lock releases when that work ends.
+    setTimeout(() => {
+      void Promise.resolve()
+        .then(after)
+        .catch(() => null)
+        .finally(releaseOnce)
+    }, AFTER_RESPONSE_DELAY_MS)
+    return true
   }
 
   try {
@@ -349,20 +390,51 @@ async function answer(
     op = request.op
     requestId = request.id
     args = request.args
-    const execution = await execute(request, context, limiter, started)
-    await finish(
-      {
-        ...(requestId === undefined ? {} : { id: requestId }),
-        ok: true,
-        result: execution.text,
-        ...(execution.truncated ? { truncated: true } : {}),
-      },
-      {
-        bytes: Buffer.byteLength(execution.text),
-        truncated: execution.truncated,
-      },
-      execution.after,
-    )
+    const definition = findOp(request.op)
+    const budget = definition?.timeoutMs ?? context.execTimeoutMs
+    const deployment = acquireDeployment(context, definition)
+    if (deployment.fault !== undefined) {
+      await finish(faultAnswer(deployment.fault, requestId), {
+        bytes: 0,
+        truncated: false,
+        error: deployment.fault.code,
+      })
+      return
+    }
+    const deadline = Date.now() + budget
+    const controller = new AbortController()
+    const requestContext = { ...context, signal: controller.signal }
+    release = deployment.release
+    let deferred = false
+    try {
+      const execution = await execute(
+        request,
+        requestContext,
+        limiter,
+        started,
+        deadline,
+        controller,
+      )
+      deferred = await finish(
+        {
+          ...(requestId === undefined ? {} : { id: requestId }),
+          ok: true,
+          result: execution.text,
+          ...(execution.truncated ? { truncated: true } : {}),
+        },
+        {
+          bytes: Buffer.byteLength(execution.text),
+          truncated: execution.truncated,
+        },
+        execution.after,
+      )
+    } finally {
+      // When the answer carries deferred work, that work's chain releases the lock; otherwise this
+      // request is done as soon as its answer is written.
+      if (!deferred) {
+        releaseOnce()
+      }
+    }
   } catch (error) {
     let fault: BrokerFault
     if (error instanceof BrokerFault) {
@@ -372,14 +444,11 @@ async function answer(
         error instanceof Error ? error.message : 'the operation failed'
       fault = new BrokerFault('internal', message)
     }
-    await finish(
-      {
-        ...(requestId === undefined ? {} : { id: requestId }),
-        ok: false,
-        error: { code: fault.code, message: fault.message },
-      },
-      { bytes: 0, truncated: false, error: fault.code },
-    )
+    await finish(faultAnswer(fault, requestId), {
+      bytes: 0,
+      truncated: false,
+      error: fault.code,
+    })
   }
 }
 
@@ -389,6 +458,8 @@ async function execute(
   context: OpContext,
   limiter: RateLimiter,
   started: number,
+  deadline: number,
+  controller?: AbortController,
 ): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
@@ -414,7 +485,7 @@ async function execute(
   const raw =
     definition === undefined
       ? describeOps()
-      : await runOp(definition, request.args, context)
+      : await runOp(definition, request.args, context, deadline, controller)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
     definition === undefined
@@ -426,15 +497,57 @@ async function execute(
   }
 }
 
+/** One failed answer, with the request id when the caller sent one. */
+function faultAnswer(
+  fault: BrokerFault,
+  requestId: string | undefined,
+): BrokerResponse {
+  return {
+    ...(requestId === undefined ? {} : { id: requestId }),
+    ok: false,
+    error: { code: fault.code, message: fault.message },
+  }
+}
+
+/**
+ * Take the deployment lock when the operation asks for it. There is no queue: a deployment that
+ * finds another one running answers with the fault, and its caller retries.
+ */
+function acquireDeployment(
+  context: OpContext,
+  definition: OpDefinition | undefined,
+): { release?: () => void; fault?: BrokerFault } {
+  if (definition?.serial !== true) {
+    return {}
+  }
+  const release = context.deployLock.tryAcquire()
+  if (release === undefined) {
+    return {
+      fault: new BrokerFault(
+        'unavailable',
+        'a deployment is in progress; stop it (or wait for it to finish), then run this again',
+      ),
+    }
+  }
+  return { release }
+}
+
 function runOp(
   op: OpDefinition,
   args: Record<string, unknown>,
   context: OpContext,
+  deadline: number,
+  controller?: AbortController,
 ): Promise<Execution | string> {
-  return withTimeout(
-    op.run(args, context),
-    (op.timeoutMs ?? context.execTimeoutMs) + TIMEOUT_SLACK_MS,
+  const running = op.run(args, context)
+  const bounded = withTimeout(
+    running,
+    Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS,
   )
+  // A timed-out operation is also stopped: the program's group is killed through the signal, so it
+  // cannot keep working (or retag an image) after the answer.
+  void bounded.catch(() => controller?.abort())
+  return bounded
 }
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
