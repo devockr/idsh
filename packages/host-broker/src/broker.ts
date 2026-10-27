@@ -220,14 +220,22 @@ function serve(
     // that never closes cannot keep the descriptor.
     socket.end(encode(response), () => socket.destroy())
   }
-  /** Write an answer and resolve once it is flushed, so a deferred action can wait for it. */
+  /** Write an answer and settle once it is flushed; a write that cannot happen is a failure. */
   const sendAndWait = (response: BrokerResponse): Promise<void> =>
-    new Promise(resolve => {
+    new Promise((resolve, reject) => {
       if (closed || socket.destroyed) {
-        resolve()
+        reject(
+          new Error('the answer could not be written: the connection is gone'),
+        )
         return
       }
-      socket.write(encode(response), () => resolve())
+      socket.write(encode(response), error => {
+        if (error === undefined || error === null) {
+          resolve()
+        } else {
+          reject(error)
+        }
+      })
     })
 
   let queue: Promise<void> = Promise.resolve()
