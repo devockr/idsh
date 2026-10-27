@@ -1626,3 +1626,75 @@ esac
     await broker.close()
   }
 })
+
+void test('a rollback answered before a build still tags and composes first', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$1" in
+  inspect) echo '${ROLLBACK_TARGET}' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const rolling = client(host.socketPath)
+  const building = client(host.socketPath)
+  try {
+    const rolled = await rolling.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(rolled.ok, true, JSON.stringify(rolled.error))
+    // The answer is out; the deferred tag and compose are still the lock's business.
+    const built = await building.request({
+      op: 'deploy.build',
+      args: { sha: 'aaaaaaaa' },
+    })
+    assert.equal(built.ok, true, JSON.stringify(built.error))
+    let log = ''
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      log = await readFile(dockerLog, 'utf8')
+      if (log.includes('build --tag devockr/idsh:dev')) {
+        break
+      }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    const tagAt = log.indexOf('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev')
+    const composeAt = log.indexOf('compose -f docker-compose.yml')
+    const buildAt = log.indexOf('build --tag devockr/idsh:dev')
+    assert.ok(tagAt !== -1 && composeAt !== -1 && buildAt !== -1, log)
+    assert.ok(tagAt < buildAt, 'the rollback tagged before the build rebuilt')
+    assert.ok(
+      composeAt < buildAt,
+      'the rollback composed before the build rebuilt',
+    )
+  } finally {
+    rolling.close()
+    building.close()
+    await broker.close()
+  }
+})

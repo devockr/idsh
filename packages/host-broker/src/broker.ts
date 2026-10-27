@@ -375,7 +375,7 @@ async function answer(
     const deadline = Date.now() + budget
     const controller = new AbortController()
     const requestContext = { ...context, signal: controller.signal }
-    const hold = deployment.hold
+    const release = deployment.release
     try {
       const execution = await execute(
         request,
@@ -383,7 +383,6 @@ async function answer(
         limiter,
         started,
         deadline,
-        hold,
         controller,
       )
       await finish(
@@ -400,11 +399,9 @@ async function answer(
         execution.after,
       )
     } finally {
-      // Only when the operation never started does the answer release; otherwise it releases when
-      // its own work settles.
-      if (hold !== undefined && !hold.started) {
-        hold.release()
-      }
+      // The lock spans the deferred work too: `finish` awaits `after`, and a timed-out operation
+      // is stopped by its signal, not left running past this release.
+      release?.()
     }
   } catch (error) {
     let fault: BrokerFault
@@ -430,7 +427,6 @@ async function execute(
   limiter: RateLimiter,
   started: number,
   deadline: number,
-  hold?: DeploymentHold,
   controller?: AbortController,
 ): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
@@ -457,14 +453,7 @@ async function execute(
   const raw =
     definition === undefined
       ? describeOps()
-      : await runOp(
-          definition,
-          request.args,
-          context,
-          deadline,
-          hold,
-          controller,
-        )
+      : await runOp(definition, request.args, context, deadline, controller)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
     definition === undefined
@@ -488,12 +477,6 @@ function faultAnswer(
   }
 }
 
-/** The lock a serial operation holds; `started` says whether the work has begun. */
-interface DeploymentHold {
-  readonly release: () => void
-  started: boolean
-}
-
 /**
  * Take the deployment lock when the operation asks for it. A waiter that cannot get in within its
  * own budget answers with the fault instead of queueing indefinitely.
@@ -502,17 +485,12 @@ async function acquireDeployment(
   context: OpContext,
   definition: OpDefinition | undefined,
   budget: number,
-): Promise<{ hold?: DeploymentHold; fault?: BrokerFault }> {
+): Promise<{ release?: () => void; fault?: BrokerFault }> {
   if (definition?.serial !== true) {
     return {}
   }
   try {
-    return {
-      hold: {
-        release: await context.deployLock.acquire(budget),
-        started: false,
-      },
-    }
+    return { release: await context.deployLock.acquire(budget) }
   } catch (error) {
     if (error instanceof BrokerFault) {
       return { fault: error }
@@ -528,16 +506,9 @@ function runOp(
   args: Record<string, unknown>,
   context: OpContext,
   deadline: number,
-  hold?: DeploymentHold,
   controller?: AbortController,
 ): Promise<Execution | string> {
   const running = op.run(args, context)
-  if (hold !== undefined) {
-    hold.started = true
-    // A caller timeout must not release the lock while the work is still running: the operation
-    // releases it when *it* settles, whichever way that went.
-    void running.finally(() => hold.release()).catch(() => null)
-  }
   const bounded = withTimeout(
     running,
     Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS,
