@@ -2065,6 +2065,11 @@ echo "$PWD $*" >> '${pnpmLog}'
     const pnpm = await readFile(pnpmLog, 'utf8')
     assert.match(pnpm, /checkout install --frozen-lockfile/u)
     assert.match(pnpm, /checkout --filter @idsh\/host-broker build/u)
+    assert.ok(
+      pnpm.indexOf('install --frozen-lockfile') <
+        pnpm.indexOf('--filter @idsh/host-broker build'),
+      'install must come before the build',
+    )
     await new Promise(resolve => setTimeout(resolve, 700))
     assert.equal(stopped, 1)
   } finally {
