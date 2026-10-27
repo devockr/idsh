@@ -11,7 +11,7 @@ import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
 
-/** The option that approves a destructive operation; typed exactly, it counts too. */
+/** The option that approves a destructive operation. */
 const CONFIRM_OPTION = 'Run'
 
 export const name = '@idsh/host-ops'
@@ -202,9 +202,16 @@ function toolFor(
       },
     },
     async execute(args, exec) {
-      if (op.confirm === true && !(await confirmed(ctx, op, args, exec))) {
+      const confirmation: Confirmation =
+        op.confirm === true
+          ? await confirmed(ctx, op, args, exec)
+          : { ok: true }
+      if (confirmation.ok === false) {
         throw new Error(
-          `host-ops: ${op.name} was not confirmed; the host was not touched`,
+          `host-ops: ${op.name} was not confirmed; the host was not touched` +
+            (confirmation.reply === undefined
+              ? ''
+              : `; the person replied: ${JSON.stringify(confirmation.reply)}`),
         )
       }
       return call(
@@ -258,12 +265,15 @@ function asOp(value: unknown): DescribedOp {
  * service, so the model cannot fabricate one. Anything other than the explicit "Run" option —
  * cancel, a skipped question, an empty answer — means no.
  */
+/** The person's answer: Run, or the reply they typed instead of choosing. */
+type Confirmation = { ok: false; reply?: string } | { ok: true }
+
 async function confirmed(
   ctx: HostContext,
   op: DescribedOp,
   args: unknown,
   exec: ToolExecution,
-): Promise<boolean> {
+): Promise<Confirmation> {
   const answer = await ctx.userQuestions.ask({
     questions: [
       {
@@ -281,13 +291,13 @@ async function confirmed(
     ...(exec.callId === undefined ? {} : { wait: { callId: exec.callId } }),
   })
   const item = answer.answers.find(entry => entry.id === 'confirm')
-  if (item === undefined) {
-    return false
+  if (item?.selected.includes(CONFIRM_OPTION) === true) {
+    return { ok: true }
   }
-  // The card has a Run option, but a UI may accept free text instead; typing the option's own
-  // word is as explicit as clicking it, and anything else is a refusal.
-  return (
-    item.selected.includes(CONFIRM_OPTION) ||
-    item.custom?.trim().toLowerCase() === CONFIRM_OPTION.toLowerCase()
-  )
+  // A typed answer is the person asking something, not approving: pass it back so the assistant
+  // can answer and ask again, and leave the host untouched.
+  const reply = item?.custom?.trim()
+  return reply === undefined || reply === ''
+    ? { ok: false }
+    : { ok: false, reply }
 }

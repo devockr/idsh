@@ -328,7 +328,7 @@ void test('execute passes the operation timeout to the caller', async () => {
   }
 })
 
-void test('a typed answer confirms only when it names the Run option', async () => {
+void test('a typed answer is a reply, not a confirmation', async () => {
   const table = [
     {
       name: 'deploy.recreate',
@@ -343,29 +343,32 @@ void test('a typed answer confirms only when it names the Run option', async () 
     error: { code: 'unavailable', message: 'stub says no' },
   })
 
-  for (const [custom, expected] of [
-    ['Run', true],
-    ['  run ', true],
-    ['yes', false],
-    ['', false],
-  ] as const) {
-    const { ctx, tools } = context([], custom)
+  const run = async (selected: string[], custom?: string) => {
+    const { ctx, tools } = context(selected, custom)
     const broker = await fakeBroker(request =>
       request.op === 'ops.describe' ? `${describe}\n` : `${refused}\n`,
     )
     try {
       await registerTools(ctx, { socketPath: broker.socketPath })
-      const execution = tools[0].execute(
+      return await tools[0].execute(
         {},
         { signal: new AbortController().signal },
-      )
-      // Past the gate the broker's own refusal comes back; before it, "not confirmed".
-      await assert.rejects(
-        execution,
-        expected ? /stub says no/u : /not confirmed/u,
       )
     } finally {
       await broker.close()
     }
   }
+
+  // The option confirms; the broker's own refusal is what comes back.
+  await assert.rejects(run(['Run']), /stub says no/u)
+  // A question is not an approval: it is passed back so the assistant can answer it.
+  await assert.rejects(
+    run([], 'What does this touch?'),
+    /not confirmed; the host was not touched; the person replied: "What does this touch\?"/u,
+  )
+  // An empty answer says nothing at all.
+  await assert.rejects(
+    run([]),
+    /host-ops: deploy\.recreate was not confirmed; the host was not touched$/u,
+  )
 })

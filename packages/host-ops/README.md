@@ -29,10 +29,11 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
 - A broker that is down does not fail the profile: the plugin logs a warning and registers no tools,
   so the delegation still boots and the tools appear the next time the plugin loads.
 - A destructive operation (`confirm: true` in the broker's table) asks first, inside the tool call:
-  the question service blocks and holds the answer, so a model cannot fabricate a yes. The "Run"
-  option confirms it, and so does typing that word into the free-text answer (the UI's "Other");
-  anything else — cancel, a skipped question, an empty answer, a different word — means the host is
-  not touched.
+  the question service blocks and holds the answer, so a model cannot fabricate a yes. Only the
+  "Run" option confirms it. A free-text answer is a reply, not an approval — the person may be
+  asking what the operation does — so it leaves the host untouched and is passed back in the error,
+  where the assistant can answer it and ask again. Cancel, a skipped question and an empty answer
+  behave the same.
 
 ## Not in this package
 
