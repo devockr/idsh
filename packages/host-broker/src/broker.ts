@@ -11,7 +11,6 @@ import { constants as fsConstants } from 'node:fs'
 import {
   access,
   appendFile,
-  readFile,
   chmod,
   lstat,
   mkdir,
@@ -21,6 +20,8 @@ import {
 } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
+
+import packageJson from '../package.json' with { type: 'json' }
 
 import {
   AFTER_RESPONSE_DELAY_MS,
@@ -181,10 +182,7 @@ export async function startBroker(
   const buildRoot = path.join(path.dirname(auditPath), 'build', buildKey)
   const deployLock = new DeployLock()
   const pnpmPath = options.pnpmPath ?? DEFAULTS.pnpmPath
-  const packageFile = new URL('../package.json', import.meta.url)
-  const brokerVersion =
-    (JSON.parse(await readFile(packageFile, 'utf8')) as { version?: string })
-      .version ?? 'unknown'
+  const brokerVersion = packageJson.version || 'unknown'
   const startedAt = Date.now()
   const stopHolder: { stop?: () => void } = {}
   const context: OpContext = {
