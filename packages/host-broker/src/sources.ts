@@ -48,6 +48,20 @@ export interface OpContext {
   readonly ipPath: string
   /** The `ss` client `net.sockets` runs. */
   readonly ssPath: string
+  /** The pnpm client `broker.update` runs. */
+  readonly pnpmPath: string
+  /** The npm client the published-package update runs. */
+  readonly npmPath: string
+  /** The program this broker is running from; decides how to update it. */
+  readonly entryPath: string
+  /** The broker's own version, from its package.json. */
+  readonly brokerVersion: string
+  /** When the broker booted, for `broker.status`. */
+  readonly startedAt: number
+  readonly socketPath: string
+  readonly auditPath: string
+  /** Stop the broker, so its supervisor starts the new build. */
+  readonly stop: () => void
   /** Where a detached operation writes its log; the audit directory. */
   readonly stateDir: string
   /** Where builds clone; unique to this broker's socket, swept at boot. */
@@ -545,6 +559,90 @@ function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now())
 }
 
+/* ---------------------------------------------------------------- broker.status / broker.update */
+
+const BROKER_PACKAGE = '@idsh/host-broker'
+
+/**
+ * How this broker was installed, read from the program it is running: inside the checkout it
+ * builds there (the entry it is running from), otherwise the published package is what to update.
+ */
+function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
+  if (ctx.checkout === undefined) {
+    return 'npm'
+  }
+  const entry = path.resolve(ctx.entryPath)
+  const relative = path.relative(ctx.checkout, entry)
+  return relative !== '' && !relative.startsWith('..') ? 'checkout' : 'npm'
+}
+
+/**
+ * The npm prefix the running entry came from: `<prefix>/bin/idsh-host` or a package path under
+ * `<prefix>/lib/node_modules`. Anything else has no prefix to install into.
+ */
+function installPrefix(ctx: OpContext): string | undefined {
+  const entry = path.resolve(ctx.entryPath)
+  const modules = `${path.sep}lib${path.sep}node_modules${path.sep}`
+  const at = entry.indexOf(modules)
+  if (at > 0) {
+    return entry.slice(0, at)
+  }
+  const bin = path.dirname(entry)
+  return path.basename(bin) === 'bin' ? path.dirname(bin) : undefined
+}
+
+interface UpdateStep {
+  readonly program: string
+  readonly args: readonly string[]
+  readonly cwd?: string
+}
+
+function brokerUpdate(
+  ctx: OpContext,
+  source: 'checkout' | 'npm',
+): UpdateStep[] {
+  if (source === 'checkout' && ctx.checkout !== undefined) {
+    return [
+      {
+        // The checkout is `git`'s default cwd, and a step's budget is what is left of the op's.
+        program: ctx.gitPath,
+        args: ['pull', '--ff-only'],
+        cwd: ctx.checkout,
+      },
+      {
+        program: ctx.pnpmPath,
+        args: ['install', '--frozen-lockfile'],
+        cwd: ctx.checkout,
+      },
+      {
+        program: ctx.pnpmPath,
+        args: ['--filter', BROKER_PACKAGE, 'build'],
+        cwd: ctx.checkout,
+      },
+    ]
+  }
+  const prefix = installPrefix(ctx)
+  if (prefix === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      `cannot tell which npm prefix ${ctx.entryPath} belongs to; update the broker the way it was installed`,
+    )
+  }
+  return [
+    {
+      // The unit runs `<prefix>/bin/idsh-host`, so the update has to land in that prefix.
+      program: ctx.npmPath,
+      args: [
+        'install',
+        '--global',
+        '--prefix',
+        prefix,
+        `${BROKER_PACKAGE}@latest`,
+      ],
+    },
+  ]
+}
+
 /* ---------------------------------------------------------------- net.sockets */
 
 /** The socket tables `net.sockets` can read. */
@@ -889,6 +987,51 @@ export const OPS: readonly OpDefinition[] = [
       const what: SocketWhat =
         args['what'] === undefined ? 'all' : choice(args, 'what', SOCKET_WHAT)
       return netSockets(ctx, what)
+    },
+  },
+  {
+    name: 'broker.status',
+    summary:
+      'This broker: its version, process, start time, socket, audit file and checkout.',
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    run(args, ctx) {
+      rejectUnknown(args, [])
+      return Promise.resolve(
+        [
+          `version=${ctx.brokerVersion}`,
+          `pid=${String(process.pid)}`,
+          `started=${new Date(ctx.startedAt).toISOString()}`,
+          `socket=${ctx.socketPath}`,
+          `audit=${ctx.auditPath}`,
+          `checkout=${ctx.checkout ?? ''}`,
+        ].join('\n'),
+      )
+    },
+  },
+  {
+    name: 'broker.update',
+    summary:
+      'Update the broker from its checkout (or npm) and let its supervisor restart it.',
+    confirm: true,
+    serial: true,
+    timeoutMs: BUILD_TIMEOUT_MS,
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      const source = brokerUpdateSource(ctx)
+      // Synchronous on purpose: a failed step must be the answer, not a silent no-op behind it.
+      // Each step gets what is left of the one budget, like the build.
+      for (const step of brokerUpdate(ctx, source)) {
+        await runFixed(ctx, step.program, step.args, {
+          timeoutMs: remaining(deadline),
+          ...(step.cwd === undefined ? {} : { cwd: step.cwd }),
+        })
+      }
+      return {
+        text: `updated from ${source}; the broker exits so its supervisor starts the new build`,
+        after: () => ctx.stop(),
+      }
     },
   },
   {

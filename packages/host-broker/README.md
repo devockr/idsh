@@ -12,8 +12,8 @@ with a small set of validated arguments.
 
 ```text
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
-         [--container <name>] [--docker <path>] [--git <path>] [--ip <path>] [--ss <path>]
-         [--checkout <dir>]
+         [--container <name>] [--docker <path>] [--git <path>]
+         [--ip <path>] [--ss <path>] [--pnpm <path>] [--npm <path>] [--checkout <dir>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -24,8 +24,9 @@ A user unit, so the broker runs as the same uid the socket is for:
 ```ini
 # ~/.config/systemd/user/idsh-host.service
 [Service]
-ExecStart=%h/.local/bin/idsh-host --socket %h/.local/state/idsh-host/host.sock --audit %h/.local/state/idsh-host/audit.jsonl
+ExecStart=%h/.local/bin/idsh-host --socket %h/.local/state/idsh-host/host.sock --audit %h/.local/state/idsh-host/audit.jsonl --checkout %h/Workspaces/idsh
 Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=default.target
@@ -36,6 +37,18 @@ npm i -g --prefix ~/.local @idsh/host-broker
 systemctl --user enable --now idsh-host
 loginctl enable-linger "$USER" # keep it running without a login session
 ```
+
+`Restart=always` is what makes `broker.update` work: that operation installs the new build, answers,
+drains the requests in flight and exits, and the unit starts the new one. The drain waits up to five
+seconds (`DRAIN_TIMEOUT_MS`); a request still running then is disconnected and its answer is lost,
+though its audit line still lands when the request finishes — a deploy build or a long log read
+should be allowed to finish first. Without a supervisor the
+CLI still exits after the update, so the broker is gone rather than still running the old build.
+
+How the update installs depends on what the process is running from — it reads its own entry. Run
+from `--checkout` (`.../packages/host-broker/lib/cli.js`), it pulls and rebuilds there, so the unit
+must start that file. Installed under a prefix with `bin/idsh-host`, it runs
+`npm install --global --prefix <prefix> @idsh/host-broker@latest` for that same prefix.
 
 A system unit would default to root, which changes both whose files it reads and who may open the
 socket; do not use one. The unit's user also needs to reach the docker daemon, and the broker runs
@@ -75,20 +88,22 @@ request.
 
 ## Operations (first slice)
 
-| op                | behaviour                                                                                                                                         |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                     |
-| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                              |
-| `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route` (IPv4 and IPv6), `neigh` or `all`                       |
-| `net.sockets`     | the host's listening sockets and connections, read with `ss`; `what` picks `listen`, `connections` or `all` (the default)                         |
-| `disk.usage`      | `df -h`                                                                                                                                           |
-| `deploy.status`   | the deployment container: image, creation time and state                                                                                          |
-| `deploy.log`      | the tail of the deployment container log                                                                                                          |
-| `deploy.build`    | builds `:dev` from a PR head or an origin branch tip; the six root-surface files come from `main`, and the previous image id is kept for rollback |
-| `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                           |
-| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                   |
-| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                               |
-| `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                    |
+| op                | behaviour                                                                                                                                                                                                                                                            |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                                                                                                                                        |
+| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                                                                                                                                                 |
+| `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route` (IPv4 and IPv6), `neigh` or `all`                                                                                                                                          |
+| `net.sockets`     | the host's listening sockets and connections, read with `ss`; `what` picks `listen`, `connections` or `all` (the default)                                                                                                                                            |
+| `disk.usage`      | `df -h`                                                                                                                                                                                                                                                              |
+| `broker.status`   | this broker: version, pid, start time, socket, audit file and checkout                                                                                                                                                                                               |
+| `broker.update`   | updates the broker where its own entry lives: run from `--checkout` it pulls and rebuilds there (`git pull`, `pnpm install`, `pnpm --filter @idsh/host-broker build`), under an npm prefix it installs the published package there; then it exits for its supervisor |
+| `deploy.status`   | the deployment container: image, creation time and state                                                                                                                                                                                                             |
+| `deploy.log`      | the tail of the deployment container log                                                                                                                                                                                                                             |
+| `deploy.build`    | builds `:dev` from a PR head or an origin branch tip; the six root-surface files come from `main`, and the previous image id is kept for rollback                                                                                                                    |
+| `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                                                                                                                                              |
+| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                                                                                                      |
+| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                                                                                                                  |
+| `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                                                                                                                                       |
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing

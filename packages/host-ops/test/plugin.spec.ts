@@ -29,7 +29,10 @@ const TABLE = [
   },
 ]
 
-function context(selected: readonly string[] = ['Run']): {
+function context(
+  selected: readonly string[] = ['Run'],
+  custom?: string,
+): {
   ctx: HostContext
   tools: HostTool[]
   warnings: string[]
@@ -57,7 +60,15 @@ function context(selected: readonly string[] = ['Run']): {
       userQuestions: {
         ask: (request: Record<string, unknown>) => {
           asks.push(request)
-          return Promise.resolve({ answers: [{ id: 'confirm', selected }] })
+          return Promise.resolve({
+            answers: [
+              {
+                id: 'confirm',
+                selected,
+                ...(custom === undefined ? {} : { custom }),
+              },
+            ],
+          })
         },
       },
     },
@@ -315,4 +326,49 @@ void test('execute passes the operation timeout to the caller', async () => {
   } finally {
     await broker.close()
   }
+})
+
+void test('a typed answer is a reply, not a confirmation', async () => {
+  const table = [
+    {
+      name: 'deploy.recreate',
+      summary: 'Recreate.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const refused = JSON.stringify({
+    ok: false,
+    error: { code: 'unavailable', message: 'stub says no' },
+  })
+
+  const run = async (selected: string[], custom?: string) => {
+    const { ctx, tools } = context(selected, custom)
+    const broker = await fakeBroker(request =>
+      request.op === 'ops.describe' ? `${describe}\n` : `${refused}\n`,
+    )
+    try {
+      await registerTools(ctx, { socketPath: broker.socketPath })
+      return await tools[0].execute(
+        {},
+        { signal: new AbortController().signal },
+      )
+    } finally {
+      await broker.close()
+    }
+  }
+
+  // The option confirms; the broker's own refusal is what comes back.
+  await assert.rejects(run(['Run']), /stub says no/u)
+  // A question is not an approval: it is passed back so the assistant can answer it.
+  await assert.rejects(
+    run([], 'What does this touch?'),
+    /not confirmed; the host was not touched; the person replied: "What does this touch\?"/u,
+  )
+  // An empty answer says nothing at all.
+  await assert.rejects(
+    run([]),
+    /host-ops: deploy\.recreate was not confirmed; the host was not touched$/u,
+  )
 })

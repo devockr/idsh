@@ -11,6 +11,9 @@ import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
 
+/** The option that approves a destructive operation. */
+const CONFIRM_OPTION = 'Run'
+
 export const name = '@idsh/host-ops'
 export const inject = ['tools', 'userQuestions']
 
@@ -199,9 +202,16 @@ function toolFor(
       },
     },
     async execute(args, exec) {
-      if (op.confirm === true && !(await confirmed(ctx, op, args, exec))) {
+      const confirmation: Confirmation =
+        op.confirm === true
+          ? await confirmed(ctx, op, args, exec)
+          : { ok: true }
+      if (confirmation.ok === false) {
         throw new Error(
-          `host-ops: ${op.name} was not confirmed; the host was not touched`,
+          `host-ops: ${op.name} was not confirmed; the host was not touched` +
+            (confirmation.reply === undefined
+              ? ''
+              : `; the person replied: ${JSON.stringify(confirmation.reply)}`),
         )
       }
       return call(
@@ -248,27 +258,30 @@ function asOp(value: unknown): DescribedOp {
   }
 }
 
+/** The person's answer: Run, or the reply they typed instead of choosing. */
+type Confirmation = { ok: false; reply?: string } | { ok: true }
+
 /**
  * Ask the person before a destructive operation.
  *
  * The question is asked inside the tool call and blocks: the answer comes from the question
- * service, so the model cannot fabricate one. Anything other than the explicit "Run" option —
- * cancel, a skipped question, an empty answer — means no.
+ * service, so the model cannot fabricate one. Only the explicit "Run" option approves; a typed
+ * answer is a reply, passed back so the assistant can answer it and ask again.
  */
 async function confirmed(
   ctx: HostContext,
   op: DescribedOp,
   args: unknown,
   exec: ToolExecution,
-): Promise<boolean> {
+): Promise<Confirmation> {
   const answer = await ctx.userQuestions.ask({
     questions: [
       {
         id: 'confirm',
         header: 'Host operation',
-        question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}`,
+        question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}\n\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
         options: [
-          { label: 'Run', description: op.summary },
+          { label: CONFIRM_OPTION, description: op.summary },
           { label: 'Cancel' },
         ],
       },
@@ -278,5 +291,13 @@ async function confirmed(
     ...(exec.callId === undefined ? {} : { wait: { callId: exec.callId } }),
   })
   const item = answer.answers.find(entry => entry.id === 'confirm')
-  return item?.selected.includes('Run') === true
+  if (item?.selected.includes(CONFIRM_OPTION) === true) {
+    return { ok: true }
+  }
+  // A typed answer is the person asking something, not approving: pass it back so the assistant
+  // can answer and ask again, and leave the host untouched.
+  const reply = item?.custom?.trim()
+  return reply === undefined || reply === ''
+    ? { ok: false }
+    : { ok: false, reply }
 }
