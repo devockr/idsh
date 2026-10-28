@@ -38,14 +38,19 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
 ## Long deploys as jobs
 
 `deploy.build` and `deploy.main` take minutes, so with a job registry present (`ctx.jobs`) the tool
-starts a `deploy` job and answers with its id at once: the broker keeps building, the job follows the
-broker's `build.log` into its output ring, and the UI streams it while `job_output` reads it. A call
-that is cut off — a container recreate, say — therefore leaves a job that outlives it. Without a job
-registry the operations stay synchronous.
+starts a `deploy` job and answers with its id at once: the broker keeps building, the job pulls the
+broker's `build.log` into its output ring, and the UI streams it while `job_output` reads it.
+
+The job is process-local (the registry lives in this dsh process), so a container recreate ends it
+with everything else — what survives is the broker's build log on the host, and what stops blocking
+is the tool call. The registry drains every source one last time before settlement, so a build that
+finished within one poll still leaves its tail in the ring. Without a job registry the operations
+stay synchronous.
 
 The deployment mounts the broker's state directory at `/run/idsh-host-state` (read-only) for that
-log; `statePath` overrides where. Killed jobs cancel the client call; the broker's own budget (15
-minutes) still ends the build if nobody is watching.
+log — that directory also holds `audit.jsonl`, so mount only `build.log` when the narrower view is
+wanted. `statePath` overrides where the log is read from. Killed jobs report `killed` and cancel the
+client call; the broker's own budget (15 minutes) still ends the build if nobody is watching.
 
 ## Not in this package
 

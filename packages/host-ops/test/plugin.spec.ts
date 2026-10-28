@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -313,7 +313,14 @@ void test('execute passes the operation timeout to the caller', async () => {
     request.op === 'ops.describe' ? describe : null,
   )
   const calls: Array<{ timeoutMs?: number }> = []
-  const call = (endpoint: { timeoutMs?: number }): Promise<never> => {
+  const call = (
+    endpoint: { timeoutMs?: number },
+    op: string,
+  ): Promise<{ text: string; truncated: boolean }> => {
+    // The table itself goes through the injected caller now, so only the op is answered this way.
+    if (op === 'ops.describe') {
+      return Promise.resolve({ text: JSON.stringify(table), truncated: false })
+    }
     calls.push(endpoint)
     return Promise.reject(
       new Error(`did not answer within ${String(endpoint.timeoutMs)} ms`),
@@ -379,7 +386,8 @@ void test('a typed answer is a reply, not a confirmation', async () => {
 
 void test('a deploy runs as a job that follows the broker build log', async () => {
   const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
-  await writeFile(path.join(host, 'build.log'), 'step 1\n')
+  const logPath = path.join(host, 'build.log')
+  await writeFile(logPath, 'step 1\n')
   const table = [
     {
       name: 'deploy.build',
@@ -389,45 +397,190 @@ void test('a deploy runs as a job that follows the broker build log', async () =
       timeoutMs: 900_000,
     },
   ]
-  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
   const broker = await fakeBroker(request =>
     request.op === 'ops.describe'
-      ? describe
+      ? `${describe}\n`
       : `${JSON.stringify({ ok: true, result: 'built main' })}\n`,
   )
   try {
-    const { ctx, tools } = context()
+    const built = context()
     const started: JobSpec[] = []
-    ctx.jobs = {
-      start(spec: JobSpec) {
-        started.push(spec)
-        return 'deploy-1'
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
       },
     }
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
-    assert.equal(tools[0]?.name, 'idsh_deploy_build')
-    const answer = (await tools[0].execute(
+    const answer = (await built.tools[0].execute(
       {},
-      { signal: new AbortController().signal },
+      {
+        signal: new AbortController().signal,
+        agent: { id: 'ses_abc' },
+        callId: 'call-1',
+      },
     )) as { text: string }
     assert.match(answer.text, /started deploy-1/u)
 
     const spec = started[0]
     assert.equal(spec.kind, 'deploy')
-    const chunks: string[] = []
+    assert.equal(spec.owner, 'ses_abc')
+    assert.deepEqual(spec.toolCall, { callId: 'call-1', rootCallId: 'call-1' })
+    assert.equal(spec.label, 'deploy.build {}')
+
+    // The source starts where the file was, so an earlier build is not replayed.
+    const source = spec.output?.[0]
+    assert.ok(source !== undefined)
+    await writeFile(logPath, 'step 1\nstep 2\n')
+    const read = source.read(0)
+    assert.match(read.text, /step 2/u)
+    assert.doesNotMatch(read.text, /step 1/u)
+
     const hooks = spec.run({
-      append: text => chunks.push(text),
-      updateProgress() {
-        // the test never narrates progress
+      append() {
+        // the source is pulled by the registry, not pushed by the producer
       },
     })
     const outcome = await hooks.done
     assert.equal(outcome.status, 'completed')
-    // The tailer runs on its own timer, so give it one interval to see the line.
-    await new Promise(resolve => setTimeout(resolve, 800))
-    assert.ok(chunks.includes('step 1\n'), chunks.join(''))
-    assert.ok(chunks.includes('built main'), chunks.join(''))
   } finally {
     await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a refused deploy job fails with the broker reason', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'stub says no' } })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    await built.tools[0].execute({}, { signal: new AbortController().signal })
+    const hooks = started[0].run({
+      append() {
+        // the source is pulled by the registry, not pushed by the producer
+      },
+    })
+    const outcome = await hooks.done
+    assert.equal(outcome.status, 'failed')
+    assert.match(outcome.detail ?? '', /stub says no/u)
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a cancelled deploy job settles killed', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  const table = [
+    {
+      name: 'deploy.main',
+      summary: 'Deploy main.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  // The op never answers; the kill aborts the client call.
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe' ? `${describe}\n` : null,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    await built.tools[0].execute({}, { signal: new AbortController().signal })
+    const hooks = started[0].run({
+      append() {
+        // the source is pulled by the registry, not pushed by the producer
+      },
+    })
+    hooks.cancel()
+    const outcome = await hooks.done
+    assert.equal(outcome.status, 'killed')
+    assert.match(outcome.detail ?? '', /cancelled/u)
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('apply carries the configured state path into the job', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  await writeFile(path.join(host, 'build.log'), 'history\n')
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: true, result: 'done' })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await apply(ctx, { socketPath: broker.socketPath, statePath: host })
+    await built.tools[0].execute({}, { signal: new AbortController().signal })
+    const source = started[0].output?.[0]
+    assert.ok(source !== undefined)
+    // The configured directory is where the baseline came from: its history is not replayed.
+    assert.equal(source.read(0).text, '')
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
   }
 })

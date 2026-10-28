@@ -1,29 +1,36 @@
 /**
- * Long deploy operations as dsh background jobs: the tool call returns an id at once, the broker
- * keeps building, and its `build.log` is followed into the job's output ring, which the UI streams
- * and the model reads with `job_output`. A tool call that is cut off (a container recreate, say)
- * therefore leaves a record that outlives it.
+ * Long deploy operations as dsh background jobs: the tool call returns an id at once and the
+ * broker keeps building, while a pull source hands the build log to the job's output ring — the
+ * UI streams it, and `job_output` reads it. A call that is cut off (a container recreate, say)
+ * no longer blocks on the build.
  */
-import { readFile } from 'node:fs/promises'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 import type { BrokerAnswer, BrokerEndpoint } from './socket.ts'
 
-/** How often the tailer looks for more of the broker's build log. */
-const TAIL_INTERVAL_MS = 500
-
+/** A host's background-job registry, structurally: the plugin imports no dsh code. */
 export interface JobHandle {
   append(
     text: string,
     options?: { readonly channel?: 'log' | 'stderr' | 'stdout' },
   ): void
-  updateProgress(line: string): void
+}
+
+export interface JobSourceRead {
+  readonly text: string
+  readonly nextOffset: number
+  readonly lossy: boolean
+}
+
+export interface JobOutputSource {
+  readonly channel?: 'log' | 'stderr' | 'stdout'
+  read(fromByte: number): JobSourceRead
 }
 
 export interface JobOutcome {
   readonly status: 'completed' | 'failed' | 'killed'
   readonly detail?: string
-  readonly result?: string
 }
 
 export interface JobHooks {
@@ -35,6 +42,8 @@ export interface JobSpec {
   readonly kind: string
   readonly label: string
   readonly owner?: string
+  readonly toolCall?: { readonly callId?: string; readonly rootCallId?: string }
+  readonly output?: readonly JobOutputSource[]
   run(job: JobHandle): JobHooks
 }
 
@@ -54,33 +63,46 @@ export interface StreamTarget {
   readonly endpoint: BrokerEndpoint
   readonly statePath: string
   readonly owner?: string
+  readonly toolCall?: { readonly callId?: string; readonly rootCallId?: string }
 }
 
-/** Follow one file into a job's ring until the returned stop is called. */
-function followBuildLog(
-  job: JobHandle,
-  file: string,
-): { stop(): void; flush(): Promise<void> } {
-  let offset = 0
-  let stopped = false
-  const read = async (): Promise<void> => {
-    const text = await readFile(file, 'utf8').catch(() => null)
-    if (stopped || text === null || text.length <= offset) {
-      return
+/**
+ * The broker appends to one log, so the source reports only what landed since the last read.
+ *
+ * The baseline is the file's size when the job starts: what an earlier build wrote is history the
+ * job must not replay. Offsets are bytes, and a read decodes exactly the new range, so a chunk can
+ * never split a character.
+ */
+export function buildLogSource(file: string): JobOutputSource {
+  let offset = (() => {
+    try {
+      return statSync(file).size
+    } catch {
+      return 0
     }
-    job.append(text.slice(offset), { channel: 'stdout' })
-    offset = text.length
-  }
-  const timer = setInterval(() => {
-    void read()
-  }, TAIL_INTERVAL_MS)
+  })()
   return {
-    async flush() {
-      await read()
-    },
-    stop() {
-      stopped = true
-      clearInterval(timer)
+    channel: 'stdout',
+    read(fromByte) {
+      const start = fromByte > 0 ? fromByte : offset
+      let size: number
+      try {
+        size = statSync(file).size
+      } catch {
+        return { text: '', nextOffset: start, lossy: false }
+      }
+      if (size <= start) {
+        return { text: '', nextOffset: start, lossy: false }
+      }
+      const buffer = Buffer.alloc(size - start)
+      const fd = openSync(file, 'r')
+      try {
+        readSync(fd, buffer, 0, buffer.length, start)
+      } finally {
+        closeSync(fd)
+      }
+      offset = size
+      return { text: buffer.toString('utf8'), nextOffset: size, lossy: false }
     },
   }
 }
@@ -88,39 +110,42 @@ function followBuildLog(
 /** Start the operation as a job; the returned id is what the tool answers with. */
 export function startDeployJob(jobs: Jobs, target: StreamTarget): string {
   const controller = new AbortController()
-  let follow: { stop(): void; flush(): Promise<void> } | undefined
   return jobs.start({
     kind: 'deploy',
     label: `${target.name} ${JSON.stringify(target.args)}`,
     ...(target.owner === undefined ? {} : { owner: target.owner }),
-    run(job) {
-      job.append(`$ ${target.name}\n`, { channel: 'log' })
-      follow = followBuildLog(job, path.join(target.statePath, 'build.log'))
-      const work: Promise<JobOutcome> = (async (): Promise<JobOutcome> => {
+    ...(target.toolCall === undefined ? {} : { toolCall: target.toolCall }),
+    output: [buildLogSource(path.join(target.statePath, 'build.log'))],
+    run() {
+      const work = (async (): Promise<JobOutcome> => {
         try {
-          const answer = await target.call(
+          await target.call(
             target.endpoint,
             target.name,
             target.args as Record<string, unknown>,
             controller.signal,
           )
-          job.append(answer.text, { channel: 'stdout' })
-          return { status: 'completed', result: answer.text }
+          return { status: 'completed' }
         } catch (error) {
+          // A kill aborts the call; the job is `killed`, and the reason is the answer.
+          if (controller.signal.aborted) {
+            return {
+              status: 'killed',
+              detail:
+                error instanceof Error
+                  ? error.message
+                  : 'the host operation was cancelled',
+            }
+          }
           return {
             status: 'failed',
-            result: error instanceof Error ? error.message : String(error),
+            detail: error instanceof Error ? error.message : String(error),
           }
-        } finally {
-          // One last read: a build that finished within one tick leaves its tail only here.
-          await follow.flush()
-          follow.stop()
         }
       })()
       return {
         done: work,
         cancel() {
-          follow?.stop()
           controller.abort()
         },
       }

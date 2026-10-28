@@ -16,12 +16,6 @@ import { startDeployJob, type Jobs } from './stream.ts'
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
 
-/**
- * Operations that take minutes. With a job registry they run in the background, so the tool call
- * returns at once and the build's log streams into a job the UI follows.
- */
-const STREAM_OPS = new Set(['deploy.build', 'deploy.main'])
-
 /** The option that approves a destructive operation. */
 const CONFIRM_OPTION = 'Run'
 
@@ -46,8 +40,9 @@ interface ToolExecution {
   readonly signal: AbortSignal
   /** The calling agent, forwarded to the question service so the card is scoped to it. */
   readonly agent?: unknown
-  /** The tool call, so the question card attaches to its row. */
+  /** The tool call, so the question card attaches to its row and a job to its record. */
   readonly callId?: string
+  readonly rootCallId?: string
 }
 
 /** The slice of dsh a tool needs; structural, so this package imports no dsh code. */
@@ -82,7 +77,7 @@ export interface QuestionAnswer {
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
   /** The harness's background jobs; absent in a host without them, and then deploys stay synchronous. */
-  jobs?: Jobs
+  readonly jobs?: Jobs
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -113,7 +108,18 @@ interface DescribedOp {
  */
 export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
   const endpoint = endpointOf(config)
-  return registerTools(ctx, endpoint, callBroker, statePathOf(config)).catch(
+  // A profile typo disables the tools like a bad socket path does, instead of failing the boot.
+  const statePath = ((): string | undefined => {
+    try {
+      return statePathOf(config)
+    } catch (error) {
+      ctx.logger.warn(
+        `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
+      )
+      return
+    }
+  })()
+  return registerTools(ctx, endpoint, callBroker, statePath).catch(
     (error: unknown) => {
       ctx.logger.warn(
         `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
@@ -130,9 +136,9 @@ export async function registerTools(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   call: BrokerCaller = callBroker,
-  statePath: string = DEFAULT_STATE_PATH,
+  statePath: string | undefined = DEFAULT_STATE_PATH,
 ): Promise<void> {
-  const described = await callBroker(endpoint, 'ops.describe', {})
+  const described = await call(endpoint, 'ops.describe', {})
   const ops = JSON.parse(described.text) as unknown
   if (!Array.isArray(ops)) {
     throw new TypeError('the broker did not describe a table of operations')
@@ -198,7 +204,7 @@ function toolFor(
   endpoint: BrokerEndpoint,
   op: DescribedOp,
   call: BrokerCaller,
-  statePath: string,
+  statePath: string | undefined,
 ): HostTool {
   // A long operation says so; the tool call and the socket wait inherit it together.
   const timeoutMs =
@@ -245,17 +251,28 @@ function toolFor(
       }
       const endpointForCall =
         timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
-      if (ctx.jobs !== undefined && STREAM_OPS.has(op.name)) {
-        const owner = (
-          exec.agent as { readonly sessionId?: string } | undefined
-        )?.sessionId
+      // The table already says which operations take minutes; that is what makes one a job.
+      if (
+        ctx.jobs !== undefined &&
+        statePath !== undefined &&
+        op.timeoutMs !== undefined
+      ) {
+        const agent = exec.agent as { readonly id?: string } | undefined
         const id = startDeployJob(ctx.jobs, {
           name: op.name,
           args,
           call,
           endpoint: endpointForCall,
           statePath,
-          ...(owner === undefined ? {} : { owner }),
+          ...(agent?.id === undefined ? {} : { owner: agent.id }),
+          ...(exec.callId === undefined
+            ? {}
+            : {
+                toolCall: {
+                  callId: exec.callId,
+                  rootCallId: exec.rootCallId ?? exec.callId,
+                },
+              }),
         })
         return {
           text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,

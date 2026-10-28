@@ -65,9 +65,13 @@ services:
     volumes:
       # Only dsh's own state: what else to mount is yours to decide.
       - ./.dsh:/home/app/.dsh
-      # With @idsh/host-ops, the broker's socket and its state (the build log a deploy job follows):
-      # - ${HOME}/.dsh-host/run:/run/idsh-host:ro
-      # - ${HOME}/.dsh-host:/run/idsh-host-state:ro
+      # With @idsh/host-ops, the broker's socket and its state (the build log a deploy job follows;
+      # the state directory is the audit log's dirname, per the broker's README). The whole state
+      # directory also holds audit.jsonl (every operation and its arguments), compose.log and
+      # rollback: mount only build.log when that narrower view is what you want, remembering that
+      # Docker creates a directory when the bind source does not exist yet.
+      # - ${HOME}/.local/state/idsh-host/run:/run/idsh-host:ro
+      # - ${HOME}/.local/state/idsh-host:/run/idsh-host-state:ro
 
 networks:
   default:
