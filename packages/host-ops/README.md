@@ -39,8 +39,7 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
 
 `deploy.build` and `deploy.main` take minutes, so with a job registry present (`ctx.jobs`) the tool
 starts a `deploy` job and answers with its id at once: the broker keeps building, the job pulls the
-broker's `build-<log>.log` (or `build.log` from a broker older than this plugin) into its output
-ring, and the UI streams it while `job_output` reads it.
+broker's `build-<log>.log` into its output ring, and the UI streams it while `job_output` reads it.
 
 Each build writes its own `build-<log>.log`, named by the call id when that is a broker-safe name,
 so a job follows exactly the log its own call writes: a refused deploy streams nothing from a
