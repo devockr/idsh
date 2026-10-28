@@ -41,6 +41,11 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
 starts a `deploy` job and answers with its id at once: the broker keeps building, the job pulls the
 broker's `build.log` into its output ring, and the UI streams it while `job_output` reads it.
 
+Every deploy job follows the same `build.log`, so a _refused_ deploy — one the broker turns away
+because another build holds the deployment lock — can show a sliver of that running build's output
+before its own refusal lands. The lock keeps two builds from running, and a job that is accepted
+starts at the file's current size, so its ring never replays anything earlier.
+
 The job is process-local (the registry lives in this dsh process), so a container recreate ends it
 with everything else — what survives is the broker's build log on the host, and what stops blocking
 is the tool call. The registry drains every source one last time before settlement, so a build that
