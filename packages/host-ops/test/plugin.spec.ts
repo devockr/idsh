@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 
 import {
@@ -8,6 +11,7 @@ import {
   type HostContext,
   type HostTool,
 } from '../src/index.ts'
+import { buildLogSource, type JobSpec } from '../src/stream.ts'
 
 import { fakeBroker } from './server.ts'
 
@@ -145,15 +149,27 @@ void test('a bad entry rejects the whole table', async () => {
   }
 })
 
-void test('a bad config is refused before anything is discovered', () => {
-  const { ctx } = context()
-  assert.throws(
-    () => apply(ctx, { socketPath: {} as unknown as string }),
-    /socketPath must be a non-empty string/u,
-  )
-  assert.throws(
-    () => apply(ctx, { timeoutMs: 0 }),
+void test('a bad config registers nothing and warns', async () => {
+  const bad = context()
+  await apply(bad.ctx, { socketPath: {} as unknown as string })
+  assert.deepEqual(bad.tools, [])
+  assert.match(bad.warnings[0] ?? '', /socketPath must be a non-empty string/u)
+
+  const alsoBad = context()
+  await apply(alsoBad.ctx, { timeoutMs: 0 })
+  assert.deepEqual(alsoBad.tools, [])
+  assert.match(
+    alsoBad.warnings[0] ?? '',
     /timeoutMs must be a positive integer/u,
+  )
+
+  // statePath is part of the same contract now: an invalid one registers no tools either.
+  const stateBad = context()
+  await apply(stateBad.ctx, { statePath: '' })
+  assert.deepEqual(stateBad.tools, [])
+  assert.match(
+    stateBad.warnings[0] ?? '',
+    /statePath must be a non-empty string/u,
   )
 })
 
@@ -309,7 +325,14 @@ void test('execute passes the operation timeout to the caller', async () => {
     request.op === 'ops.describe' ? describe : null,
   )
   const calls: Array<{ timeoutMs?: number }> = []
-  const call = (endpoint: { timeoutMs?: number }): Promise<never> => {
+  const call = (
+    endpoint: { timeoutMs?: number },
+    op: string,
+  ): Promise<{ text: string; truncated: boolean }> => {
+    // The table itself goes through the injected caller now, so only the op is answered this way.
+    if (op === 'ops.describe') {
+      return Promise.resolve({ text: JSON.stringify(table), truncated: false })
+    }
     calls.push(endpoint)
     return Promise.reject(
       new Error(`did not answer within ${String(endpoint.timeoutMs)} ms`),
@@ -371,4 +394,351 @@ void test('a typed answer is a reply, not a confirmation', async () => {
     run([]),
     /host-ops: deploy\.recreate was not confirmed; the host was not touched$/u,
   )
+})
+
+void test('a deploy runs as a job that follows the broker build log', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  const logPath = path.join(host, 'build-call-1.log')
+  await writeFile(logPath, 'step 1\n')
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+    {
+      name: 'broker.update',
+      summary: 'Update the broker.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: true, result: 'built main' })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    const answer = (await built.tools[0].execute(
+      {},
+      {
+        signal: new AbortController().signal,
+        agent: { id: 'ses_abc' },
+        callId: 'call-1',
+      },
+    )) as { text: string }
+    assert.match(answer.text, /started deploy-1/u)
+
+    const spec = started[0]
+    assert.equal(spec.kind, 'deploy')
+    assert.equal(spec.owner, 'ses_abc')
+    assert.deepEqual(spec.toolCall, { callId: 'call-1', rootCallId: 'call-1' })
+    assert.match(spec.label, /^deploy\.build /u)
+
+    // The source starts where the file was, so an earlier build is not replayed.
+    const source = spec.output?.[0]
+    assert.ok(source !== undefined)
+    await writeFile(logPath, 'step 1\nstep 2\n')
+    const read = source.read(0)
+    assert.match(read.text, /step 2/u)
+    assert.doesNotMatch(read.text, /step 1/u)
+    // The cursor moves: no re-send of what was already read, and a later line is the next delta.
+    assert.equal(source.read(read.nextOffset).text, '')
+    await writeFile(logPath, 'step 1\nstep 2\nstep 3\n')
+    assert.match(source.read(read.nextOffset).text, /step 3/u)
+
+    const hooks = spec.run({
+      append() {
+        // the source is pulled by the registry, not pushed by the producer
+      },
+    })
+    // broker.update takes minutes too, but writes no log: it must stay synchronous.
+    const update = built.tools.find(tool => tool.name === 'idsh_broker_update')
+    assert.ok(update !== undefined)
+    await update.execute({}, { signal: new AbortController().signal })
+    assert.equal(started.length, 1)
+
+    const outcome = await hooks.done
+    assert.equal(outcome.status, 'completed')
+    assert.equal(outcome.result, 'built main')
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a refused deploy job fails with the broker reason', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'stub says no' } })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    await built.tools[0].execute({}, { signal: new AbortController().signal })
+    const hooks = started[0].run({
+      append() {
+        // the source is pulled by the registry, not pushed by the producer
+      },
+    })
+    const outcome = await hooks.done
+    assert.equal(outcome.status, 'failed')
+    assert.match(outcome.detail ?? '', /stub says no/u)
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a cancelled deploy job settles killed', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  const table = [
+    {
+      name: 'deploy.main',
+      summary: 'Deploy main.',
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  // The op never answers; the kill aborts the client call.
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe' ? `${describe}\n` : null,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    await built.tools[0].execute({}, { signal: new AbortController().signal })
+    const hooks = started[0].run({
+      append() {
+        // the source is pulled by the registry, not pushed by the producer
+      },
+    })
+    hooks.cancel()
+    const outcome = await hooks.done
+    assert.equal(outcome.status, 'killed')
+    assert.match(outcome.detail ?? '', /cancelled/u)
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('apply carries the configured state path into the job', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  await writeFile(path.join(host, 'build-call-1.log'), 'history\n')
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: true, result: 'done' })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await apply(ctx, { socketPath: broker.socketPath, statePath: host })
+    await built.tools[0].execute({}, { signal: new AbortController().signal })
+    const source = started[0].output?.[0]
+    assert.ok(source !== undefined)
+    // The configured directory is where the baseline came from: its history is not replayed.
+    assert.equal(source.read(0).text, '')
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a multibyte character split across reads arrives whole', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-decoder-'))
+  const logPath = path.join(host, 'build-call-1.log')
+  await writeFile(logPath, '')
+  try {
+    const source = buildLogSource(logPath)
+    // "中" is three bytes; the first poll sees only the first two.
+    const encoded = Buffer.from('中')
+    await writeFile(logPath, encoded.subarray(0, 2))
+    assert.equal(source.read(0).text, '')
+    await writeFile(logPath, encoded)
+    assert.equal(source.read(2).text, '中')
+  } finally {
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a call id the broker would reject is replaced by a safe log name', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: true, result: 'done' })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    // A dot is not a broker-safe log id, so the plugin must not forward it.
+    await built.tools[0].execute(
+      {},
+      { signal: new AbortController().signal, callId: 'call.1' },
+    )
+    const spec = started[0]
+    // The safe name is what the label's arguments carry, since that is what the broker sees.
+    const log = (
+      JSON.parse(spec.label.slice('deploy.build '.length)) as { log: string }
+    ).log
+    assert.match(log, /^build-[A-Za-z0-9]+$/u)
+    assert.doesNotMatch(log, /call\.1/u)
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a broker without the log argument stays synchronous', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  await writeFile(path.join(host, 'build.log'), 'history\n')
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: true, result: 'done' })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    await built.tools[0].execute(
+      {},
+      { signal: new AbortController().signal, callId: 'call-1' },
+    )
+    // No per-build log to follow, so an old broker stays synchronous: no job, the answer is the call.
+    assert.deepEqual(started, [])
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
 })

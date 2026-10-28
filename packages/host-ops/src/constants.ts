@@ -5,6 +5,9 @@
 /** Where the deployment mounts the broker's socket, unless its profile says otherwise. */
 export const DEFAULT_SOCKET_PATH = '/run/idsh-host/host.sock'
 
+/** Where the deployment mounts the broker's state directory, for the build log a job follows. */
+export const DEFAULT_STATE_PATH = '/run/idsh-host-state'
+
 /** How long one call may take. The broker's own operations stop at 10 seconds. */
 export const DEFAULT_TIMEOUT_MS = 15_000
 

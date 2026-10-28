@@ -35,6 +35,29 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
   where the assistant can answer it and ask again. Cancel, a skipped question and an empty answer
   behave the same.
 
+## Long deploys as jobs
+
+`deploy.build` and `deploy.main` take minutes, so with a job registry present (`ctx.jobs`) the tool
+starts a `deploy` job and answers with its id at once: the broker keeps building, the job pulls the
+broker's `build-<log>.log` into its output ring, and the UI streams it while `job_output` reads it.
+
+Each build writes its own `build-<log>.log`, named by the call id when that is a broker-safe name,
+so a job follows exactly the log its own call writes: a refused deploy streams nothing from a
+neighbour, and a later job never replays an earlier build. A broker whose table does not declare
+`log` (one older than this plugin) writes one shared file, so those operations stay synchronous
+rather than streaming a log that a neighbour may also be writing.
+
+The job is process-local (the registry lives in this dsh process), so a container recreate ends it
+with everything else — what survives is the broker's build log on the host, and what stops blocking
+is the tool call. The registry drains every source one last time before settlement, so a build that
+finished within one poll still leaves its tail in the ring. Without a job registry the operations
+stay synchronous.
+
+The deployment mounts the broker's state directory at `/run/idsh-host-state` (read-only) for that
+log — that directory also holds `audit.jsonl`. A build's file name cannot be known before the call,
+so mount the directory (or a known `build-<log>.log`), not `build.log`. `statePath` overrides where the log is read from. Killed jobs report `killed` and cancel the
+client call; the broker's own budget (15 minutes) still ends the build if nobody is watching.
+
 ## Not in this package
 
 The operation table, the bounds and the audit are `@idsh/host-broker` (the host program). This

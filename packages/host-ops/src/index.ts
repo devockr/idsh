@@ -5,11 +5,21 @@
  * There is no shell here either: a tool call is one request to the broker, which validates the
  * arguments against the same schema and owns the audit line.
  */
-import { DEFAULT_SOCKET_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
+import {
+  DEFAULT_SOCKET_PATH,
+  DEFAULT_STATE_PATH,
+  DEFAULT_TIMEOUT_MS,
+} from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
+import { startDeployJob, type Jobs } from './stream.ts'
 
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
+
+/** Operations whose log a job can follow: a build writes one, an update does not. */
+let logSequence = 0
+
+const FOLLOWS_BUILD_LOG = new Set(['deploy.build', 'deploy.main'])
 
 /** The option that approves a destructive operation. */
 const CONFIRM_OPTION = 'Run'
@@ -22,6 +32,8 @@ export interface Config {
   readonly socketPath?: string
   /** How long one call may take, in milliseconds. */
   readonly timeoutMs?: number
+  /** Where the broker's state directory is mounted, so a deploy job can follow its build log. */
+  readonly statePath?: string
 }
 
 interface ContentBlock {
@@ -33,8 +45,9 @@ interface ToolExecution {
   readonly signal: AbortSignal
   /** The calling agent, forwarded to the question service so the card is scoped to it. */
   readonly agent?: unknown
-  /** The tool call, so the question card attaches to its row. */
+  /** The tool call, so the question card attaches to its row and a job to its record. */
   readonly callId?: string
+  readonly rootCallId?: string
 }
 
 /** The slice of dsh a tool needs; structural, so this package imports no dsh code. */
@@ -68,6 +81,8 @@ export interface QuestionAnswer {
 
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
+  /** The harness's background jobs; absent in a host without them, and then deploys stay synchronous. */
+  readonly jobs?: Jobs
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -96,13 +111,21 @@ interface DescribedOp {
  * broker that is down does not fail the profile — the plugin logs and registers nothing, so the
  * delegation still boots and the tools appear on the next reload.
  */
-export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
-  const endpoint = endpointOf(config)
-  return registerTools(ctx, endpoint).catch((error: unknown) => {
+export const apply = (ctx: HostContext, config: Config = {}): Promise<void> =>
+  discover(ctx, config).catch((error: unknown) => {
     ctx.logger.warn(
       `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
     )
   })
+
+/**
+ * Validate the whole configuration, then register. A bad value rejects here — including
+ * `statePath` — so the warning is true: nothing was registered this boot.
+ */
+async function discover(ctx: HostContext, config: Config): Promise<void> {
+  const endpoint = endpointOf(config)
+  const statePath = statePathOf(config)
+  await registerTools(ctx, endpoint, callBroker, statePath)
 }
 
 /** The caller the tools use; a test can pass a stub instead of waiting on a socket. */
@@ -113,14 +136,17 @@ export async function registerTools(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   call: BrokerCaller = callBroker,
+  statePath: string | undefined = DEFAULT_STATE_PATH,
 ): Promise<void> {
-  const described = await callBroker(endpoint, 'ops.describe', {})
+  const described = await call(endpoint, 'ops.describe', {})
   const ops = JSON.parse(described.text) as unknown
   if (!Array.isArray(ops)) {
     throw new TypeError('the broker did not describe a table of operations')
   }
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call))
+  const tools = ops.map(value =>
+    toolFor(ctx, endpoint, asOp(value), call, statePath),
+  )
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -143,6 +169,14 @@ export async function registerTools(
   }
 }
 
+function statePathOf(config: Config): string {
+  const statePath = config.statePath ?? DEFAULT_STATE_PATH
+  if (typeof statePath !== 'string' || statePath === '') {
+    throw new Error('host-ops: statePath must be a non-empty string')
+  }
+  return statePath
+}
+
 function endpointOf(config: Config): BrokerEndpoint {
   const socketPath: unknown = config.socketPath ?? DEFAULT_SOCKET_PATH
   if (typeof socketPath !== 'string' || socketPath === '') {
@@ -161,6 +195,45 @@ function endpointOf(config: Config): BrokerEndpoint {
  * The `idsh_` prefix namespaces them, so a sanitized name such as `read` or `bash` cannot collide
  * with a built-in tool or another plugin's.
  */
+/** Start one long operation as a job and return its id. */
+function enqueueDeploy(
+  ctx: HostContext,
+  op: DescribedOp,
+  args: unknown,
+  exec: ToolExecution,
+  call: BrokerCaller,
+  endpoint: BrokerEndpoint,
+  statePath: string,
+): string {
+  const jobs = ctx.jobs
+  if (jobs === undefined) {
+    throw new Error('host-ops: no job registry')
+  }
+  // The call id names the log when the broker accepts it; anything else would be refused.
+  const log =
+    exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
+      ? exec.callId
+      : `build-${String(Date.now())}${String(logSequence++)}`
+  const agent = exec.agent as { readonly id?: string } | undefined
+  return startDeployJob(jobs, {
+    name: op.name,
+    args: { ...(args as Record<string, unknown>), log },
+    call,
+    endpoint,
+    statePath,
+    logPath: `${statePath}/build-${log}.log`,
+    ...(agent?.id === undefined ? {} : { owner: agent.id }),
+    ...(exec.callId === undefined
+      ? {}
+      : {
+          toolCall: {
+            callId: exec.callId,
+            rootCallId: exec.rootCallId ?? exec.callId,
+          },
+        }),
+  })
+}
+
 function toolName(op: string): string {
   return `idsh_${op.replaceAll(/[^\w-]/gu, '_')}`
 }
@@ -170,6 +243,7 @@ function toolFor(
   endpoint: BrokerEndpoint,
   op: DescribedOp,
   call: BrokerCaller,
+  statePath: string,
 ): HostTool {
   // A long operation says so; the tool call and the socket wait inherit it together.
   const timeoutMs =
@@ -214,8 +288,34 @@ function toolFor(
               : `; the person replied: ${JSON.stringify(confirmation.reply)}`),
         )
       }
+      const endpointForCall =
+        timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
+      // A long operation is not enough: only a build with a per-build log can be followed. An
+      // older broker declares no `log` and writes one shared file, so it stays synchronous.
+      const properties = op.input['properties'] as
+        Record<string, unknown> | undefined
+      const supportsLog = typeof properties?.['log'] === 'object'
+      if (
+        ctx.jobs !== undefined &&
+        supportsLog &&
+        FOLLOWS_BUILD_LOG.has(op.name)
+      ) {
+        const id = enqueueDeploy(
+          ctx,
+          op,
+          args,
+          exec,
+          call,
+          endpointForCall,
+          statePath,
+        )
+        return {
+          text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
+          truncated: false,
+        }
+      }
       return call(
-        timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs },
+        endpointForCall,
         op.name,
         args as Record<string, unknown>,
         exec.signal,

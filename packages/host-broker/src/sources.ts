@@ -864,14 +864,20 @@ export const OPS: readonly OpDefinition[] = [
           type: 'string',
           description: 'The tip of an origin branch.',
         },
+        log: {
+          type: 'string',
+          description:
+            'Log id this build writes as build-<log>.log; the client follows it.',
+        },
       },
       additionalProperties: false,
     },
     async run(args, ctx) {
-      rejectUnknown(args, ['pr', 'sha'])
+      rejectUnknown(args, ['pr', 'sha', 'log'])
+      const log = optionalLog(args)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveBuildSource(ctx, args, deadline)
-      const previous = await buildInto(ctx, source, deadline)
+      const previous = await buildInto(ctx, source, deadline, log)
       return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
     },
   },
@@ -882,13 +888,24 @@ export const OPS: readonly OpDefinition[] = [
     confirm: true,
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
-    input: { type: 'object', properties: {}, additionalProperties: false },
+    input: {
+      type: 'object',
+      properties: {
+        log: {
+          type: 'string',
+          description:
+            'Log id this build writes as build-<log>.log; the client follows it.',
+        },
+      },
+      additionalProperties: false,
+    },
     async run(args, ctx) {
-      rejectUnknown(args, [])
+      rejectUnknown(args, ['log'])
+      const log = optionalLog(args)
       const checkout = requireCheckout(ctx)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveMainSource(ctx, deadline)
-      const previous = await buildInto(ctx, source, deadline)
+      const previous = await buildInto(ctx, source, deadline, log)
       return {
         text: `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}`,
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
@@ -1197,12 +1214,13 @@ async function buildInto(
   ctx: OpContext,
   source: BuildSource,
   deadline: number,
+  logId: string | undefined,
 ): Promise<string> {
   const dir = await prepareBuildSource(ctx, source, deadline)
   try {
     // Recorded before the build, so the tag moving is what makes this the rollback target.
     const previous = await recordRollback(ctx)
-    await buildImage(ctx, dir, deadline)
+    await buildImage(ctx, dir, deadline, logId)
     return previous
   } finally {
     // Best effort: a cleanup failure must not turn a tagged image into an error.
@@ -1296,12 +1314,32 @@ async function recordRollback(ctx: OpContext): Promise<string> {
   await chmod(file, FILE_MODE).catch(() => null)
   return previous
 }
+/** The optional log id a caller picks, so its job can follow exactly this build. */
+function optionalLog(args: Record<string, unknown>): string | undefined {
+  const log = args['log']
+  if (log === undefined) {
+    return undefined
+  }
+  if (typeof log !== 'string' || !/^[\w-]{1,64}$/u.test(log)) {
+    throw new BrokerFault(
+      'bad-argument',
+      'log must be 1-64 letters, digits, "_" or "-"',
+    )
+  }
+  return log
+}
+
 async function buildImage(
   ctx: OpContext,
   dir: string,
   deadline: number,
+  logId: string | undefined,
 ): Promise<void> {
-  const logPath = path.join(ctx.stateDir, 'build.log')
+  // One file per build: a job follows exactly the log its own call writes.
+  const logPath = path.join(
+    ctx.stateDir,
+    logId === undefined ? 'build.log' : `build-${logId}.log`,
+  )
   // Create the log before the first program: a silent failure still leaves the file behind.
   const log = await open(logPath, 'a', FILE_MODE)
   try {
