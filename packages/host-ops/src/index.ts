@@ -17,6 +17,8 @@ import { startDeployJob, type Jobs } from './stream.ts'
 const OP_TIMEOUT_SLACK_MS = 5000
 
 /** Operations whose log a job can follow: a build writes one, an update does not. */
+let logSequence = 0
+
 const FOLLOWS_BUILD_LOG = new Set(['deploy.build', 'deploy.main'])
 
 /** The option that approves a destructive operation. */
@@ -253,8 +255,11 @@ function toolFor(
       // `broker.update` takes minutes and streams nothing.
       if (ctx.jobs !== undefined && FOLLOWS_BUILD_LOG.has(op.name)) {
         const agent = exec.agent as { readonly id?: string } | undefined
-        // The call id names this build's log, so both sides agree on one file.
-        const log = exec.callId ?? String(Date.now())
+        // The call id names the log when the broker accepts it; anything else would be refused.
+        const log =
+          exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
+            ? exec.callId
+            : `build-${String(Date.now())}${String(logSequence++)}`
         const logPath = `${statePath}/build-${log}.log`
         const id = startDeployJob(ctx.jobs, {
           name: op.name,

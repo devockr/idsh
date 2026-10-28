@@ -631,3 +631,51 @@ void test('a multibyte character split across reads arrives whole', async () => 
     await rm(host, { recursive: true, force: true })
   }
 })
+
+void test('a call id the broker would reject is replaced by a safe log name', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: true, result: 'done' })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    // A dot is not a broker-safe log id, so the plugin must not forward it.
+    await built.tools[0].execute(
+      {},
+      { signal: new AbortController().signal, callId: 'call.1' },
+    )
+    const spec = started[0]
+    // The safe name is what the label's arguments carry, since that is what the broker sees.
+    const log = (
+      JSON.parse(spec.label.slice('deploy.build '.length)) as { log: string }
+    ).log
+    assert.match(log, /^build-[A-Za-z0-9]+$/u)
+    assert.doesNotMatch(log, /call\.1/u)
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
