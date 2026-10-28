@@ -451,6 +451,10 @@ void test('a deploy runs as a job that follows the broker build log', async () =
     const read = source.read(0)
     assert.match(read.text, /step 2/u)
     assert.doesNotMatch(read.text, /step 1/u)
+    // The cursor moves: no re-send of what was already read, and a later line is the next delta.
+    assert.equal(source.read(read.nextOffset).text, '')
+    await writeFile(logPath, 'step 1\nstep 2\nstep 3\n')
+    assert.match(source.read(read.nextOffset).text, /step 3/u)
 
     const hooks = spec.run({
       append() {

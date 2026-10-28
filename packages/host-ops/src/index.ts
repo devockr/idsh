@@ -16,6 +16,9 @@ import { startDeployJob, type Jobs } from './stream.ts'
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
 
+/** Operations whose log a job can follow: a build writes one, an update does not. */
+const FOLLOWS_BUILD_LOG = new Set(['deploy.build', 'deploy.main'])
+
 /** The option that approves a destructive operation. */
 const CONFIRM_OPTION = 'Run'
 
@@ -246,19 +249,16 @@ function toolFor(
       }
       const endpointForCall =
         timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
-      // The table already says which operations take minutes; that is what makes one a job.
-      if (
-        ctx.jobs !== undefined &&
-        statePath !== undefined &&
-        op.timeoutMs !== undefined
-      ) {
+      // A long operation is not enough: only a build writes the log a job can follow, while
+      // `broker.update` takes minutes and streams nothing.
+      if (ctx.jobs !== undefined && FOLLOWS_BUILD_LOG.has(op.name)) {
         const agent = exec.agent as { readonly id?: string } | undefined
         const id = startDeployJob(ctx.jobs, {
           name: op.name,
           args,
           call,
           endpoint: endpointForCall,
-          statePath,
+          statePath: statePath ?? DEFAULT_STATE_PATH,
           ...(agent?.id === undefined ? {} : { owner: agent.id }),
           ...(exec.callId === undefined
             ? {}

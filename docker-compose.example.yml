@@ -70,7 +70,7 @@ services:
       # directory also holds audit.jsonl (every operation and its arguments), compose.log and
       # rollback: mount only build.log when that narrower view is what you want, remembering that
       # Docker creates a directory when the bind source does not exist yet.
-      # - ${HOME}/.local/state/idsh-host/run:/run/idsh-host:ro
+      # - ${HOME}/.local/state/idsh-host:/run/idsh-host:ro
       # - ${HOME}/.local/state/idsh-host:/run/idsh-host-state:ro
 
 networks:

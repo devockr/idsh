@@ -32,6 +32,7 @@ export interface JobOutputSource {
 export interface JobOutcome {
   readonly status: 'completed' | 'failed' | 'killed'
   readonly detail?: string
+  readonly result?: string
 }
 
 export interface JobHooks {
@@ -122,13 +123,14 @@ export function startDeployJob(jobs: Jobs, target: StreamTarget): string {
     run() {
       const work = (async (): Promise<JobOutcome> => {
         try {
-          await target.call(
+          const answer = await target.call(
             target.endpoint,
             target.name,
             target.args as Record<string, unknown>,
             controller.signal,
           )
-          return { status: 'completed' }
+          // The log arrives through the source; the answer is the job's result, once.
+          return { status: 'completed', result: answer.text }
         } catch (error) {
           // A kill aborts the call; the job is `killed`, and the reason is the answer.
           if (controller.signal.aborted) {
