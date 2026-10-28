@@ -195,6 +195,51 @@ function endpointOf(config: Config): BrokerEndpoint {
  * The `idsh_` prefix namespaces them, so a sanitized name such as `read` or `bash` cannot collide
  * with a built-in tool or another plugin's.
  */
+/** Start one long operation as a job and return its id. */
+function enqueueDeploy(
+  ctx: HostContext,
+  op: DescribedOp,
+  args: unknown,
+  exec: ToolExecution,
+  call: BrokerCaller,
+  endpoint: BrokerEndpoint,
+  statePath: string,
+): string {
+  const jobs = ctx.jobs
+  if (jobs === undefined) {
+    throw new Error('host-ops: no job registry')
+  }
+  // An older broker does not declare `log` and refuses unknown arguments, so ask the table.
+  const properties = op.input['properties'] as
+    Record<string, unknown> | undefined
+  const supportsLog = typeof properties?.['log'] === 'object'
+  // The call id names the log when the broker accepts it; anything else would be refused.
+  const log =
+    exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
+      ? exec.callId
+      : `build-${String(Date.now())}${String(logSequence++)}`
+  const agent = exec.agent as { readonly id?: string } | undefined
+  return startDeployJob(jobs, {
+    name: op.name,
+    args: supportsLog ? { ...(args as Record<string, unknown>), log } : args,
+    call,
+    endpoint,
+    statePath,
+    logPath: supportsLog
+      ? `${statePath}/build-${log}.log`
+      : `${statePath}/build.log`,
+    ...(agent?.id === undefined ? {} : { owner: agent.id }),
+    ...(exec.callId === undefined
+      ? {}
+      : {
+          toolCall: {
+            callId: exec.callId,
+            rootCallId: exec.rootCallId ?? exec.callId,
+          },
+        }),
+  })
+}
+
 function toolName(op: string): string {
   return `idsh_${op.replaceAll(/[^\w-]/gu, '_')}`
 }
@@ -254,30 +299,15 @@ function toolFor(
       // A long operation is not enough: only a build writes the log a job can follow, while
       // `broker.update` takes minutes and streams nothing.
       if (ctx.jobs !== undefined && FOLLOWS_BUILD_LOG.has(op.name)) {
-        const agent = exec.agent as { readonly id?: string } | undefined
-        // The call id names the log when the broker accepts it; anything else would be refused.
-        const log =
-          exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
-            ? exec.callId
-            : `build-${String(Date.now())}${String(logSequence++)}`
-        const logPath = `${statePath}/build-${log}.log`
-        const id = startDeployJob(ctx.jobs, {
-          name: op.name,
-          args: { ...(args as Record<string, unknown>), log },
+        const id = enqueueDeploy(
+          ctx,
+          op,
+          args,
+          exec,
           call,
-          endpoint: endpointForCall,
+          endpointForCall,
           statePath,
-          logPath,
-          ...(agent?.id === undefined ? {} : { owner: agent.id }),
-          ...(exec.callId === undefined
-            ? {}
-            : {
-                toolCall: {
-                  callId: exec.callId,
-                  rootCallId: exec.rootCallId ?? exec.callId,
-                },
-              }),
-        })
+        )
         return {
           text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
           truncated: false,

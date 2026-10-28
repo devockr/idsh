@@ -41,10 +41,11 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
 starts a `deploy` job and answers with its id at once: the broker keeps building, the job pulls the
 broker's `build.log` into its output ring, and the UI streams it while `job_output` reads it.
 
-Every deploy job follows the same `build.log`, so a _refused_ deploy — one the broker turns away
-because another build holds the deployment lock — can show a sliver of that running build's output
-before its own refusal lands. The lock keeps two builds from running, and a job that is accepted
-starts at the file's current size, so its ring never replays anything earlier.
+Each build writes its own `build-<log>.log`, named by the call id when that is a broker-safe name,
+so a job follows exactly the log its own call writes: a refused deploy streams nothing from a
+neighbour, and a later job never replays an earlier build. A broker whose table does not declare
+`log` (one older than this plugin) gets no `log` argument and the job follows `build.log`, which is
+what that broker writes.
 
 The job is process-local (the registry lives in this dsh process), so a container recreate ends it
 with everything else — what survives is the broker's build log on the host, and what stops blocking

@@ -404,7 +404,11 @@ void test('a deploy runs as a job that follows the broker build log', async () =
     {
       name: 'deploy.build',
       summary: 'Build main.',
-      input: { type: 'object', properties: {}, additionalProperties: false },
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
       confirm: true,
       timeoutMs: 900_000,
     },
@@ -489,7 +493,11 @@ void test('a refused deploy job fails with the broker reason', async () => {
     {
       name: 'deploy.build',
       summary: 'Build main.',
-      input: { type: 'object', properties: {}, additionalProperties: false },
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
       confirm: true,
       timeoutMs: 900_000,
     },
@@ -580,7 +588,11 @@ void test('apply carries the configured state path into the job', async () => {
     {
       name: 'deploy.build',
       summary: 'Build main.',
-      input: { type: 'object', properties: {}, additionalProperties: false },
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
       confirm: true,
       timeoutMs: 900_000,
     },
@@ -638,7 +650,11 @@ void test('a call id the broker would reject is replaced by a safe log name', as
     {
       name: 'deploy.build',
       summary: 'Build main.',
-      input: { type: 'object', properties: {}, additionalProperties: false },
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
       confirm: true,
       timeoutMs: 900_000,
     },
@@ -674,6 +690,53 @@ void test('a call id the broker would reject is replaced by a safe log name', as
     ).log
     assert.match(log, /^build-[A-Za-z0-9]+$/u)
     assert.doesNotMatch(log, /call\.1/u)
+  } finally {
+    await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a broker without the log argument keeps build.log', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  await writeFile(path.join(host, 'build.log'), 'history\n')
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${describe}\n`
+      : `${JSON.stringify({ ok: true, result: 'done' })}\n`,
+  )
+  try {
+    const built = context()
+    const started: JobSpec[] = []
+    const ctx = {
+      ...built.ctx,
+      jobs: {
+        start(spec: JobSpec) {
+          started.push(spec)
+          return 'deploy-1'
+        },
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    await built.tools[0].execute(
+      {},
+      { signal: new AbortController().signal, callId: 'call-1' },
+    )
+    const spec = started[0]
+    // No declared argument: the broker refuses unknown ones, so the call must not carry it.
+    assert.equal(spec.label, 'deploy.build {}')
+    const source = spec.output?.[0]
+    assert.ok(source !== undefined)
+    assert.equal(source.read(0).text, '')
   } finally {
     await broker.close()
     await rm(host, { recursive: true, force: true })
