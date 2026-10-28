@@ -2425,7 +2425,7 @@ echo "$*" >> '${npmLog}'
 void test('proc.list reads the process table, biggest resident set first', async () => {
   const host = await fakeHost()
   const procDir = path.join(host.root, 'proc')
-  for (const pid of ['10', '20', '30', '40', '50']) {
+  for (const pid of ['10', '20', '30', '40', '50', '60', '61', '41', '42']) {
     await mkdir(path.join(procDir, pid), { recursive: true })
   }
   const stat = (pid: string, comm: string, state: string, ppid: number) =>
@@ -2440,10 +2440,10 @@ void test('proc.list reads the process table, biggest resident set first', async
     stat('20', 'big one', 'R', 1),
   )
   await writeFile(path.join(procDir, '20', 'status'), 'VmRSS:\t  4096 kB\n')
-  // A name with a paren proves the parse uses the last ')', not the first.
+  // A comm with an inner ')' proves the parse uses the last one: 'sd) pam' survives.
   await writeFile(
     path.join(procDir, '40', 'stat'),
-    stat('40', 'sd-pam', 'S', 1),
+    '40 (sd) pam) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n',
   )
   await writeFile(path.join(procDir, '40', 'status'), 'VmRSS:\t  10 kB\n')
   // A comm cannot forge a row: control characters become spaces.
@@ -2452,6 +2452,16 @@ void test('proc.list reads the process table, biggest resident set first', async
     stat('50', 'evil\n   1       1 S      9999 spoofed', 'S', 1),
   )
   await writeFile(path.join(procDir, '50', 'status'), 'VmRSS:\t  5 kB\n')
+  // Equal resident sets are ordered by pid, so two calls answer the same table.
+  for (const pid of ['60', '61']) {
+    await writeFile(path.join(procDir, pid, 'stat'), stat(pid, 'same', 'S', 1))
+    await writeFile(path.join(procDir, pid, 'status'), 'VmRSS:\t  500 kB\n')
+  }
+  // A stat with nothing after the comm, and a non-numeric parent: both rows are dropped.
+  await writeFile(path.join(procDir, '41', 'stat'), '41 (empty)')
+  await writeFile(path.join(procDir, '41', 'status'), 'VmRSS:\t  3 kB\n')
+  await writeFile(path.join(procDir, '42', 'stat'), '42 (badppid) S xx 1 0')
+  await writeFile(path.join(procDir, '42', 'status'), 'VmRSS:\t  4 kB\n')
   // A directory whose name is not a pid has a valid stat: only the filter can exclude it.
   await mkdir(path.join(procDir, 'not-a-pid'), { recursive: true })
   await writeFile(
@@ -2472,13 +2482,18 @@ void test('proc.list reads the process table, biggest resident set first', async
     const lines = (answer.result ?? '').split('\n')
     // Byte-for-byte, because a whitespace-tolerant match hides a column that is off by one.
     assert.equal(lines[0], '    pid    ppid s    rssKiB comm')
-    assert.match(lines[1], /^\s+20\s+1 R\s+4096 big one$/u)
-    assert.match(lines[2], /^\s+10\s+1 S\s+1200 small$/u)
-    assert.match(lines[3], /^\s+40\s+1 S\s+10 sd-pam$/u)
-    // Four rows and a header: the exited pid, the fake directory and the forged line are gone.
-    assert.equal(lines.length, 5)
-    // The newline in comm became a space: one row, still starting at its own pid.
-    assert.match(lines[4], /^\s+50\s+1 S\s+5 evil/u)
+    // Exact rows: a whitespace-tolerant match would let the whole table drift.
+    assert.equal(lines[1], '     20       1 R      4096 big one')
+    assert.equal(lines[2], '     10       1 S      1200 small')
+    assert.equal(lines[3], '     60       1 S       500 same')
+    assert.equal(lines[4], '     61       1 S       500 same')
+    // The closing paren survives, and the newline in comm became a space.
+    assert.equal(lines[5], '     40       1 S        10 sd) pam')
+    assert.equal(
+      lines[6],
+      '     50       1 S         5 evil    1       1 S      9999 spoofed',
+    )
+    assert.equal(lines.length, 7)
     assert.ok(lines.every(line => !line.includes('nope')))
 
     const one = await connection.request({
@@ -2495,6 +2510,36 @@ void test('proc.list reads the process table, biggest resident set first', async
       assert.equal(refused.ok, false)
       assert.equal(refused.error?.code, 'bad-argument')
     }
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('proc.list defaults to twenty rows', async () => {
+  const host = await fakeHost()
+  const procDir = path.join(host.root, 'proc')
+  for (let pid = 1; pid <= 25; pid += 1) {
+    const dir = path.join(procDir, String(pid))
+    await mkdir(dir, { recursive: true })
+    await writeFile(
+      path.join(dir, 'stat'),
+      `${String(pid)} (p) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n`,
+    )
+    await writeFile(path.join(dir, 'status'), 'VmRSS:\t  1 kB\n')
+  }
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'proc.list', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    // A header and twenty rows: the documented default, not "as many as fit".
+    assert.equal((answer.result ?? '').split('\n').length, 21)
   } finally {
     connection.close()
     await broker.close()
