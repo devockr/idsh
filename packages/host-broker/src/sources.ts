@@ -433,24 +433,27 @@ interface ProcEntry {
   readonly comm: string
 }
 
-function parseProcStat(pid: string, stat: string): ProcEntry | undefined {
+function parseProcStat(
+  pid: string,
+  stat: string,
+): Omit<ProcEntry, 'rssKb'> | undefined {
   const open = stat.indexOf('(')
   const close = stat.lastIndexOf(')')
   if (open === -1 || close === -1 || close < open) {
     return undefined
   }
-  const comm = stat.slice(open + 1, close)
+  // A newline in a comm would add a line that looks like a row of its own.
+  const comm = stat.slice(open + 1, close).replaceAll(/[^\u0020-\u007E]/gu, ' ')
   const fields = stat
     .slice(close + 2)
     .trim()
     .split(/\s+/u)
-  return {
-    pid,
-    state: fields[0] ?? '',
-    ppid: Number(fields[1] ?? -1),
-    rssKb: 0,
-    comm,
+  const state = fields[0]
+  const parent = Number(fields[1])
+  if (state === '' || !Number.isInteger(parent)) {
+    return undefined
   }
+  return { pid, state, ppid: parent, comm }
 }
 
 function readRssKb(status: string): number {
@@ -471,6 +474,10 @@ async function procList(ctx: OpContext, lines: number): Promise<string> {
   }
   const entries: ProcEntry[] = []
   for (const name of names) {
+    // A timed-out request should stop reading the table, not walk the rest of it.
+    if (ctx.signal?.aborted === true) {
+      break
+    }
     if (!PROC_PID.test(name)) {
       continue
     }
@@ -489,14 +496,17 @@ async function procList(ctx: OpContext, lines: number): Promise<string> {
       // A process that exited while it was being read is not an error.
     }
   }
-  entries.sort((left, right) => right.rssKb - left.rssKb)
+  entries.sort(
+    (left, right) =>
+      right.rssKb - left.rssKb || Number(left.pid) - Number(right.pid),
+  )
   const rows = entries
     .slice(0, lines)
     .map(
       entry =>
         `${entry.pid.padStart(7)} ${String(entry.ppid).padStart(7)} ${entry.state} ${String(entry.rssKb).padStart(RSS_COLUMN)} ${entry.comm}`,
     )
-  return ['    pid    ppid s   rssKiB comm', ...rows].join('\n')
+  return ['    pid    ppid s    rssKiB comm', ...rows].join('\n')
 }
 
 /* ------------------------------------------------------------------ disk.usage */
