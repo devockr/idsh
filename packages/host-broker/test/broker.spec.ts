@@ -2452,7 +2452,7 @@ void test('proc.list reads the process table, biggest resident set first', async
     stat('50', 'evil\n   1       1 S      9999 spoofed', 'S', 1),
   )
   await writeFile(path.join(procDir, '50', 'status'), 'VmRSS:\t  5 kB\n')
-  // Equal resident sets are ordered by pid, so two calls answer the same table.
+  // Equal resident sets are ordered by pid.
   for (const pid of ['60', '61']) {
     await writeFile(path.join(procDir, pid, 'stat'), stat(pid, 'same', 'S', 1))
     await writeFile(path.join(procDir, pid, 'status'), 'VmRSS:\t  500 kB\n')
@@ -2495,6 +2495,10 @@ void test('proc.list reads the process table, biggest resident set first', async
     )
     assert.equal(lines.length, 7)
     assert.ok(lines.every(line => !line.includes('nope')))
+
+    // Two calls answer the same bytes, ties included.
+    const again = await connection.request({ op: 'proc.list', args: {} })
+    assert.equal(again.result, answer.result)
 
     const one = await connection.request({
       op: 'proc.list',

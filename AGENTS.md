@@ -271,7 +271,8 @@ Observe the running thing; do not reason from source.
 
 `ROADMAP.md` is the plan for the next version, and phase 1 is in progress: `packages/host-broker`
 holds the broker's first slice — the read sources (`log.tail`, `proc.read`, `proc.list`,
-`disk.usage`, `net.status`, `net.sockets`) and the deploy operations (`deploy.status`, `deploy.log`, `deploy.build`,
+`disk.usage`, `net.status`, `net.sockets`) and the deploy
+operations (`deploy.status`, `deploy.log`, `deploy.build`,
 `deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `broker.status`/`broker.update`, so the
 broker can replace itself under its supervisor — and `packages/host-ops` turns that table into dsh
 tools, asking the person first for any operation the table marks `confirm`. A change that

@@ -450,7 +450,7 @@ function parseProcStat(
     .split(/\s+/u)
   const state = fields[0]
   const parent = Number(fields[1])
-  if (state === '' || !Number.isInteger(parent)) {
+  if (!Number.isInteger(parent)) {
     return undefined
   }
   return { pid, state, ppid: parent, comm }
