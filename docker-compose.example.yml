@@ -65,6 +65,9 @@ services:
     volumes:
       # Only dsh's own state: what else to mount is yours to decide.
       - ./.dsh:/home/app/.dsh
+      # With @idsh/host-ops, the broker's socket and its state (the build log a deploy job follows):
+      # - ${HOME}/.dsh-host/run:/run/idsh-host:ro
+      # - ${HOME}/.dsh-host:/run/idsh-host-state:ro
 
 networks:
   default:

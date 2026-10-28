@@ -5,11 +5,22 @@
  * There is no shell here either: a tool call is one request to the broker, which validates the
  * arguments against the same schema and owns the audit line.
  */
-import { DEFAULT_SOCKET_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
+import {
+  DEFAULT_SOCKET_PATH,
+  DEFAULT_STATE_PATH,
+  DEFAULT_TIMEOUT_MS,
+} from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
+import { startDeployJob, type Jobs } from './stream.ts'
 
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
+
+/**
+ * Operations that take minutes. With a job registry they run in the background, so the tool call
+ * returns at once and the build's log streams into a job the UI follows.
+ */
+const STREAM_OPS = new Set(['deploy.build', 'deploy.main'])
 
 /** The option that approves a destructive operation. */
 const CONFIRM_OPTION = 'Run'
@@ -22,6 +33,8 @@ export interface Config {
   readonly socketPath?: string
   /** How long one call may take, in milliseconds. */
   readonly timeoutMs?: number
+  /** Where the broker's state directory is mounted, so a deploy job can follow its build log. */
+  readonly statePath?: string
 }
 
 interface ContentBlock {
@@ -68,6 +81,8 @@ export interface QuestionAnswer {
 
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
+  /** The harness's background jobs; absent in a host without them, and then deploys stay synchronous. */
+  jobs?: Jobs
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -98,11 +113,13 @@ interface DescribedOp {
  */
 export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
   const endpoint = endpointOf(config)
-  return registerTools(ctx, endpoint).catch((error: unknown) => {
-    ctx.logger.warn(
-      `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
-    )
-  })
+  return registerTools(ctx, endpoint, callBroker, statePathOf(config)).catch(
+    (error: unknown) => {
+      ctx.logger.warn(
+        `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
+      )
+    },
+  )
 }
 
 /** The caller the tools use; a test can pass a stub instead of waiting on a socket. */
@@ -113,6 +130,7 @@ export async function registerTools(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   call: BrokerCaller = callBroker,
+  statePath: string = DEFAULT_STATE_PATH,
 ): Promise<void> {
   const described = await callBroker(endpoint, 'ops.describe', {})
   const ops = JSON.parse(described.text) as unknown
@@ -120,7 +138,9 @@ export async function registerTools(
     throw new TypeError('the broker did not describe a table of operations')
   }
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call))
+  const tools = ops.map(value =>
+    toolFor(ctx, endpoint, asOp(value), call, statePath),
+  )
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -141,6 +161,14 @@ export async function registerTools(
     }
     throw error
   }
+}
+
+function statePathOf(config: Config): string {
+  const statePath = config.statePath ?? DEFAULT_STATE_PATH
+  if (typeof statePath !== 'string' || statePath === '') {
+    throw new Error('host-ops: statePath must be a non-empty string')
+  }
+  return statePath
 }
 
 function endpointOf(config: Config): BrokerEndpoint {
@@ -170,6 +198,7 @@ function toolFor(
   endpoint: BrokerEndpoint,
   op: DescribedOp,
   call: BrokerCaller,
+  statePath: string,
 ): HostTool {
   // A long operation says so; the tool call and the socket wait inherit it together.
   const timeoutMs =
@@ -214,8 +243,27 @@ function toolFor(
               : `; the person replied: ${JSON.stringify(confirmation.reply)}`),
         )
       }
+      const endpointForCall =
+        timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
+      if (ctx.jobs !== undefined && STREAM_OPS.has(op.name)) {
+        const owner = (
+          exec.agent as { readonly sessionId?: string } | undefined
+        )?.sessionId
+        const id = startDeployJob(ctx.jobs, {
+          name: op.name,
+          args,
+          call,
+          endpoint: endpointForCall,
+          statePath,
+          ...(owner === undefined ? {} : { owner }),
+        })
+        return {
+          text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
+          truncated: false,
+        }
+      }
       return call(
-        timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs },
+        endpointForCall,
         op.name,
         args as Record<string, unknown>,
         exec.signal,

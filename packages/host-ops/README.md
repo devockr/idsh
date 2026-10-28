@@ -35,6 +35,18 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
   where the assistant can answer it and ask again. Cancel, a skipped question and an empty answer
   behave the same.
 
+## Long deploys as jobs
+
+`deploy.build` and `deploy.main` take minutes, so with a job registry present (`ctx.jobs`) the tool
+starts a `deploy` job and answers with its id at once: the broker keeps building, the job follows the
+broker's `build.log` into its output ring, and the UI streams it while `job_output` reads it. A call
+that is cut off — a container recreate, say — therefore leaves a job that outlives it. Without a job
+registry the operations stay synchronous.
+
+The deployment mounts the broker's state directory at `/run/idsh-host-state` (read-only) for that
+log; `statePath` overrides where. Killed jobs cancel the client call; the broker's own budget (15
+minutes) still ends the build if nobody is watching.
+
 ## Not in this package
 
 The operation table, the bounds and the audit are `@idsh/host-broker` (the host program). This

@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 
 import {
@@ -8,6 +11,7 @@ import {
   type HostContext,
   type HostTool,
 } from '../src/index.ts'
+import type { JobSpec } from '../src/stream.ts'
 
 import { fakeBroker } from './server.ts'
 
@@ -371,4 +375,59 @@ void test('a typed answer is a reply, not a confirmation', async () => {
     run([]),
     /host-ops: deploy\.recreate was not confirmed; the host was not touched$/u,
   )
+})
+
+void test('a deploy runs as a job that follows the broker build log', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
+  await writeFile(path.join(host, 'build.log'), 'step 1\n')
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build main.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? describe
+      : `${JSON.stringify({ ok: true, result: 'built main' })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    const started: JobSpec[] = []
+    ctx.jobs = {
+      start(spec: JobSpec) {
+        started.push(spec)
+        return 'deploy-1'
+      },
+    }
+    await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
+    assert.equal(tools[0]?.name, 'idsh_deploy_build')
+    const answer = (await tools[0].execute(
+      {},
+      { signal: new AbortController().signal },
+    )) as { text: string }
+    assert.match(answer.text, /started deploy-1/u)
+
+    const spec = started[0]
+    assert.equal(spec.kind, 'deploy')
+    const chunks: string[] = []
+    const hooks = spec.run({
+      append: text => chunks.push(text),
+      updateProgress() {
+        // the test never narrates progress
+      },
+    })
+    const outcome = await hooks.done
+    assert.equal(outcome.status, 'completed')
+    // The tailer runs on its own timer, so give it one interval to see the line.
+    await new Promise(resolve => setTimeout(resolve, 800))
+    assert.ok(chunks.includes('step 1\n'), chunks.join(''))
+    assert.ok(chunks.includes('built main'), chunks.join(''))
+  } finally {
+    await broker.close()
+  }
 })
