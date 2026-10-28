@@ -209,10 +209,6 @@ function enqueueDeploy(
   if (jobs === undefined) {
     throw new Error('host-ops: no job registry')
   }
-  // An older broker does not declare `log` and refuses unknown arguments, so ask the table.
-  const properties = op.input['properties'] as
-    Record<string, unknown> | undefined
-  const supportsLog = typeof properties?.['log'] === 'object'
   // The call id names the log when the broker accepts it; anything else would be refused.
   const log =
     exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
@@ -221,13 +217,11 @@ function enqueueDeploy(
   const agent = exec.agent as { readonly id?: string } | undefined
   return startDeployJob(jobs, {
     name: op.name,
-    args: supportsLog ? { ...(args as Record<string, unknown>), log } : args,
+    args: { ...(args as Record<string, unknown>), log },
     call,
     endpoint,
     statePath,
-    logPath: supportsLog
-      ? `${statePath}/build-${log}.log`
-      : `${statePath}/build.log`,
+    logPath: `${statePath}/build-${log}.log`,
     ...(agent?.id === undefined ? {} : { owner: agent.id }),
     ...(exec.callId === undefined
       ? {}
@@ -296,9 +290,16 @@ function toolFor(
       }
       const endpointForCall =
         timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
-      // A long operation is not enough: only a build writes the log a job can follow, while
-      // `broker.update` takes minutes and streams nothing.
-      if (ctx.jobs !== undefined && FOLLOWS_BUILD_LOG.has(op.name)) {
+      // A long operation is not enough: only a build with a per-build log can be followed. An
+      // older broker declares no `log` and writes one shared file, so it stays synchronous.
+      const properties = op.input['properties'] as
+        Record<string, unknown> | undefined
+      const supportsLog = typeof properties?.['log'] === 'object'
+      if (
+        ctx.jobs !== undefined &&
+        supportsLog &&
+        FOLLOWS_BUILD_LOG.has(op.name)
+      ) {
         const id = enqueueDeploy(
           ctx,
           op,

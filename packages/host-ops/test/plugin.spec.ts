@@ -542,7 +542,11 @@ void test('a cancelled deploy job settles killed', async () => {
     {
       name: 'deploy.main',
       summary: 'Deploy main.',
-      input: { type: 'object', properties: {}, additionalProperties: false },
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
       confirm: true,
       timeoutMs: 900_000,
     },
@@ -696,7 +700,7 @@ void test('a call id the broker would reject is replaced by a safe log name', as
   }
 })
 
-void test('a broker without the log argument keeps build.log', async () => {
+void test('a broker without the log argument stays synchronous', async () => {
   const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
   await writeFile(path.join(host, 'build.log'), 'history\n')
   const table = [
@@ -731,12 +735,8 @@ void test('a broker without the log argument keeps build.log', async () => {
       {},
       { signal: new AbortController().signal, callId: 'call-1' },
     )
-    const spec = started[0]
-    // No declared argument: the broker refuses unknown ones, so the call must not carry it.
-    assert.equal(spec.label, 'deploy.build {}')
-    const source = spec.output?.[0]
-    assert.ok(source !== undefined)
-    assert.equal(source.read(0).text, '')
+    // No per-build log to follow, so an old broker stays synchronous: no job, the answer is the call.
+    assert.deepEqual(started, [])
   } finally {
     await broker.close()
     await rm(host, { recursive: true, force: true })

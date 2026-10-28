@@ -68,7 +68,9 @@ services:
       # With @idsh/host-ops, the broker's socket and its state (the build log a deploy job follows;
       # the state directory is the audit log's dirname, per the broker's README). The whole state
       # directory also holds audit.jsonl (every operation and its arguments), compose.log and
-      # rollback: mount only build.log when that narrower view is what you want, remembering that
+      # rollback. A build writes build-<log>.log, which cannot be mounted ahead of time, so mount
+      # the directory (or one known build-<log>.log), not a build.log that only an older broker
+      # writes; and remember that
       # Docker creates a directory when the bind source does not exist yet.
       # - ${HOME}/.local/state/idsh-host:/run/idsh-host:ro
       # - ${HOME}/.local/state/idsh-host:/run/idsh-host-state:ro
