@@ -253,12 +253,16 @@ function toolFor(
       // `broker.update` takes minutes and streams nothing.
       if (ctx.jobs !== undefined && FOLLOWS_BUILD_LOG.has(op.name)) {
         const agent = exec.agent as { readonly id?: string } | undefined
+        // The call id names this build's log, so both sides agree on one file.
+        const log = exec.callId ?? String(Date.now())
+        const logPath = `${statePath}/build-${log}.log`
         const id = startDeployJob(ctx.jobs, {
           name: op.name,
-          args,
+          args: { ...(args as Record<string, unknown>), log },
           call,
           endpoint: endpointForCall,
           statePath,
+          logPath,
           ...(agent?.id === undefined ? {} : { owner: agent.id }),
           ...(exec.callId === undefined
             ? {}

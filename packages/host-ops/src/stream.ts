@@ -5,7 +5,6 @@
  * no longer blocks on the build.
  */
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
-import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 
 import type { BrokerAnswer, BrokerEndpoint } from './socket.ts'
@@ -64,6 +63,8 @@ export interface StreamTarget {
   ) => Promise<BrokerAnswer>
   readonly endpoint: BrokerEndpoint
   readonly statePath: string
+  /** The one log this call writes; the job follows it and nothing else. */
+  readonly logPath: string
   readonly owner?: string
   readonly toolCall?: { readonly callId?: string; readonly rootCallId?: string }
 }
@@ -125,7 +126,7 @@ export function startDeployJob(jobs: Jobs, target: StreamTarget): string {
     label: `${target.name} ${JSON.stringify(target.args)}`,
     ...(target.owner === undefined ? {} : { owner: target.owner }),
     ...(target.toolCall === undefined ? {} : { toolCall: target.toolCall }),
-    output: [buildLogSource(path.join(target.statePath, 'build.log'))],
+    output: [buildLogSource(target.logPath)],
     run() {
       const work = (async (): Promise<JobOutcome> => {
         try {

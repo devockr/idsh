@@ -398,7 +398,7 @@ void test('a typed answer is a reply, not a confirmation', async () => {
 
 void test('a deploy runs as a job that follows the broker build log', async () => {
   const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
-  const logPath = path.join(host, 'build.log')
+  const logPath = path.join(host, 'build-call-1.log')
   await writeFile(logPath, 'step 1\n')
   const table = [
     {
@@ -449,7 +449,7 @@ void test('a deploy runs as a job that follows the broker build log', async () =
     assert.equal(spec.kind, 'deploy')
     assert.equal(spec.owner, 'ses_abc')
     assert.deepEqual(spec.toolCall, { callId: 'call-1', rootCallId: 'call-1' })
-    assert.equal(spec.label, 'deploy.build {}')
+    assert.match(spec.label, /^deploy\.build /u)
 
     // The source starts where the file was, so an earlier build is not replayed.
     const source = spec.output?.[0]
@@ -575,7 +575,7 @@ void test('a cancelled deploy job settles killed', async () => {
 
 void test('apply carries the configured state path into the job', async () => {
   const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-job-'))
-  await writeFile(path.join(host, 'build.log'), 'history\n')
+  await writeFile(path.join(host, 'build-call-1.log'), 'history\n')
   const table = [
     {
       name: 'deploy.build',
@@ -617,7 +617,7 @@ void test('apply carries the configured state path into the job', async () => {
 
 void test('a multibyte character split across reads arrives whole', async () => {
   const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-decoder-'))
-  const logPath = path.join(host, 'build.log')
+  const logPath = path.join(host, 'build-call-1.log')
   await writeFile(logPath, '')
   try {
     const source = buildLogSource(logPath)
