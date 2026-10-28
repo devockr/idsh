@@ -202,7 +202,7 @@ function toolFor(
   endpoint: BrokerEndpoint,
   op: DescribedOp,
   call: BrokerCaller,
-  statePath: string | undefined,
+  statePath: string,
 ): HostTool {
   // A long operation says so; the tool call and the socket wait inherit it together.
   const timeoutMs =
@@ -258,7 +258,7 @@ function toolFor(
           args,
           call,
           endpoint: endpointForCall,
-          statePath: statePath ?? DEFAULT_STATE_PATH,
+          statePath,
           ...(agent?.id === undefined ? {} : { owner: agent.id }),
           ...(exec.callId === undefined
             ? {}

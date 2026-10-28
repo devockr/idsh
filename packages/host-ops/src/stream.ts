@@ -100,13 +100,19 @@ export function buildLogSource(file: string): JobOutputSource {
       }
       const buffer = Buffer.alloc(size - start)
       const fd = openSync(file, 'r')
+      let read: number
       try {
-        readSync(fd, buffer, 0, buffer.length, start)
+        read = readSync(fd, buffer, 0, buffer.length, start)
       } finally {
         closeSync(fd)
       }
-      offset = size
-      return { text: decoder.write(buffer), nextOffset: size, lossy: false }
+      // A short read must not leave the zero-filled tail of the buffer in the ring.
+      offset = start + read
+      return {
+        text: decoder.write(buffer.subarray(0, read)),
+        nextOffset: offset,
+        lossy: false,
+      }
     },
   }
 }

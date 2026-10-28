@@ -11,7 +11,7 @@ import {
   type HostContext,
   type HostTool,
 } from '../src/index.ts'
-import type { JobSpec } from '../src/stream.ts'
+import { buildLogSource, type JobSpec } from '../src/stream.ts'
 
 import { fakeBroker } from './server.ts'
 
@@ -408,6 +408,13 @@ void test('a deploy runs as a job that follows the broker build log', async () =
       confirm: true,
       timeoutMs: 900_000,
     },
+    {
+      name: 'broker.update',
+      summary: 'Update the broker.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      timeoutMs: 900_000,
+    },
   ]
   const describe = JSON.stringify({ ok: true, result: JSON.stringify(table) })
   const broker = await fakeBroker(request =>
@@ -461,8 +468,15 @@ void test('a deploy runs as a job that follows the broker build log', async () =
         // the source is pulled by the registry, not pushed by the producer
       },
     })
+    // broker.update takes minutes too, but writes no log: it must stay synchronous.
+    const update = built.tools.find(tool => tool.name === 'idsh_broker_update')
+    assert.ok(update !== undefined)
+    await update.execute({}, { signal: new AbortController().signal })
+    assert.equal(started.length, 1)
+
     const outcome = await hooks.done
     assert.equal(outcome.status, 'completed')
+    assert.equal(outcome.result, 'built main')
   } finally {
     await broker.close()
     await rm(host, { recursive: true, force: true })
@@ -597,6 +611,23 @@ void test('apply carries the configured state path into the job', async () => {
     assert.equal(source.read(0).text, '')
   } finally {
     await broker.close()
+    await rm(host, { recursive: true, force: true })
+  }
+})
+
+void test('a multibyte character split across reads arrives whole', async () => {
+  const host = await mkdtemp(path.join(tmpdir(), 'idsh-host-ops-decoder-'))
+  const logPath = path.join(host, 'build.log')
+  await writeFile(logPath, '')
+  try {
+    const source = buildLogSource(logPath)
+    // "中" is three bytes; the first poll sees only the first two.
+    const encoded = Buffer.from('中')
+    await writeFile(logPath, encoded.subarray(0, 2))
+    assert.equal(source.read(0).text, '')
+    await writeFile(logPath, encoded)
+    assert.equal(source.read(2).text, '中')
+  } finally {
     await rm(host, { recursive: true, force: true })
   }
 })
