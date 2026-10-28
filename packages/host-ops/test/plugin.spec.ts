@@ -149,15 +149,27 @@ void test('a bad entry rejects the whole table', async () => {
   }
 })
 
-void test('a bad config is refused before anything is discovered', () => {
-  const { ctx } = context()
-  assert.throws(
-    () => apply(ctx, { socketPath: {} as unknown as string }),
-    /socketPath must be a non-empty string/u,
-  )
-  assert.throws(
-    () => apply(ctx, { timeoutMs: 0 }),
+void test('a bad config registers nothing and warns', async () => {
+  const bad = context()
+  await apply(bad.ctx, { socketPath: {} as unknown as string })
+  assert.deepEqual(bad.tools, [])
+  assert.match(bad.warnings[0] ?? '', /socketPath must be a non-empty string/u)
+
+  const alsoBad = context()
+  await apply(alsoBad.ctx, { timeoutMs: 0 })
+  assert.deepEqual(alsoBad.tools, [])
+  assert.match(
+    alsoBad.warnings[0] ?? '',
     /timeoutMs must be a positive integer/u,
+  )
+
+  // statePath is part of the same contract now: an invalid one registers no tools either.
+  const stateBad = context()
+  await apply(stateBad.ctx, { statePath: '' })
+  assert.deepEqual(stateBad.tools, [])
+  assert.match(
+    stateBad.warnings[0] ?? '',
+    /statePath must be a non-empty string/u,
   )
 })
 

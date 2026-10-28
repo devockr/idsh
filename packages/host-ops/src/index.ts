@@ -106,26 +106,21 @@ interface DescribedOp {
  * broker that is down does not fail the profile — the plugin logs and registers nothing, so the
  * delegation still boots and the tools appear on the next reload.
  */
-export const apply = (ctx: HostContext, config: Config = {}): Promise<void> => {
+export const apply = (ctx: HostContext, config: Config = {}): Promise<void> =>
+  discover(ctx, config).catch((error: unknown) => {
+    ctx.logger.warn(
+      `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
+    )
+  })
+
+/**
+ * Validate the whole configuration, then register. A bad value rejects here — including
+ * `statePath` — so the warning is true: nothing was registered this boot.
+ */
+async function discover(ctx: HostContext, config: Config): Promise<void> {
   const endpoint = endpointOf(config)
-  // A profile typo disables the tools like a bad socket path does, instead of failing the boot.
-  const statePath = ((): string | undefined => {
-    try {
-      return statePathOf(config)
-    } catch (error) {
-      ctx.logger.warn(
-        `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
-      )
-      return
-    }
-  })()
-  return registerTools(ctx, endpoint, callBroker, statePath).catch(
-    (error: unknown) => {
-      ctx.logger.warn(
-        `host-ops: ${error instanceof Error ? error.message : String(error)}; no host tools this boot`,
-      )
-    },
-  )
+  const statePath = statePathOf(config)
+  await registerTools(ctx, endpoint, callBroker, statePath)
 }
 
 /** The caller the tools use; a test can pass a stub instead of waiting on a socket. */

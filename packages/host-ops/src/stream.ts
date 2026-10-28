@@ -6,6 +6,7 @@
  */
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 
 import type { BrokerAnswer, BrokerEndpoint } from './socket.ts'
 
@@ -74,6 +75,8 @@ export interface StreamTarget {
  * never split a character.
  */
 export function buildLogSource(file: string): JobOutputSource {
+  // A character can straddle two polls; the decoder keeps its bytes for the next read.
+  const decoder = new StringDecoder('utf8')
   let offset = (() => {
     try {
       return statSync(file).size
@@ -102,7 +105,7 @@ export function buildLogSource(file: string): JobOutputSource {
         closeSync(fd)
       }
       offset = size
-      return { text: buffer.toString('utf8'), nextOffset: size, lossy: false }
+      return { text: decoder.write(buffer), nextOffset: size, lossy: false }
     },
   }
 }
