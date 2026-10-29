@@ -24,7 +24,8 @@
   },
   "files": [
     "cordis.patch.yml",
-    "lib"
+    "lib",
+    "!**/*.tsbuildinfo"
   ],
   "keywords": [
     "dsh",
