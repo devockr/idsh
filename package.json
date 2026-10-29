@@ -25,7 +25,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "version": "changeset version && node tools/sync-image-pins.mts && pnpm install --lockfile-only",
     "lint:oxlint": "oxlint .",
-    "lint:eslint": "eslint . --cache",
+    "lint:eslint": "eslint --flag unstable_native_nodejs_ts_config . --cache",
     "format:prettier": "prettier --write ."
   },
   "devDependencies": {
