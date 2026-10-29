@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true,
     "checkJs": true
   },
-  "include": ["tools", "vite.config.ts", "eslint.config.mjs", "oxlint.config.ts", "oxfmt.config.ts"]
+  "include": ["tools", "vite.config.ts", "eslint.config.ts", "oxlint.config.ts", "oxfmt.config.ts"]
 }
