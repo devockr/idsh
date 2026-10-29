@@ -372,7 +372,9 @@ async function readProc(file: ProcFile, ctx: OpContext): Promise<string> {
 /* ---------------------------------------------------------------- proc.list */
 
 /** How many processes `proc.list` returns by default, and at most. */
+/** @internal The tests assert the default; not part of the published surface. */
 export const DEFAULT_PROC_LINES = 20
+/** @internal The tests assert the cap; not part of the published surface. */
 export const MAX_PROC_LINES = 100
 
 const PROC_PID = /^\d+$/u
