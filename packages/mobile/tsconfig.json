@@ -9,7 +9,6 @@
     "outDir": "lib",
     "noEmitOnError": true,
     "declaration": true,
-    "sourceMap": false,
     "composite": true
   },
   "include": ["src"]
