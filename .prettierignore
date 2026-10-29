@@ -25,3 +25,10 @@
 
 # We minify SVGs
 **/*.svg
+
+# Build and runtime output: the language list above already skips most of it, and saying so keeps
+# the two ignore files aligned with .oxfmtignore.
+.dsh
+coverage
+dist
+lib
