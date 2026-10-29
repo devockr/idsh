@@ -6,8 +6,7 @@
     "outDir": "lib",
     "declaration": true,
     "stripInternal": true,
-    "composite": true,
-    "incremental": true
+    "composite": true
   },
   "include": ["src"]
 }
