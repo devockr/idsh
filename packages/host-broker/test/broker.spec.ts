@@ -20,7 +20,12 @@ import { after, test } from 'node:test'
 import {
   capOutput,
   createLineReader,
+  BUILD_TIMEOUT_MS,
+  DEFAULT_PROC_LINES,
+  MAX_ERROR_CHARS,
   MAX_LINE_BYTES,
+  MAX_PATTERN_CHARS,
+  MAX_PROC_LINES,
   MAX_OUTPUT_BYTES,
   parseRequest,
   RateLimiter,
@@ -31,22 +36,11 @@ import {
 
 // The bounds these tests assert against; named here because the broker keeps them internal.
 const ALIGN = 32
-const SHA256_HEX = 64
-const KEY_CHARS = 16
-const LOG_BYTES = 9000
-const LOG_ROW_BYTES = 8000
 const ODD_BYTES = 33
-const FILE_MODE = 0o644
-const PRIVATE_MODE = 0o600
 const FIXED_NOW = 1_700_000_000_000
-const PROC_ROWS = 11
-const MAX_PATTERN = 200
-const MAX_ERROR = 500
-const PROC_DEFAULT = 20
-const PROC_MAX = 100
-const BUILD_TIMEOUT = 900_000
 
-const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(SHA256_HEX)
+// oxlint-disable-next-line no-magic-numbers -- a sha256 is 64 hex characters
+const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
 
 const roots: string[] = []
 
@@ -433,7 +427,11 @@ function bigLog(rowCount: number, head: string, rowLength = 32): { content: stri
 
 void test('log.tail keeps the first whole row when the window starts on a boundary', async () => {
   const host = await fakeHost()
-  const { content } = bigLog(LOG_BYTES, '')
+  const { content } = bigLog(
+    // oxlint-disable-next-line no-magic-numbers -- a log larger than the tail window
+    9000,
+    '',
+  )
   // The window starts at row 808. Only that row matches the pattern, so it is exactly the row the
   // off-by-one used to drop — a test that read the last rows would pass either way.
   assert.equal(content.length % ALIGN, 0)
@@ -462,7 +460,12 @@ void test('log.tail keeps the first whole row when the window starts on a bounda
 void test('log.tail drops the partial first row when the window starts inside one', async () => {
   const host = await fakeHost()
   // 33-byte rows put the window start inside a row rather than on one of its boundaries.
-  const { content, last } = bigLog(LOG_ROW_BYTES, '', ODD_BYTES)
+  const { content, last } = bigLog(
+    // oxlint-disable-next-line no-magic-numbers -- a shorter log than the tail window
+    8000,
+    '',
+    ODD_BYTES,
+  )
   assert.notEqual((content.length - TAIL_WINDOW_BYTES) % ODD_BYTES, 0)
   await writeFile(path.join(host.logDir, 'syslog'), content)
 
@@ -561,7 +564,11 @@ void test('an over-long line is answered before the connection closes', async ()
 void test('an existing audit file is narrowed to 0600', async () => {
   const host = await fakeHost()
   await writeFile(host.auditPath, '')
-  await chmod(host.auditPath, FILE_MODE)
+  await chmod(
+    host.auditPath,
+    // oxlint-disable-next-line no-magic-numbers -- a readable file mode
+    0o644,
+  )
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -580,7 +587,11 @@ void test('an existing audit file is narrowed to 0600', async () => {
     await broker.close()
   }
   const stats = await stat(host.auditPath)
-  assert.equal(stats.mode & MODE_MASK, PRIVATE_MODE)
+  assert.equal(
+    stats.mode & MODE_MASK,
+    // oxlint-disable-next-line no-magic-numbers -- an owner-only file mode
+    0o600,
+  )
 })
 
 void test('an exec timeout past the timer ceiling is clamped where it is used', async () => {
@@ -790,13 +801,13 @@ void test('a container name that is not one is refused', async () => {
 })
 
 void test('capOutput keeps a tail of whole rows, never half a character', () => {
-  const row = `${'x'.repeat(MAX_PATTERN - 1)}😀\n`
+  const row = `${'x'.repeat(MAX_PATTERN_CHARS - 1)}😀\n`
   const text = row.repeat(500)
   const capped = capOutput(text, 'tail')
   assert.equal(capped.truncated, true)
   assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
   assert.ok(!capped.text.includes('\uFFFD'))
-  assert.ok(capped.text.endsWith(`${'x'.repeat(MAX_PATTERN - 1)}😀\n`))
+  assert.ok(capped.text.endsWith(`${'x'.repeat(MAX_PATTERN_CHARS - 1)}😀\n`))
 })
 
 void test('capOutput backs off a cut that lands inside a character', () => {
@@ -812,7 +823,7 @@ void test('capOutput backs off a cut that lands inside a character', () => {
 void test('a window that starts on a surrogate half drops it, not the character', async () => {
   const host = await fakeHost()
   const dockerPath = path.join(host.root, 'docker')
-  const line = `${'x'.repeat(60)}😀${'y'.repeat(MAX_ERROR - 1)}`
+  const line = `${'x'.repeat(60)}😀${'y'.repeat(MAX_ERROR_CHARS - 1)}`
   await writeFile(dockerPath, `#!/bin/sh\nprintf '%s\\n' '${line}'\nexit 1\n`, {
     mode: 0o755,
   })
@@ -827,7 +838,7 @@ void test('a window that starts on a surrogate half drops it, not the character'
   try {
     const answer = await connection.request({ op: 'deploy.status', args: {} })
     assert.equal(answer.ok, false)
-    assert.equal(answer.error?.message, 'y'.repeat(MAX_ERROR - 1))
+    assert.equal(answer.error?.message, 'y'.repeat(MAX_ERROR_CHARS - 1))
   } finally {
     connection.close()
     await broker.close()
@@ -932,13 +943,13 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
     const update = ops.find(op => op.name === 'broker.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
-    assert.equal(update.timeoutMs, BUILD_TIMEOUT)
+    assert.equal(update.timeoutMs, BUILD_TIMEOUT_MS)
     assert.ok(ops.some(op => op.name === 'broker.status'))
 
     const main = ops.find(op => op.name === 'deploy.main')
     assert.ok(main !== undefined)
     assert.equal(main.confirm, true)
-    assert.equal(main.timeoutMs, BUILD_TIMEOUT)
+    assert.equal(main.timeoutMs, BUILD_TIMEOUT_MS)
 
     const answer = await connection.request({ op: 'deploy.recreate', args: {} })
     assert.equal(answer.ok, true)
@@ -1279,10 +1290,11 @@ esac
 
 void test('a planted build directory is swept at boot', async () => {
   const host = await fakeHost()
-  const key = createHash('sha256')
-    .update(path.resolve(host.socketPath))
-    .digest('hex')
-    .slice(0, KEY_CHARS)
+  const key = createHash('sha256').update(path.resolve(host.socketPath)).digest('hex').slice(
+    0,
+    // oxlint-disable-next-line no-magic-numbers -- the broker names a build root by this prefix
+    16,
+  )
   const junk = path.join(host.root, 'build', key, 'junk')
   await mkdir(junk, { recursive: true })
   const broker = await startBroker({
@@ -2466,7 +2478,11 @@ void test('proc.list reads the process table, biggest resident set first', async
     // U+200D (ZWJ) survives: format controls are a deliberate pass-through.
     assert.equal(lines[9], '     47       1 S         6 a\u200Db')
     assert.equal(lines[10], '     50       1 S         5 evil    1       1 S      9999 spoofed')
-    assert.equal(lines.length, PROC_ROWS)
+    assert.equal(
+      lines.length,
+      // oxlint-disable-next-line no-magic-numbers -- the fixture below has this many rows
+      11,
+    )
     assert.ok(lines.every(line => !line.includes('nope')))
 
     // Two calls answer the same bytes, ties included.
@@ -2479,7 +2495,7 @@ void test('proc.list reads the process table, biggest resident set first', async
     })
     assert.equal((one.result ?? '').split('\n').length, 2)
 
-    for (const lines of [0, PROC_MAX + 1]) {
+    for (const lines of [0, MAX_PROC_LINES + 1]) {
       const refused = await connection.request({
         op: 'proc.list',
         args: { lines },
@@ -2516,7 +2532,7 @@ void test('proc.list defaults to twenty rows', async () => {
     const answer = await connection.request({ op: 'proc.list', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     // A header and twenty rows: the documented default, not "as many as fit".
-    assert.equal((answer.result ?? '').split('\n').length, PROC_DEFAULT + 1)
+    assert.equal((answer.result ?? '').split('\n').length, DEFAULT_PROC_LINES + 1)
   } finally {
     connection.close()
     await broker.close()

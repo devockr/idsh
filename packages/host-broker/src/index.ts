@@ -8,6 +8,8 @@
  */
 export { type BrokerOptions, DESCRIBE_OP, type RunningBroker, startBroker } from './broker.ts'
 export { MAX_OUTPUT_BYTES, TAIL_WINDOW_BYTES } from './constants.ts'
+export { BUILD_TIMEOUT_MS, MAX_ERROR_CHARS, MAX_PATTERN_CHARS } from './constants.ts'
+export { DEFAULT_PROC_LINES, MAX_PROC_LINES } from './sources.ts'
 export { capOutput, type Capped, RateLimiter } from './limits.ts'
 export {
   type BrokerError,
