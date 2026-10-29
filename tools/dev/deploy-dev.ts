@@ -142,7 +142,7 @@ const needsQuoting = (mount: Mount): boolean => /[",]/.test(`${mount.source}${mo
 const toArgs = (list: Mount[]): string[] =>
   list.flatMap(mount => [
     '--mount',
-    `type=bind,source=${mount.source as string},target=${mount.target as string}${mount.read_only ? ',readonly' : ''}`,
+    `type=bind,source=${mount.source},target=${mount.target}${mount.read_only ? ',readonly' : ''}`,
   ])
 const gated = strict.filter(mount => !needsQuoting(mount))
 const warned = [...created, ...strict.filter(needsQuoting)]
