@@ -9,7 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "pnpm --recursive --if-present --workspace-concurrency=1 run build",
+    "build": "tsc -b tsconfig.build.json",
     "deploy:dev": "pnpm dev && node tools/dev/deploy-dev.ts",
     "deploy:dev:dry": "node tools/dev/deploy-dev.ts --dry",
     "dev": "pnpm build && docker build --target base -t devockr/idsh:base . && docker build -f Dockerfile.dev -t devockr/idsh:dev .",

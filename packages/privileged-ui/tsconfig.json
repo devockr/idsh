@@ -1,17 +1,16 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2023",
     "lib": ["ES2023", "DOM"],
+    "types": [],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "rootDir": "src",
     "outDir": "lib",
-    "strict": true,
     "noEmitOnError": true,
     "declaration": true,
     "sourceMap": false,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "composite": true
   },
   "include": ["src"]
 }

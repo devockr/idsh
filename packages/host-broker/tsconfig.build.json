@@ -5,7 +5,8 @@
     "rootDir": "src",
     "outDir": "lib",
     "declaration": true,
-    "stripInternal": true
+    "stripInternal": true,
+    "composite": true
   },
   "include": ["src"]
 }

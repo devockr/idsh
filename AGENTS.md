@@ -24,7 +24,7 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   libraries (the headless shell's set, plus the three the full Chromium adds), and bakes the same
   profile from this checkout's `packages/` as a `link:`. A deployment may mount a checkout over
   `/opt/dsh/packages`, but that checkout has to be **built**
-  first (`pnpm --recursive build` turns `src/` into the `lib/` the manifests name): a linked
+  first (`pnpm build` turns `src/` into the `lib/` the manifests name): a linked
   package whose entry files are missing is put back to the image's copy, exactly like a broken one.
   A test or development convenience never goes into `Dockerfile`; the published image _should_ fail to
   launch a browser.
@@ -146,7 +146,8 @@ Observe the running thing; do not reason from source.
   half. Its `bin` is the program, its entry is `lib/index.js` like the others, and it is published
   like the rest but never baked into the profile — the image's plugin set is the packages that
   declare `dsh`.
-- **`lib/` is build output**, gitignored, produced by `pnpm --recursive build` _before_ the images
+- **`lib/` is build output**, gitignored, produced by `pnpm build` — `tsc -b tsconfig.build.json`,
+  one project graph over the four packages that share `tsconfig.base.json` — _before_ the images
   are built — `Dockerfile.dev` ships those compiled files and refuses to build a package whose
   `lib/index.js` — or `lib/client.js`, when the package also has a browser half — is missing, or
   older than its `src/`, so a forgotten rebuild fails the build instead of shipping a `link:`

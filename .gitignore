@@ -12,6 +12,8 @@ docker-compose.yml
 # Never commit private keys that happen to land in the working tree.
 id_rsa
 id_ed25519
+# tsc -b bookkeeping
+*.tsbuildinfo
 # build output of the packages (the images ship lib/, the repo does not)
 packages/*/lib/
 # test coverage, when a run writes it
