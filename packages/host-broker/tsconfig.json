@@ -1,8 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2023"],
-    "resolveJsonModule": true,
     "noEmit": true,
     "paths": {
       "@idsh/host-broker": ["./src/index.ts"]
