@@ -27,6 +27,7 @@
     "pack": "pnpm --recursive pack",
     "release": "changeset publish",
     "test": "pnpm --recursive --if-present run test",
+    "typecov": "type-coverage",
     "version": "changeset version && node tools/sync-image-pins.mts && pnpm install --lockfile-only"
   },
   "devDependencies": {
@@ -60,9 +61,19 @@
     "rehype-slug": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "semver": "^7.8.5",
+    "type-coverage": "^2.29.7",
     "typed-query-selector": "^2.12.3",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.71.2",
     "vite": "^8.3.4"
+  },
+  "typeCoverage": {
+    "atLeast": 99,
+    "cache": true,
+    "detail": true,
+    "ignoreCatch": true,
+    "ignoreFiles": "*.d.ts",
+    "ignoreNonNullAssertion": true,
+    "strict": true
   }
 }
