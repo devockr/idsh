@@ -4,10 +4,9 @@ The parts of this repository that are easy to get wrong. `README.md` covers what
 deploy it.
 
 **This file is public**: no hostnames, addresses, ports, ssh commands, no reference to a file
-that exists on one machine only, and none of _your own_ proxy or registry settings. Those go
-in untracked local notes of your own; none of that belongs here. A public mirror
-is not one of them: both Dockerfiles already default `NPM_REGISTRY` to the same npmmirror, so
-naming a public mirror here leaks nothing.
+that exists on one machine only, and none of _your own_ proxy or registry settings. Those go in
+untracked local notes of your own; a public mirror is not one of them — both Dockerfiles already
+default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here leaks nothing.
 
 ## Invariants
 
@@ -45,9 +44,10 @@ naming a public mirror here leaks nothing.
 - **Alpine is blocked, not abandoned.** `node-addon-require-builtin` ships `linux-*-gnu` prebuilds
   only, so a musl base dies at boot; revisit when upstream ships one, and keep musl-compatible
   choices in `entrypoint.sh` until then.
-- **The state directory is runtime state**, bind-mounted and gitignored — not a place for scripts,
-  and neither is the image. Local helpers stay outside the repository, in the state directory's
-  tasks area; verification helpers stay on the machine that runs them.
+- **The state directory is runtime state**, bind-mounted and gitignored — not a place for the
+  repository's scripts, and neither is the image. Local helpers live outside the repository, in a
+  `tasks/` directory inside that state directory; verification helpers stay on the machine that
+  runs them.
 - **Machine specifics never get committed.** The real compose file is gitignored; what is tracked
   is `docker-compose.example.yml` for the deployment and `docker-compose.dev.yml` for the browser
   settings, which are a state-directory path and a public mirror and hold nothing personal.

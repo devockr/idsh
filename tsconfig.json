@@ -3,7 +3,8 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    "outDir": "dist"
   },
   "include": ["tools", "vite.config.ts", "eslint.config.ts", "oxlint.config.ts", "oxfmt.config.ts"]
 }
