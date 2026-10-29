@@ -40,7 +40,7 @@ naming a public mirror here leaks nothing.
   alone, which is where a pin or a fork lives. Nothing is ever removed, and turning a package off
   means dropping it from `dsh.profile.bundles`, never uninstalling it. Nothing names a package in the
   entrypoint.
-- **Script in Node, not Python.** The images carry node 24 — which runs `.ts`/`.mts` directly, no
+- **Script in Node, not Python.** The images carry node 26 — which runs `.ts`/`.mts` directly, no
   flag needed — and no Python: whatever a check or a helper needs, it can do in Node.
 - **Alpine is blocked, not abandoned.** `node-addon-require-builtin` ships `linux-*-gnu` prebuilds
   only, so a musl base dies at boot; revisit when upstream ships one, and keep musl-compatible
@@ -216,8 +216,8 @@ Observe the running thing; do not reason from source.
 - `autofix.yml` fixes formatting and autofixable lint on pull requests, and has to keep the name
   `autofix.ci`; `pkg-pr-new.yml` runs `pkg-pr-new` through `pnpm dlx`, against that project's advice
   to use the lockfile in CI, to keep a preview-only tool out of the workspace dependencies.
-- **Only `ci.yml` pins Node lines**: a matrix of 24 (what the images run) and 26 (the oldest line
-  `engines` allows). Every other workflow runs `lts/*`, because none of them decides what ships.
+- **Only `ci.yml` pins Node lines**: a matrix of 24 (the oldest line `engines`
+  allows) and 26 (what the images run). Every other workflow runs `lts/*`, because none of them decides what ships.
 - **The `Dockerfile` pins ride changesets' version lifecycle**: `pnpm run version` runs
   `tools/sync-image-pins.mts`, so the version pull request bumps the `dsh plugin …` lines with the
   manifests — never by hand. It has to be `pnpm run version`: bare `pnpm version` is pnpm's own bump

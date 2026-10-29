@@ -812,7 +812,7 @@ void test('capOutput keeps a tail of whole rows, never half a character', () => 
 
 void test('capOutput backs off a cut that lands inside a character', () => {
   // 65 536 bytes back from the end falls on the emoji's third byte.
-  const text = `${'x'.repeat(100)}😀${'x'.repeat(MAX_OUTPUT_BYTES + 100)}`
+  const text = `${'x'.repeat(100)}😀${'x'.repeat(MAX_OUTPUT_BYTES - 2)}`
   const capped = capOutput(text, 'tail')
   assert.equal(capped.truncated, true)
   assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
