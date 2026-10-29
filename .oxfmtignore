@@ -1,4 +1,3 @@
-.dsh
-dist
-lib
+# Oxfmt falls back to .prettierignore, whose list hides the languages Oxfmt owns; the format scripts
+# pass this file (with .gitignore) instead. Only what .gitignore does not already cover belongs here.
 coverage
