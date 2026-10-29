@@ -218,6 +218,10 @@ Observe the running thing; do not reason from source.
 - `autofix.yml` fixes formatting and autofixable lint on pull requests, and has to keep the name
   `autofix.ci`; `pkg-pr-new.yml` runs `pkg-pr-new` through `pnpm dlx`, against that project's advice
   to use the lockfile in CI, to keep a preview-only tool out of the workspace dependencies.
+- **`pnpm lint` is the whole lint gate**: oxlint, eslint and tsc in parallel
+  (`concurrently 'pnpm:lint:*'`, the three legs `lint:ox`, `lint:es`, `lint:tsc`). There is no
+  separate typecheck script and CI calls only `pnpm lint`, so a new `lint:…` script joins the gate
+  by being named that way. `pnpm fix` runs the two fixers.
 - **Only `ci.yml` pins Node lines**: a matrix of 24 (the oldest line `engines`
   allows) and 26 (what the images run). Every other workflow runs `lts/*`, because none of
   them decides what ships.
