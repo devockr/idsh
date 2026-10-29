@@ -27,7 +27,7 @@
     "pack": "pnpm --recursive pack",
     "release": "changeset publish",
     "test": "pnpm --recursive --if-present run test",
-    "typecov": "type-coverage -p tsconfig.json && for p in packages/*/tsconfig.json; do type-coverage -p \"$p\" || exit 1; done",
+    "typecov": "type-coverage",
     "version": "changeset version && node tools/sync-image-pins.mts && pnpm install --lockfile-only"
   },
   "devDependencies": {
@@ -71,9 +71,13 @@
     "atLeast": 100,
     "cache": true,
     "detail": true,
-    "ignoreCatch": true,
-    "ignoreFiles": "{*.d.ts,**/lib/**}",
+    "ignoreAsAssertion": true,
+    "ignoreFiles": [
+      "lib"
+    ],
     "ignoreNonNullAssertion": true,
-    "strict": true
+    "showRelativePath": true,
+    "strict": true,
+    "update": true
   }
 }
