@@ -50,8 +50,6 @@ jobs:
       - name: Check Formatting
         run: pnpm format:check
 
-      # `lint` is the three linters in parallel, the typecheck among them (`lint:tsc`); the build
-      # below is what proves the packages compile.
       - name: Lint
         run: pnpm lint
 
