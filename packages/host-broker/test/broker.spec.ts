@@ -38,30 +38,10 @@ import {
 const ALIGN = 32
 /** Long enough for the deferred work of one operation to land. */
 const FLUSH_MS = 700
-/** How long the deploy lock is given to free before the test gives up. */
-const LOCK_WAIT_MS = 5_000
-/** The interval between two attempts while waiting. */
-const POLL_MS = 100
+/** How long the deploy lock takes to free once the deferred work is done. */
+const LOCK_RELEASE_MS = 1_200
 const ODD_BYTES = 33
 const FIXED_NOW = 1_700_000_000_000
-
-// oxlint-disable-next-line no-magic-numbers -- a sha256 is 64 hex characters
-/**
- * Poll until `attempt` agrees, up to `deadlineMs`. The deploy lock frees when the deferred work
- * finishes, so the test waits for that instead of sleeping past it.
- */
-async function waitFor(attempt: () => Promise<boolean>, deadlineMs = LOCK_WAIT_MS): Promise<void> {
-  const started = Date.now()
-  for (;;) {
-    if (await attempt()) {
-      return
-    }
-    if (Date.now() - started > deadlineMs) {
-      throw new Error('the condition did not hold in time')
-    }
-    await new Promise(resolve => setTimeout(resolve, POLL_MS))
-  }
-}
 
 // oxlint-disable-next-line no-magic-numbers -- a sha256 is 64 hex characters
 const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
@@ -1716,13 +1696,12 @@ esac
     })
     assert.equal(refused.ok, false)
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
-    await waitFor(async () => {
-      const built = await building.request({
-        op: 'deploy.build',
-        args: { sha: 'aaaaaaaa' },
-      })
-      return built.ok
+    await new Promise(resolve => setTimeout(resolve, LOCK_RELEASE_MS))
+    const built = await building.request({
+      op: 'deploy.build',
+      args: { sha: 'aaaaaaaa' },
     })
+    assert.equal(built.ok, true, JSON.stringify(built.error))
     const log = await readFile(dockerLog, 'utf8')
     assert.ok(log.includes('tag ' + ROLLBACK_TARGET))
     assert.ok(
@@ -2236,11 +2215,11 @@ echo "$*" >> '${pnpmLog}'
     const refused = await admin.request({ op: 'broker.update', args: {} })
     assert.equal(refused.ok, false)
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
-    await waitFor(async () => {
-      const allowed = await admin.request({ op: 'broker.update', args: {} })
-      return allowed.ok
-    })
-    await waitFor(async () => stopped === 1)
+    await new Promise(resolve => setTimeout(resolve, LOCK_RELEASE_MS))
+    const allowed = await admin.request({ op: 'broker.update', args: {} })
+    assert.equal(allowed.ok, true, JSON.stringify(allowed.error))
+    await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
+    assert.equal(stopped, 1)
   } finally {
     deployment.close()
     admin.close()
