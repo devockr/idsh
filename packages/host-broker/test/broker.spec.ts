@@ -36,8 +36,32 @@ import {
 
 // The bounds these tests assert against; named here because the broker keeps them internal.
 const ALIGN = 32
+/** Long enough for the deferred work of one operation to land. */
+const FLUSH_MS = 700
+/** How long the deploy lock is given to free before the test gives up. */
+const LOCK_WAIT_MS = 5_000
+/** The interval between two attempts while waiting. */
+const POLL_MS = 100
 const ODD_BYTES = 33
 const FIXED_NOW = 1_700_000_000_000
+
+// oxlint-disable-next-line no-magic-numbers -- a sha256 is 64 hex characters
+/**
+ * Poll until `attempt` agrees, up to `deadlineMs`. The deploy lock frees when the deferred work
+ * finishes, so the test waits for that instead of sleeping past it.
+ */
+async function waitFor(attempt: () => Promise<boolean>, deadlineMs = LOCK_WAIT_MS): Promise<void> {
+  const started = Date.now()
+  for (;;) {
+    if (await attempt()) {
+      return
+    }
+    if (Date.now() - started > deadlineMs) {
+      throw new Error('the condition did not hold in time')
+    }
+    await new Promise(resolve => setTimeout(resolve, POLL_MS))
+  }
+}
 
 // oxlint-disable-next-line no-magic-numbers -- a sha256 is 64 hex characters
 const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
@@ -1590,7 +1614,7 @@ echo "$*" >> '${dockerLog}'
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /audit/u)
   } finally {
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
     connection.close()
     await broker.close()
   }
@@ -1692,12 +1716,13 @@ esac
     })
     assert.equal(refused.ok, false)
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    const built = await building.request({
-      op: 'deploy.build',
-      args: { sha: 'aaaaaaaa' },
+    await waitFor(async () => {
+      const built = await building.request({
+        op: 'deploy.build',
+        args: { sha: 'aaaaaaaa' },
+      })
+      return built.ok
     })
-    assert.equal(built.ok, true, JSON.stringify(built.error))
     const log = await readFile(dockerLog, 'utf8')
     assert.ok(log.includes('tag ' + ROLLBACK_TARGET))
     assert.ok(
@@ -2045,7 +2070,7 @@ echo "$PWD $*" >> '${pnpmLog}'
       pnpm.indexOf('install --frozen-lockfile') < pnpm.indexOf('--filter @idsh/host-broker build'),
       'install must come before the build',
     )
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
     assert.equal(stopped, 1)
   } finally {
     connection.close()
@@ -2094,7 +2119,7 @@ esac
     const answer = await connection.request({ op: 'broker.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /registry down/u)
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
     assert.equal(stopped, 0)
   } finally {
     connection.close()
@@ -2145,7 +2170,7 @@ echo "$*" >> '${npmLog}'
     const npmText = await readFile(npmLog, 'utf8')
     const npm = npmText.trim()
     assert.equal(npm, `install --global --prefix ${prefix} @idsh/host-broker@latest`)
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
     assert.equal(stopped, 1)
   } finally {
     connection.close()
@@ -2211,11 +2236,11 @@ echo "$*" >> '${pnpmLog}'
     const refused = await admin.request({ op: 'broker.update', args: {} })
     assert.equal(refused.ok, false)
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    const allowed = await admin.request({ op: 'broker.update', args: {} })
-    assert.equal(allowed.ok, true, JSON.stringify(allowed.error))
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    assert.equal(stopped, 1)
+    await waitFor(async () => {
+      const allowed = await admin.request({ op: 'broker.update', args: {} })
+      return allowed.ok
+    })
+    await waitFor(async () => stopped === 1)
   } finally {
     deployment.close()
     admin.close()
@@ -2339,7 +2364,7 @@ echo "$*" >> '${npmLog}'
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const npmText = await readFile(npmLog, 'utf8')
     assert.equal(npmText.trim(), `install --global --prefix ${prefix} @idsh/host-broker@latest`)
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
     assert.equal(stopped, 1)
   } finally {
     connection.close()
@@ -2377,7 +2402,7 @@ echo "$*" >> '${npmLog}'
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /cannot tell which npm prefix/u)
     await assert.rejects(readFile(npmLog, 'utf8'))
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
     assert.equal(stopped, 0)
   } finally {
     connection.close()
