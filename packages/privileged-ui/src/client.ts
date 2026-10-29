@@ -48,9 +48,9 @@ globalThis.__ModuleLoader__.load({
     exports.inject = ['connection', 'remote']
 
     /**
-     * Whether this deployment serves the page that is asking. The host answers it — see
-     * ./index — with the same fence dsh runs for its own /api, so loopback forms, IPv6,
-     * default ports and the declared authorities are all judged in one place, not here.
+     * Whether this deployment serves the page that is asking. The host answers it — see ./index —
+     * with the same fence dsh runs for its own /api, so loopback forms, IPv6, default ports and the
+     * declared authorities are all judged in one place, not here.
      */
     async function mayBePrivileged(): Promise<boolean> {
       try {
@@ -88,9 +88,9 @@ globalThis.__ModuleLoader__.load({
     }
 
     /**
-     * The half that writes the flag. Split from `apply` so the decision above can be
-     * asynchronous — the list it needs is a request — while this stays exactly what it
-     * was: a synchronous write, reported, and undone on disposal.
+     * The half that writes the flag. Split from `apply` so the decision above can be asynchronous —
+     * the list it needs is a request — while this stays exactly what it was: a synchronous write,
+     * reported, and undone on disposal.
      */
     function grant(ctx: PluginContext): void {
       if (disposed) {
@@ -125,8 +125,7 @@ globalThis.__ModuleLoader__.load({
       // undefined, which is not judged.
       const facts = services.remote?.$host
       const host = facts?.isLoopback
-      const state =
-        'connection:' + before + '->' + connection.isLoopback + ' host:' + host
+      const state = 'connection:' + before + '->' + connection.isLoopback + ' host:' + host
       const visible = host !== false
       // The one ordering outcome that is still repairable: a live gateway that copied `false` before
       // this plugin activated. The settings pages read these facts, so writing them reaches every

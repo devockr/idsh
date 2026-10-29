@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-magic-numbers -- this file is where the numbers are named */
+/* oxlint-disable no-magic-numbers -- every number the broker is built from, in one place */
 /**
  * Every number the broker is built from, in one place.
  *
@@ -55,12 +55,7 @@ export const DEFAULT_GIT = 'git'
 export const DEFAULT_IP = 'ip'
 
 /** Where `ip` usually lives; the broker takes the first that exists. */
-export const IP_CANDIDATES = [
-  '/usr/bin/ip',
-  '/usr/sbin/ip',
-  '/sbin/ip',
-  '/bin/ip',
-] as const
+export const IP_CANDIDATES = ['/usr/bin/ip', '/usr/sbin/ip', '/sbin/ip', '/bin/ip'] as const
 
 /** The pnpm client `broker.update` runs, unless the host says otherwise. */
 export const DEFAULT_PNPM = 'pnpm'
@@ -72,12 +67,7 @@ export const DEFAULT_NPM = 'npm'
 export const DEFAULT_SS = 'ss'
 
 /** Where `ss` usually lives; the broker takes the first that exists. */
-export const SS_CANDIDATES = [
-  '/usr/bin/ss',
-  '/usr/sbin/ss',
-  '/sbin/ss',
-  '/bin/ss',
-] as const
+export const SS_CANDIDATES = ['/usr/bin/ss', '/usr/sbin/ss', '/sbin/ss', '/bin/ss'] as const
 
 /** Characters of the socket hash that name a build root: enough to keep two sockets apart. */
 export const BUILD_KEY_CHARS = 16

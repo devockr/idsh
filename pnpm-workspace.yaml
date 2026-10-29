@@ -8,6 +8,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@1stg/*'
   - '@deepseek-ai/*'
-  # 0.4.3 drops an undeclared tslib import that breaks lint; the fix is worth taking
-  # ahead of the age window rather than carrying a shim for it.
-  - eslint-plugin-utils
+  # 3.8.3 drops an undeclared tslib import that breaks lint on a strict install.
+  - eslint-mdx

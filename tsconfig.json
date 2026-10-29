@@ -1,15 +1,10 @@
 {
+  "extends": "@1stg/tsconfig/nodenext",
   "compilerOptions": {
-    "target": "ES2023",
     "lib": ["ES2023", "DOM"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
     "types": ["node"],
-    "strict": true,
     "noEmit": true,
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "forceConsistentCasingInFileNames": true
+    "outDir": "dist"
   },
-  "include": ["tools", "vite.config.ts"]
+  "include": ["tools", "vite.config.ts", "eslint.config.ts", "oxlint.config.ts", "oxfmt.config.ts"]
 }

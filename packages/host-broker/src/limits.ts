@@ -26,8 +26,8 @@ export type Keep = 'head' | 'tail'
  * Trim text to the output ceiling.
  *
  * Bytes are the limit, not characters: a cut is moved back to a character boundary (so no U+FFFD
- * appears and the result cannot re-encode past the ceiling) and then, when the text has one, back to
- * a line boundary. `tail` is for a log: the newest lines are the answer, and dropping them would
+ * appears and the result cannot re-encode past the ceiling) and then, when the text has one, back
+ * to a line boundary. `tail` is for a log: the newest lines are the answer, and dropping them would
  * report a stale window as the whole one.
  */
 export function capOutput(text: string, keep: Keep = 'head'): Capped {
@@ -39,10 +39,7 @@ export function capOutput(text: string, keep: Keep = 'head'): Capped {
     const cut = decodeTail(bytes, MAX_OUTPUT_BYTES)
     const boundary = cut.indexOf('\n')
     return {
-      text:
-        boundary === -1 || boundary + 1 >= cut.length
-          ? cut
-          : cut.slice(boundary + 1),
+      text: boundary === -1 || boundary + 1 >= cut.length ? cut : cut.slice(boundary + 1),
       truncated: true,
     }
   }
@@ -56,6 +53,7 @@ function decodeTail(bytes: Buffer, limit: number): string {
   let start = bytes.length - limit
   while (
     start < bytes.length &&
+    // eslint-disable-next-line sonarjs/bitwise-operators -- a UTF-8 byte mask, not a truthiness test
     (bytes[start] & UTF8_CONTINUATION_MASK) === UTF8_CONTINUATION_PREFIX
   ) {
     start += 1
@@ -72,9 +70,7 @@ function decodeTail(bytes: Buffer, limit: number): string {
 function decodeAtMost(bytes: Buffer, limit: number): string {
   for (let end = limit; end > limit - MAX_UTF8_SEQUENCE && end > 0; end -= 1) {
     try {
-      return new TextDecoder('utf8', { fatal: true }).decode(
-        bytes.subarray(0, end),
-      )
+      return new TextDecoder('utf8', { fatal: true }).decode(bytes.subarray(0, end))
     } catch {
       // The cut landed inside a sequence; one byte shorter may be a boundary.
     }
@@ -86,7 +82,8 @@ function decodeAtMost(bytes: Buffer, limit: number): string {
  * A fixed-window rate limiter, one window per key.
  *
  * Fixed windows are enough here: the limits guard against a runaway loop, not against a careful
- * attacker, who can always wait. `now` is injectable so the behaviour is testable without sleeping.
+ * attacker, who can always wait. `now` is injectable so the behaviour is testable without
+ * sleeping.
  */
 export class RateLimiter {
   readonly #limit: number

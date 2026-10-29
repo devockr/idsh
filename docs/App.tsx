@@ -1,30 +1,24 @@
 import { lazy, Suspense, useMemo } from 'react'
-import {
-  BrowserRouter as Router,
-  Route,
-  Routes,
-  useParams,
-} from 'react-router-dom'
+import { BrowserRouter as Router, Route, Routes, useParams } from 'react-router-dom'
 
 import './global.css'
 import 'github-markdown-css'
 
 /**
  * One component per kind of page, reading the name from the route: absent is the repository root,
- * `image` the image's own changelog, anything else a package. `/CHANGELOG.md` and `/` simply match no
- * `:name`, so they need no separate component.
+ * `image` the image's own changelog, anything else a package. `/CHANGELOG.md` and `/` simply match
+ * no `:name`, so they need no separate component.
  *
  * `lazy()` is memoised by name rather than called per render: it returns a new component type every
  * time, and a new type remounts the subtree — losing scroll position, refetching the chunk and
- * re-running effects. `useMemo` is a hint React may discard, which here costs at most that remount.
+ * re-running effects. `useMemo` is a hint React may discard, which here costs at most that
+ * remount.
  */
+/* oxlint-disable react/static-components -- each route must remount when its name changes */
 const Readme = () => {
   const { name } = useParams<{ name: string }>()
   const Page = useMemo(
-    () =>
-      lazy(() =>
-        name ? import(`../packages/${name}/README.md`) : import('../README.md'),
-      ),
+    () => lazy(() => (name ? import(`../packages/${name}/README.md`) : import('../README.md'))),
     [name],
   )
   return (
@@ -64,6 +58,8 @@ const Roadmap = () => {
     </Suspense>
   )
 }
+
+/* oxlint-enable react/static-components */
 
 export const App = () => (
   <Router>

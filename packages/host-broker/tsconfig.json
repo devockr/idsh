@@ -11,7 +11,10 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@idsh/host-broker": ["./src/index.ts"]
+    }
   },
   "include": ["src", "test"]
 }

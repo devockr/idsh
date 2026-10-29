@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
  * The `@deepseek-ai/*` peer ranges are a hard install gate: dsh refuses a plugin whose peers do not
- * match, so a range that misses the dsh the `Dockerfile` pins turns every build into a failure — and
- * a range that misses a line dsh has not published yet only shows up on the day it does, as a build
- * that suddenly cannot install its own plugins.
+ * match, so a range that misses the dsh the `Dockerfile` pins turns every build into a failure —
+ * and a range that misses a line dsh has not published yet only shows up on the day it does, as a
+ * build that suddenly cannot install its own plugins.
  *
- * This reads the pin the Dockerfile installs and the ranges the packages declare, and asks npm's own
- * semver whether they agree. It is the check the ritual in AGENTS cannot be: a person can forget, and
- * a dependency bump that moves the pin cannot read the ranges at all.
+ * This reads the pin the Dockerfile installs and the ranges the packages declare, and asks npm's
+ * own semver whether they agree. It is the check the ritual in AGENTS cannot be: a person can
+ * forget, and a dependency bump that moves the pin cannot read the ranges at all.
  *
  * The cordis peer is deliberately not judged here — it is pinned by cordis, not by dsh, so the dsh
  * pin says nothing about whether it fits.
@@ -40,10 +40,7 @@ let checked = 0
 
 for (const directory of packages) {
   const manifest = JSON.parse(
-    await fs.readFile(
-      path.join(repo, 'packages', directory, 'package.json'),
-      'utf8',
-    ),
+    await fs.readFile(path.join(repo, 'packages', directory, 'package.json'), 'utf8'),
   ) as { name?: string; peerDependencies?: Record<string, string> }
   for (const [peer, range] of Object.entries(manifest.peerDependencies ?? {})) {
     if (!peer.startsWith('@deepseek-ai/dsh-')) {
@@ -58,6 +55,4 @@ for (const directory of packages) {
   }
 }
 
-console.log(
-  `check-peer-ranges: ${String(checked)} peer range(s) accept the pinned dsh ${pinned}`,
-)
+console.log(`check-peer-ranges: ${String(checked)} peer range(s) accept the pinned dsh ${pinned}`)

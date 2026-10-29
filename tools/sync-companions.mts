@@ -45,9 +45,9 @@ const packageOf = async (dir: string): Promise<Package | undefined> => {
  * The files dsh itself loads: the host half (`main`, or the `.` export standing in for it) and the
  * browser half (`./client`). Nothing else is checked. An unused export subpath pointing at a file
  * the package never shipped would otherwise look like a broken package — and the repair for that
- * replaces an operator's customized copy with the image's, which is a fine thing to do for a package
- * that cannot load and a bad thing to do for one that can. A wildcard target is a pattern rather
- * than a file, so it is skipped as well — and so is a condition object this cannot read (an
+ * replaces an operator's customized copy with the image's, which is a fine thing to do for a
+ * package that cannot load and a bad thing to do for one that can. A wildcard target is a pattern
+ * rather than a file, so it is skipped as well — and so is a condition object this cannot read (an
  * `import`/`require` pair with no `default`, say): leaving a package alone is always safer than
  * replacing it on a guess about which target the loader would have picked.
  */
@@ -62,8 +62,7 @@ const entriesOf = (manifest: Package | undefined): string[] => {
   }
   const exports = manifest?.exports ?? {}
   return [manifest?.main, pick(exports['.']), pick(exports['./client'])].filter(
-    (entry): entry is string =>
-      typeof entry === 'string' && !entry.includes('*'),
+    (entry): entry is string => typeof entry === 'string' && !entry.includes('*'),
   )
 }
 
@@ -88,10 +87,7 @@ const compare = (a: string | undefined, b: string | undefined) => {
  * keeps working until its replacement is complete and a failure leaves it exactly as it was.
  * Renaming is what makes the swap atomic — writing in place truncates first, sync or async alike.
  */
-const atomicReplace = async (
-  target: string,
-  write: (staging: string) => Promise<void>,
-) => {
+const atomicReplace = async (target: string, write: (staging: string) => Promise<void>) => {
   const staging = `${target}.sync`
   const parked = `${target}.old`
   await fs.rm(staging, { recursive: true, force: true })
@@ -154,9 +150,7 @@ if (liveModule) {
     const present = await exists(target)
     const installedManifest = present ? await packageOf(target) : undefined
     const installed = installedManifest?.version
-    const wantedManifest = await packageOf(
-      path.join(baked, 'node_modules', name),
-    )
+    const wantedManifest = await packageOf(path.join(baked, 'node_modules', name))
 
     const wanted = wantedManifest?.version
     // A directory dsh cannot read a manifest from is no more usable than a missing one — and the
@@ -170,9 +164,7 @@ if (liveModule) {
     // A manifest whose own entry files are absent compiles to nothing dsh can load — which is what
     // a checkout mounted over the packages directory looks like before its build has run.
     const unusable =
-      !present ||
-      (installed === undefined && wanted !== undefined) ||
-      absent.length > 0
+      !present || (installed === undefined && wanted !== undefined) || absent.length > 0
 
     // `file:` is the one spec whose string cannot show that its files changed, so it is refreshed
     // whenever it is seen; everything else is only replaced when it is unusable or behind.

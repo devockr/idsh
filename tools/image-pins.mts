@@ -22,7 +22,8 @@ const pinMatcher = (): RegExp => new RegExp(pin.source, 'g')
 /**
  * A line that installs plugins from the registry, which is where a pin lives. Two things disqualify
  * one: it is a comment — `#` says so, and the absence of `add` does not, since a comment can quote
- * the whole command — or it has no `add` verb, which is what makes it an install and not a mention.
+ * the whole command — or it has no `add` verb, which is what makes it an install and not a
+ * mention.
  */
 export const isPluginLine = (line: string): boolean =>
   !/^\s*#/.test(line) && /\bdsh\s+plugin\b[^\n]+\badd\b/.test(line)
@@ -37,28 +38,22 @@ export const pinsIn = (line: string): Pin[] => {
 }
 
 /** Rewrite pins on one line; returning `undefined` from `pick` leaves that pin as it was. */
-export const rewritePins = (
-  line: string,
-  pick: (pin: Pin) => string | undefined,
-): string =>
-  line.replaceAll(pinMatcher(), (whole, name: string, version: string) => {
-    return pick({ name, version }) ?? whole
-  })
+export const rewritePins = (line: string, pick: (pin: Pin) => string | undefined): string =>
+  line.replaceAll(
+    pinMatcher(),
+    (whole, name: string, version: string) => pick({ name, version }) ?? whole,
+  )
 
 /**
- * The dsh the image installs — `npm install -g … @deepseek-ai/dsh@<version>` — which is part of what
- * the image bakes just as the plugin pins are: moving it changes what the published image runs, and
- * the release that does so has to move the image's own version with it.
+ * The dsh the image installs — `npm install -g … @deepseek-ai/dsh@<version>` — which is part of
+ * what the image bakes just as the plugin pins are: moving it changes what the published image
+ * runs, and the release that does so has to move the image's own version with it.
  */
 export const isDshLine = (line: string): boolean =>
   !/^\s*#/.test(line) && /\bnpm\s+install\b[^\n]*@deepseek-ai\/dsh@/.test(line)
 
 /** The dsh pin on one line, when it has one. */
 export const dshPinIn = (line: string): Pin | undefined => {
-  const version = isDshLine(line)
-    ? /@deepseek-ai\/dsh@([^\s@]+)/.exec(line)?.[1]
-    : undefined
-  return version === undefined
-    ? undefined
-    : { name: '@deepseek-ai/dsh', version }
+  const version = isDshLine(line) ? /@deepseek-ai\/dsh@([^\s@]+)/.exec(line)?.[1] : undefined
+  return version === undefined ? undefined : { name: '@deepseek-ai/dsh', version }
 }

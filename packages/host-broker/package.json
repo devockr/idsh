@@ -38,7 +38,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm run build",
-    "test": "tsc -p tsconfig.json && node --test test/*.spec.ts"
+    "test": "tsc -p tsconfig.json && pnpm run build && node --test test/*.spec.ts"
   },
   "publishConfig": {
     "access": "public"

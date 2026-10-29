@@ -4,17 +4,13 @@
  *
  * Everything it needs is a path: the socket the container will connect to, and the audit log. Both
  * belong outside every bind mount, and the scheduler that keeps this process alive is the same one
- * that names them. No credentials are read here — the operations are host-local, and the router
- * hop (phase 3) will take its key from the same directory.
+ * that names them. No credentials are read here — the operations are host-local, and the router hop
+ * (phase 3) will take its key from the same directory.
  */
 import { parseArgs } from 'node:util'
 
 import { startBroker } from './broker.ts'
-import {
-  DEFAULT_EXEC_TIMEOUT_MS,
-  MAX_TIMER_MS,
-  TIMEOUT_SLACK_MS,
-} from './constants.ts'
+import { DEFAULT_EXEC_TIMEOUT_MS, MAX_TIMER_MS, TIMEOUT_SLACK_MS } from './constants.ts'
 
 const USAGE = `Usage: idsh-host --socket <path> --audit <path> [options]
 
@@ -53,14 +49,10 @@ function number(
   }
   const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(
-      `${name} must be a positive integer, got ${JSON.stringify(value)}`,
-    )
+    throw new Error(`${name} must be a positive integer, got ${JSON.stringify(value)}`)
   }
   if (parsed > max) {
-    throw new Error(
-      `${name} must be at most ${String(max)}, got ${JSON.stringify(value)}`,
-    )
+    throw new Error(`${name} must be at most ${String(max)}, got ${JSON.stringify(value)}`)
   }
   return parsed
 }
@@ -101,9 +93,7 @@ async function main(): Promise<void> {
     socketPath: values.socket,
     auditPath: values.audit,
     ...(values['log-dir'] === undefined ? {} : { logDir: values['log-dir'] }),
-    ...(values['proc-dir'] === undefined
-      ? {}
-      : { procDir: values['proc-dir'] }),
+    ...(values['proc-dir'] === undefined ? {} : { procDir: values['proc-dir'] }),
     ...(values.container === undefined ? {} : { container: values.container }),
     ...(values.docker === undefined ? {} : { dockerPath: values.docker }),
     ...(values.git === undefined ? {} : { gitPath: values.git }),
@@ -151,8 +141,6 @@ async function main(): Promise<void> {
 }
 
 await main().catch((error: unknown) => {
-  process.stderr.write(
-    `idsh-host: ${error instanceof Error ? error.message : String(error)}\n`,
-  )
+  process.stderr.write(`idsh-host: ${error instanceof Error ? error.message : String(error)}\n`)
   process.exitCode = 1
 })

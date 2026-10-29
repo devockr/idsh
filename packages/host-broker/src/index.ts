@@ -6,13 +6,12 @@
  * broker or talks to one; it does not reach into the sources. The protocol is here because the
  * plugin that talks to the broker needs the same framing, and `exports` exposes nothing else.
  */
-export {
-  type BrokerOptions,
-  DESCRIBE_OP,
-  type RunningBroker,
-  startBroker,
-} from './broker.ts'
+export { type BrokerOptions, DESCRIBE_OP, type RunningBroker, startBroker } from './broker.ts'
 export { MAX_OUTPUT_BYTES, TAIL_WINDOW_BYTES } from './constants.ts'
+/** @internal The tests assert the process-table bounds; stripped from the published types. */
+export { DEFAULT_PROC_LINES, MAX_PROC_LINES } from './sources.ts'
+/** @internal The tests assert these bounds; stripped from the published types. */
+export { BUILD_TIMEOUT_MS, MAX_ERROR_CHARS, MAX_PATTERN_CHARS } from './constants.ts'
 export { capOutput, type Capped, RateLimiter } from './limits.ts'
 export {
   type BrokerError,

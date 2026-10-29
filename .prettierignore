@@ -1,3 +1,27 @@
-# prettier reads .gitignore, so ignored paths need no entry here.
-# The lockfile is tracked; everything else is covered by .gitignore.
-pnpm-lock.yaml
+# Oxfmt owns these formats; Prettier only handles the fallback languages.
+**/*.cjs
+**/*.cts
+**/*.js
+**/*.jsx
+**/*.mjs
+**/*.mts
+**/*.ts
+**/*.tsx
+**/*.vue
+**/*.css
+**/*.less
+**/*.scss
+**/*.json
+**/*.jsonc
+**/*.json5
+**/*.md
+**/*.mdx
+**/*.toml
+**/*.yaml
+**/*.yml
+# package.json is the one overlap: prettier-plugin-pkg sorts its fields, oxfmt does not.
+!**/package.json
+**/*.html
+
+# We minify SVGs
+**/*.svg

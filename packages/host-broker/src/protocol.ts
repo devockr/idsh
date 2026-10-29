@@ -101,7 +101,10 @@ export interface LineReaderOptions {
   maxBytes?: number
   /** Called once per complete, non-empty line. */
   onLine(line: string): void
-  /** Called once when a line exceeds `maxBytes`; the reader stops, because the stream can no longer be framed. */
+  /**
+   * Called once when a line exceeds `maxBytes`; the reader stops, because the stream can no longer
+   * be framed.
+   */
   onOverflow?(): void
 }
 
@@ -113,9 +116,7 @@ export interface LineReaderOptions {
  * stream's framing is gone, and after a terminated one the caller's answer is to close the
  * connection, so nothing later would be read anyway.
  */
-export function createLineReader(
-  options: LineReaderOptions,
-): (chunk: Buffer | string) => void {
+export function createLineReader(options: LineReaderOptions): (chunk: Buffer | string) => void {
   const maxBytes = options.maxBytes ?? MAX_LINE_BYTES
   let buffer = Buffer.alloc(0)
   let overflowed = false
@@ -126,10 +127,7 @@ export function createLineReader(
     if (overflowed) {
       return
     }
-    buffer = Buffer.concat([
-      buffer,
-      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
-    ])
+    buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)])
     let newline = buffer.indexOf(NEWLINE_BYTE)
     while (newline !== -1) {
       const line = buffer.subarray(0, newline)

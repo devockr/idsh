@@ -1,8 +1,8 @@
 /**
- * Long deploy operations as dsh background jobs: the tool call returns an id at once and the
- * broker keeps building, while a pull source hands the build log to the job's output ring — the
- * UI streams it, and `job_output` reads it. A call that is cut off (a container recreate, say)
- * no longer blocks on the build.
+ * Long deploy operations as dsh background jobs: the tool call returns an id at once and the broker
+ * keeps building, while a pull source hands the build log to the job's output ring — the UI streams
+ * it, and `job_output` reads it. A call that is cut off (a container recreate, say) no longer
+ * blocks on the build.
  */
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
@@ -11,10 +11,7 @@ import type { BrokerAnswer, BrokerEndpoint } from './socket.ts'
 
 /** A host's background-job registry, structurally: the plugin imports no dsh code. */
 export interface JobHandle {
-  append(
-    text: string,
-    options?: { readonly channel?: 'log' | 'stderr' | 'stdout' },
-  ): void
+  append(text: string, options?: { readonly channel?: 'log' | 'stderr' | 'stdout' }): void
 }
 
 export interface JobSourceRead {
@@ -143,10 +140,7 @@ export function startDeployJob(jobs: Jobs, target: StreamTarget): string {
           if (controller.signal.aborted) {
             return {
               status: 'killed',
-              detail:
-                error instanceof Error
-                  ? error.message
-                  : 'the host operation was cancelled',
+              detail: error instanceof Error ? error.message : 'the host operation was cancelled',
             }
           }
           return {

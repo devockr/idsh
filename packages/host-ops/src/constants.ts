@@ -1,6 +1,4 @@
-/**
- * The numbers this plugin is built from.
- */
+/** The numbers this plugin is built from. */
 
 /** Where the deployment mounts the broker's socket, unless its profile says otherwise. */
 export const DEFAULT_SOCKET_PATH = '/run/idsh-host/host.sock'
