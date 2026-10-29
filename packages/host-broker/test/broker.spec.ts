@@ -2425,7 +2425,18 @@ echo "$*" >> '${npmLog}'
 void test('proc.list reads the process table, biggest resident set first', async () => {
   const host = await fakeHost()
   const procDir = path.join(host.root, 'proc')
-  for (const pid of ['10', '20', '30', '40', '50', '60', '61', '41', '42']) {
+  for (const pid of [
+    '10',
+    '20',
+    '30',
+    '40',
+    '50',
+    '60',
+    '61',
+    '41',
+    '42',
+    '44',
+  ]) {
     await mkdir(path.join(procDir, pid), { recursive: true })
   }
   const stat = (pid: string, comm: string, state: string, ppid: number) =>
@@ -2462,6 +2473,9 @@ void test('proc.list reads the process table, biggest resident set first', async
   await writeFile(path.join(procDir, '41', 'status'), 'VmRSS:\t  3 kB\n')
   await writeFile(path.join(procDir, '42', 'stat'), '42 (badppid) S xx 1 0')
   await writeFile(path.join(procDir, '42', 'status'), 'VmRSS:\t  4 kB\n')
+  // A printable Unicode name keeps its characters; only control characters are replaced.
+  await writeFile(path.join(procDir, '44', 'stat'), stat('44', '中文', 'S', 1))
+  await writeFile(path.join(procDir, '44', 'status'), 'VmRSS:\t  8 kB\n')
   // A directory whose name is not a pid has a valid stat: only the filter can exclude it.
   await mkdir(path.join(procDir, 'not-a-pid'), { recursive: true })
   await writeFile(
@@ -2489,11 +2503,12 @@ void test('proc.list reads the process table, biggest resident set first', async
     assert.equal(lines[4], '     61       1 S       500 same')
     // The closing paren survives, and the newline in comm became a space.
     assert.equal(lines[5], '     40       1 S        10 sd) pam')
+    assert.equal(lines[6], '     44       1 S         8 中文')
     assert.equal(
-      lines[6],
+      lines[7],
       '     50       1 S         5 evil    1       1 S      9999 spoofed',
     )
-    assert.equal(lines.length, 7)
+    assert.equal(lines.length, 8)
     assert.ok(lines.every(line => !line.includes('nope')))
 
     // Two calls answer the same bytes, ties included.

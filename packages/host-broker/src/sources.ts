@@ -442,8 +442,10 @@ function parseProcStat(
   if (open === -1 || close === -1 || close < open) {
     return undefined
   }
-  // A newline in a comm would add a line that looks like a row of its own.
-  const comm = stat.slice(open + 1, close).replaceAll(/[^\u0020-\u007E]/gu, ' ')
+  // A newline in a comm would add a line that looks like a row of its own; printable Unicode stays.
+  const comm = stat
+    .slice(open + 1, close)
+    .replaceAll(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ')
   const fields = stat
     .slice(close + 2)
     .trim()
