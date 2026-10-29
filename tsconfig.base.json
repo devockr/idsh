@@ -6,7 +6,7 @@
     "lib": ["ES2023"],
     "types": ["node"],
     "importHelpers": false,
-    "inlineSources": true,
+    "sourceMap": false,
     "removeComments": false
   }
 }
