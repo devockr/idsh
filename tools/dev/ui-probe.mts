@@ -11,12 +11,15 @@
  * Usage: node tools/dev/ui-probe.mts [--install <pnpm-spec>]... [--bare] [--host <host>] [--keep]
  * [--shot <name>]
  *
- * --install add a package to the probe profile before booting (repeatable); a spec whose package is
- * already there replaces it --bare start from the shipped web template alone, without the plugin
- * set the image baked. The default inherits that set, since finding bugs in those plugins is what
- * this tool is for; --bare narrows down which one is at fault --host the authority to browse,
- * default 127.0.0.1; pass a LAN address to reproduce what a remote page sees --keep leave the probe
- * instance and its $DSH_HOME behind for poking
+ * - `--install <pnpm-spec>` adds a package to the probe profile before booting; repeatable, and a
+ *   spec whose package is already there replaces it.
+ * - `--bare` starts from the shipped web template alone, without the plugin set the image baked. The
+ *   default inherits that set, since finding bugs in those plugins is what this tool is for;
+ *   `--bare` narrows down which one is at fault.
+ * - `--host <host>` is the authority to browse, `127.0.0.1` by default; pass a LAN address to
+ *   reproduce what a remote page sees.
+ * - `--keep` leaves the probe instance and its `$DSH_HOME` behind for poking.
+ * - `--shot <name>` prefixes the screenshots it writes, `probe` by default.
  */
 
 // Must be set before playwright resolves its browser path. The default is a bind
