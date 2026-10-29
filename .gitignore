@@ -1,7 +1,5 @@
 # Local dsh state, written at runtime (see README).
 .dsh
-# Private notes kept in the working directory.
-.tasks
 # pnpm workspace install for the companion plugins under packages/.
 node_modules
 

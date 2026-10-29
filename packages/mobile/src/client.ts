@@ -118,7 +118,6 @@ globalThis.__ModuleLoader__.load({
     async function rewriteHomeScreenIcon(): Promise<Disposable> {
       const link = document.querySelector('link[rel~="icon"]')
       if (!(link instanceof HTMLLinkElement)) {
-        // Nothing was installed, so there is nothing to undo.
         // oxlint-disable-next-line no-empty-function -- nothing was installed, so there is nothing to undo
         return () => {}
       }
@@ -143,7 +142,6 @@ globalThis.__ModuleLoader__.load({
       canvas.height = SIZE
       const context = canvas.getContext('2d')
       if (context === null) {
-        // Nothing was installed, so there is nothing to undo.
         // oxlint-disable-next-line no-empty-function -- nothing was installed, so there is nothing to undo
         return () => {}
       }
