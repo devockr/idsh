@@ -73,7 +73,6 @@
     "detail": true,
     "ignoreAsAssertion": true,
     "ignoreFiles": [
-      "lib",
       "**/lib/**"
     ],
     "ignoreNonNullAssertion": true,
