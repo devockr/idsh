@@ -182,8 +182,8 @@ importers:
         specifier: ^7.0.0
         version: 7.0.0(@prettier/plugin-pug@3.6.0(prettier@3.9.10))(@prettier/plugin-ruby@4.0.4(prettier@3.9.10))(@prettier/plugin-xml@3.4.2(prettier@3.9.10))(prettier-plugin-go-template@0.0.15(prettier@3.9.10))(prettier-plugin-ini@1.3.0)(prettier-plugin-jsdoc-type@0.2.0(@typescript/typescript6@6.0.2)(prettier@3.9.10))(prettier-plugin-jsdoc@1.8.1(prettier@3.9.10)(supports-color@9.4.0))(prettier-plugin-properties@0.3.1(prettier@3.9.10))(prettier-plugin-sh@0.20.2(prettier@3.9.10))(prettier-plugin-stylus@0.1.0(prettier@3.9.10)(supports-color@9.4.0))(prettier@3.9.10)
       '@1stg/tsconfig':
-        specifier: ^5.0.0
-        version: 5.0.0(@typescript/typescript6@6.0.2)
+        specifier: ^5.1.0
+        version: 5.1.0(@typescript/typescript6@6.0.2)
       '@changesets/changelog-github':
         specifier: ^1.0.1
         version: 1.0.1
@@ -417,8 +417,8 @@ packages:
       prettier-plugin-toml:
         optional: true
 
-  '@1stg/tsconfig@5.0.0':
-    resolution: {integrity: sha512-rK6bPsdhefzs0H/NZTMV9ElSVEGqd5D4TQMS/dNoJm0iCJvSTN8maRu4s1GVCIbbiHjJLaf63NppQjt0ed0Lbg==}
+  '@1stg/tsconfig@5.1.0':
+    resolution: {integrity: sha512-NYroVjHySVxcvuXMnHlbvY/21OGjd/sF57+/7pTHEFGEhlcL7pZUmD6a0UK3klTNuWBDTAVYfasY7m19Dd+Q9g==}
     engines: {node: ^22.18.0 || >=24.11.0}
     peerDependencies:
       typescript: '>=6.0.0'
@@ -3961,7 +3961,7 @@ snapshots:
       prettier-plugin-sh: 0.20.2(prettier@3.9.10)
       prettier-plugin-stylus: 0.1.0(prettier@3.9.10)(supports-color@9.4.0)
 
-  '@1stg/tsconfig@5.0.0(@typescript/typescript6@6.0.2)':
+  '@1stg/tsconfig@5.1.0(@typescript/typescript6@6.0.2)':
     dependencies:
       typescript: '@typescript/typescript6@6.0.2'
 

@@ -5,8 +5,6 @@
     "target": "ES2023",
     "lib": ["ES2023"],
     "types": ["node"],
-    "importHelpers": false,
-    "sourceMap": false,
-    "removeComments": false
+    "importHelpers": false
   }
 }

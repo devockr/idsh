@@ -36,7 +36,7 @@
     "@1stg/oxfmt-config": "^1.1.0",
     "@1stg/oxlint-config": "^1.1.0",
     "@1stg/prettier-config": "^7.0.0",
-    "@1stg/tsconfig": "^5.0.0",
+    "@1stg/tsconfig": "^5.1.0",
     "@changesets/changelog-github": "^1.0.1",
     "@changesets/cli": "^3.0.3",
     "@mdx-js/rollup": "^3.1.1",
