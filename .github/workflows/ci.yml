@@ -50,11 +50,10 @@ jobs:
       - name: Check Formatting
         run: pnpm format:check
 
+      # `lint` is the three linters in parallel, the typecheck among them (`lint:tsc`); the build
+      # below is what proves the packages compile.
       - name: Lint
         run: pnpm lint
-
-      - name: Typecheck
-        run: pnpm typecheck
 
       # Both images refuse a package whose src is newer than its compiled lib, so a build that
       # fails here is a deployment that cannot be rebuilt.

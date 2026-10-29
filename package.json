@@ -27,7 +27,6 @@
     "pack": "pnpm --recursive pack",
     "release": "changeset publish",
     "test": "pnpm --recursive --if-present run test",
-    "typecheck": "tsc -p tsconfig.json",
     "version": "changeset version && node tools/sync-image-pins.mts && pnpm install --lockfile-only"
   },
   "devDependencies": {
