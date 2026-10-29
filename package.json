@@ -29,7 +29,7 @@
     "format:prettier": "prettier --write ."
   },
   "devDependencies": {
-    "@1stg/eslint-config": "^12.0.0",
+    "@1stg/eslint-config": "^12.0.1",
     "@1stg/markuplint-config": "^6.0.0",
     "@1stg/oxfmt-config": "^1.0.0",
     "@1stg/oxlint-config": "^1.1.0",
