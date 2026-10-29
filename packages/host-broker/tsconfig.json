@@ -4,7 +4,8 @@
     "noEmit": true,
     "paths": {
       "@idsh/host-broker": ["./src/index.ts"]
-    }
+    },
+    "incremental": false
   },
   "include": ["src", "test"]
 }

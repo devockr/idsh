@@ -150,8 +150,9 @@ Observe the running thing; do not reason from source.
   one project graph over the four packages that share `tsconfig.base.json` — _before_ the images
   are built — `Dockerfile.dev` ships those compiled files and refuses to build a package whose
   `lib/index.js` — or `lib/client.js`, when the package also has a browser half — is missing, or
-  older than its `src/`, so a forgotten rebuild fails the build instead of shipping a `link:`
-  target with nothing to load.
+  whose `src/` is newer than the `*.tsbuildinfo` of its build (the state `tsc -b` itself compares
+  against; a single output would false-positive on an incremental rebuild), so a forgotten rebuild
+  fails the build instead of shipping a `link:` target with nothing to load.
 - **A package has no URL.** Its browser half arrives through the bundle endpoint
   (`plugins/??<pkg>/client.js,…&rev=…`), and nothing else under the package is reachable — on a
   deployment the app's own `/favicon.svg` answers 200 while every `/plugins/…` path answers 404.

@@ -79,8 +79,10 @@ RUN set -e; for d in /opt/dsh/packages/*/; do \
       grep -q '"main"' "${d}package.json" || continue; \
       [ -f "${d}lib/index.js" ] || { echo "no ${d}lib/index.js — run pnpm build first" >&2; exit 1; }; \
       [ -f "${d}src/client.ts" ] && [ ! -f "${d}lib/client.js" ] && { echo "no ${d}lib/client.js — run pnpm build first" >&2; exit 1; }; \
-      [ -z "$(find "${d}src" -name '*.ts' -newer "${d}lib/index.js" -print -quit)" ] \
-        || { echo "${d}src is newer than ${d}lib/index.js — run pnpm build" >&2; exit 1; }; \
+      stamp="$(ls -t "${d}"*.tsbuildinfo 2>/dev/null | head -1)"; \
+      [ -n "${stamp}" ] || { echo "no ${d}*.tsbuildinfo — run pnpm build first" >&2; exit 1; }; \
+      [ -z "$(find "${d}src" -name '*.ts' -newer "${stamp}" -print -quit)" ] \
+        || { echo "${d}src is newer than ${d}$(basename "${stamp}") — run pnpm build" >&2; exit 1; }; \
     done
 
 RUN set -e; mkdir -p /opt/dsh/home \
