@@ -36,6 +36,9 @@ export interface JobHooks {
   cancel(reason?: string): void
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
 export interface JobSpec {
   readonly kind: string
   readonly label: string
@@ -127,12 +130,8 @@ export function startDeployJob(jobs: Jobs, target: StreamTarget): string {
     run() {
       const work = (async (): Promise<JobOutcome> => {
         try {
-          const answer = await target.call(
-            target.endpoint,
-            target.name,
-            target.args as Record<string, unknown>,
-            controller.signal,
-          )
+          const args = isRecord(target.args) ? target.args : {}
+          const answer = await target.call(target.endpoint, target.name, args, controller.signal)
           // The log arrives through the source; the answer is the job's result, once.
           return { status: 'completed', result: answer.text }
         } catch (error) {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { apply, registerTools, type HostContext, type HostTool } from '../src/index.ts'
+import { apply, registerTools, type Config, type HostContext, type HostTool } from '../src/index.ts'
 import { buildLogSource, type JobSpec } from '../src/stream.ts'
 import { fakeBroker } from './server.ts'
 
@@ -147,7 +147,7 @@ void test('a bad entry rejects the whole table', async () => {
 
 void test('a bad config registers nothing and warns', async () => {
   const bad = context()
-  await apply(bad.ctx, { socketPath: {} as unknown as string })
+  await apply(bad.ctx, JSON.parse('{"socketPath":{}}') as Config)
   assert.deepEqual(bad.tools, [])
   assert.match(bad.warnings[0] ?? '', /socketPath must be a non-empty string/u)
 
@@ -409,15 +409,16 @@ void test('a deploy runs as a job that follows the broker build log', async () =
       },
     }
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
-    const answer = (await built.tools[0].execute(
+    const answer = await built.tools[0].execute(
       {},
       {
         signal: new AbortController().signal,
         agent: { id: 'ses_abc' },
         callId: 'call-1',
       },
-    )) as { text: string }
-    assert.match(answer.text, /started deploy-1/u)
+    )
+    assert.ok(typeof answer === 'object' && answer !== null && 'text' in answer)
+    assert.match(String(answer.text), /started deploy-1/u)
 
     const spec = started[0]
     assert.equal(spec.kind, 'deploy')

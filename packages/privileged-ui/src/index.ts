@@ -31,12 +31,30 @@ interface HostContext {
   effect(body: () => (() => void) | void): void
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+/** The gate dsh's connection service exposes, narrowed out of the untyped registry value. */
+const requestRejectionOf = (
+  connection: unknown,
+): ((request: unknown) => number | undefined) | undefined => {
+  if (!isRecord(connection)) {
+    return undefined
+  }
+  const gate = connection.requestRejection
+  if (typeof gate !== 'function') {
+    return undefined
+  }
+  return (request: unknown): number | undefined => {
+    const verdict: unknown = gate.call(connection, request)
+    return typeof verdict === 'number' ? verdict : undefined
+  }
+}
+
 /** What dsh's own API would do with this request: a status code to reject it, or nothing. */
 function rejectionFor(ctx: HostContext, request: RouteRequest): number | undefined {
-  const connection = ctx.get('connection') as
-    | { requestRejection?: (request: unknown) => number | undefined }
-    | undefined
-  const gate = connection?.requestRejection
+  const connection = ctx.get('connection')
+  const gate = requestRejectionOf(connection)
 
   // A host older than that service has no gate to ask. Nothing gets privileged on a guess: the
   // profile this package is installed into is the one that serves the page, so a missing gate is

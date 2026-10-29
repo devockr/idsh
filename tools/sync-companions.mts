@@ -33,12 +33,62 @@ const exists = async (path: string): Promise<boolean> => {
 const importJson = async (file: string): Promise<unknown> =>
   import(file, { with: { type: 'json' } }).catch(() => null)
 
-const packageOf = async (dir: string): Promise<Package | undefined> => {
-  const loaded = (await importJson(path.join(dir, 'package.json'))) as {
-    default?: Package
-  } | null
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
 
-  return loaded?.default
+const stringOf = (record: Record<string, unknown>, key: string): string | undefined => {
+  const value = record[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+const packageOf = async (dir: string): Promise<Package | undefined> => {
+  const loaded = await importJson(path.join(dir, 'package.json'))
+  if (!isRecord(loaded) || !isRecord(loaded.default)) {
+    return undefined
+  }
+  const entry = loaded.default
+  const version = stringOf(entry, 'version')
+  const main = stringOf(entry, 'main')
+  const exported = isRecord(entry.exports) ? entry.exports : undefined
+  return {
+    ...(version === undefined ? {} : { version }),
+    ...(main === undefined ? {} : { main }),
+    ...(exported === undefined ? {} : { exports: exported }),
+  }
+}
+
+/** The live and baked profile manifests, narrowed once instead of asserted at every use. */
+const manifestOf = (value: unknown): Manifest | undefined => {
+  if (!isRecord(value) || !isRecord(value.default)) {
+    return undefined
+  }
+  const record = value.default
+  if (!isRecord(record.dependencies) || !isRecord(record.dsh)) {
+    return undefined
+  }
+  const profile = record.dsh.profile
+  if (!isRecord(profile)) {
+    return undefined
+  }
+  const rawBundles: unknown = profile.bundles
+  if (!Array.isArray(rawBundles)) {
+    return undefined
+  }
+  const bundles: unknown[] = rawBundles
+  const dependencies: Record<string, string> = {}
+  for (const [name, spec] of Object.entries(record.dependencies)) {
+    if (typeof spec === 'string') {
+      dependencies[name] = spec
+    }
+  }
+  return {
+    dependencies,
+    dsh: {
+      profile: {
+        bundles: bundles.filter((bundle): bundle is string => typeof bundle === 'string'),
+      },
+    },
+  }
 }
 
 /**
@@ -56,9 +106,7 @@ const entriesOf = (manifest: Package | undefined): string[] => {
     if (typeof value === 'string') {
       return value
     }
-    return value && typeof value === 'object'
-      ? pick((value as Record<string, unknown>).default)
-      : undefined
+    return isRecord(value) ? pick(value.default) : undefined
   }
   const exports = manifest?.exports ?? {}
   return [manifest?.main, pick(exports['.']), pick(exports['./client'])].filter(
@@ -129,17 +177,17 @@ if (!home) {
 
 const live = path.join(home, '.dsh/profiles/web')
 const liveManifest = path.join(live, 'package.json')
-const liveModule = (await importJson(liveManifest)) as {
-  default: Manifest
-} | null
+const liveModule = manifestOf(await importJson(liveManifest))
 
 if (liveModule) {
-  const bakedModule = (await importJson(path.join(baked, 'package.json'))) as {
-    default: Manifest
+  const bakedManifest = manifestOf(await importJson(path.join(baked, 'package.json')))
+
+  if (bakedManifest === undefined) {
+    console.error('sync-companions: the baked profile manifest cannot be read')
+    process.exit(1)
   }
 
-  const bakedManifest = bakedModule.default
-  const manifest = liveModule.default
+  const manifest = liveModule
   const { dependencies } = manifest
   const { bundles } = manifest.dsh.profile
   const wasInstalled = new Set(Object.keys(dependencies))

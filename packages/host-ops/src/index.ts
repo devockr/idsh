@@ -9,6 +9,21 @@ import { DEFAULT_SOCKET_PATH, DEFAULT_STATE_PATH, DEFAULT_TIMEOUT_MS } from './c
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 import { startDeployJob, type Jobs } from './stream.ts'
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+/** One field of an object-shaped value, or undefined when there is no such field. */
+const readField = (value: unknown, key: string): unknown =>
+  isRecord(value) ? value[key] : undefined
+
+/** The broker's own answer, narrowed where the tool runner hands it back untyped. */
+const asAnswer = (value: unknown): BrokerAnswer => {
+  if (!isRecord(value) || typeof value.text !== 'string') {
+    throw new TypeError('the broker answered without text')
+  }
+  return { text: value.text, truncated: value.truncated === true }
+}
+
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
 
@@ -138,10 +153,11 @@ export async function registerTools(
   statePath: string | undefined = DEFAULT_STATE_PATH,
 ): Promise<void> {
   const described = await call(endpoint, 'ops.describe', {})
-  const ops = JSON.parse(described.text) as unknown
-  if (!Array.isArray(ops)) {
+  const parsed: unknown = JSON.parse(described.text)
+  if (!Array.isArray(parsed)) {
     throw new TypeError('the broker did not describe a table of operations')
   }
+  const ops: unknown[] = parsed
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
   const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call, statePath))
   const names = new Set<string>()
@@ -196,7 +212,7 @@ function endpointOf(config: Config): BrokerEndpoint {
 function enqueueDeploy(
   ctx: HostContext,
   op: DescribedOp,
-  args: unknown,
+  args: Record<string, unknown>,
   exec: ToolExecution,
   call: BrokerCaller,
   endpoint: BrokerEndpoint,
@@ -211,10 +227,11 @@ function enqueueDeploy(
     exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
       ? exec.callId
       : `build-${String(Date.now())}${String(logSequence++)}`
-  const agent = exec.agent as { readonly id?: string } | undefined
+  const agentId = readField(exec.agent, 'id')
+  const agent = typeof agentId === 'string' ? { id: agentId } : undefined
   return startDeployJob(jobs, {
     name: op.name,
-    args: { ...(args as Record<string, unknown>), log },
+    args: { ...args, log },
     call,
     endpoint,
     statePath,
@@ -260,7 +277,7 @@ function toolFor(
         required: ['text', 'truncated'],
       },
       render: (_args, value) => {
-        const answer = value as BrokerAnswer
+        const answer = asAnswer(value)
         return [
           {
             type: 'text',
@@ -272,6 +289,9 @@ function toolFor(
       },
     },
     async execute(args, exec) {
+      // The runner hands the arguments back untyped; the broker validates them again, so an
+      // object-shaped value is all this half needs.
+      const input = isRecord(args) ? args : {}
       const confirmation: Confirmation =
         op.confirm === true ? await confirmed(ctx, op, args, exec) : { ok: true }
       if (confirmation.ok === false) {
@@ -285,38 +305,32 @@ function toolFor(
       const endpointForCall = timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
       // A long operation is not enough: only a build with a per-build log can be followed. An
       // older broker declares no `log` and writes one shared file, so it stays synchronous.
-      const properties = op.input['properties'] as Record<string, unknown> | undefined
-      const supportsLog = typeof properties?.['log'] === 'object'
+      const properties = readField(op.input, 'properties')
+      const supportsLog = isRecord(properties) && typeof properties['log'] === 'object'
       if (ctx.jobs !== undefined && supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
-        const id = enqueueDeploy(ctx, op, args, exec, call, endpointForCall, statePath)
+        const id = enqueueDeploy(ctx, op, input, exec, call, endpointForCall, statePath)
         return {
           text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
           truncated: false,
         }
       }
-      return call(endpointForCall, op.name, args as Record<string, unknown>, exec.signal)
+      return call(endpointForCall, op.name, input, exec.signal)
     },
   }
 }
 
 function asOp(value: unknown): DescribedOp {
-  if (value === null || typeof value !== 'object') {
+  if (!isRecord(value)) {
     throw new Error('the broker described an operation that is not an object')
   }
-  const { name, summary, input, confirm, timeoutMs } = value as Record<string, unknown>
-  if (
-    typeof name !== 'string' ||
-    typeof summary !== 'string' ||
-    input === null ||
-    typeof input !== 'object' ||
-    Array.isArray(input)
-  ) {
+  const { name, summary, input, confirm, timeoutMs } = value
+  if (typeof name !== 'string' || typeof summary !== 'string' || !isRecord(input)) {
     throw new Error('the broker described an operation without a name, summary or object input')
   }
   return {
     name,
     summary,
-    input: input as Record<string, unknown>,
+    input,
     ...(confirm === true ? { confirm: true } : {}),
     // The broker's per-operation budget travels with the operation; dropping it silently is how
     // a long build ends up waiting the default 15 seconds again.
