@@ -10,8 +10,7 @@
     "noEmitOnError": true,
     "declaration": true,
     "sourceMap": false,
-    "composite": true,
-    "incremental": true
+    "composite": true
   },
   "include": ["src"]
 }
