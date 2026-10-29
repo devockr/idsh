@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-magic-numbers -- this file is where the numbers are named */
+/* oxlint-disable no-magic-numbers -- this file is a list of named numbers */
 /**
  * Every number the broker is built from, in one place.
  *
