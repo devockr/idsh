@@ -162,6 +162,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  eslint-mdx: ^3.8.3
+
 importers:
 
   .:
@@ -256,9 +259,6 @@ importers:
       semver:
         specifier: ^7.8.5
         version: 7.8.5
-      tslib:
-        specifier: ^2.8.1
-        version: 2.8.1
       typed-query-selector:
         specifier: ^2.12.3
         version: 2.12.3
@@ -2202,8 +2202,8 @@ packages:
       '@eslint/json':
         optional: true
 
-  eslint-mdx@3.8.2:
-    resolution: {integrity: sha512-mgHCDubLWobY6hMbBTSOTCn6YBw3BcnCt5Qp8OaoE9UdJHm5+d7Ai+5rY1tpsziCo+VVUrAGCfcTtapPVApkIg==}
+  eslint-mdx@3.8.3:
+    resolution: {integrity: sha512-7ddtVFCzCXHgjAIhx6IVBTF7PKtr6gOPp1xfHebqdZ2jU0H1DUmxfkjaNLQxIpYGPOPGDIx+rqjSeEN4Vl+DvQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       eslint: '>=8.0.0'
@@ -5688,7 +5688,7 @@ snapshots:
       esquery: 1.7.0
       jsonc-eslint-parser: 3.3.0
 
-  eslint-mdx@3.8.2(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0):
+  eslint-mdx@3.8.3(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0):
     dependencies:
       acorn: 8.19.0
       acorn-jsx: 5.3.2(acorn@8.19.0)
@@ -5740,7 +5740,7 @@ snapshots:
   eslint-plugin-mdx@3.8.2(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0):
     dependencies:
       eslint: 10.13.0(jiti@2.7.0)(supports-color@9.4.0)
-      eslint-mdx: 3.8.2(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0)
+      eslint-mdx: 3.8.3(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0)
       mdast-util-from-markdown: 2.1.0(supports-color@9.4.0)
       mdast-util-mdx: 3.0.0(supports-color@9.4.0)
       micromark-extension-mdxjs: 3.0.0
