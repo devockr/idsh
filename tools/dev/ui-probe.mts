@@ -8,8 +8,7 @@
  * the live session. Everything lives in a disposable $DSH_HOME; the browser itself lives under
  * ~/.dsh/cache so a container rebuild does not re-download it.
  *
- * Usage: node tools/dev/ui-probe.mts [--install <pnpm-spec>]... [--bare] [--host <host>] [--keep]
- * [--shot <name>]
+ * Usage: node tools/dev/ui-probe.mts [--install <pnpm-spec>]... [options]
  *
  * - `--install <pnpm-spec>` adds a package to the probe profile before booting; repeatable, and a
  *   spec whose package is already there replaces it.
@@ -20,6 +19,11 @@
  *   reproduce what a remote page sees.
  * - `--keep` leaves the probe instance and its `$DSH_HOME` behind for poking.
  * - `--shot <name>` prefixes the screenshots it writes, `probe` by default.
+ * - `--scenario <name>` picks what the browser run exercises: `mobile` (a phone viewport),
+ *   `discover-settings`, `settings-persistence` or `discover-composer`; the default walks the whole
+ *   surface.
+ * - `--no-browser` serves the shell and checks the composed plugin rows and bundle URLs without a
+ *   browser — the mode to use where the container has no browser libraries.
  */
 
 // Must be set before playwright resolves its browser path. The default is a bind
