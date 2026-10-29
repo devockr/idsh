@@ -9,8 +9,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "forceConsistentCasingInFileNames": true,
-    "checkJs": true
+    "forceConsistentCasingInFileNames": true
   },
   "include": ["tools", "vite.config.ts", "eslint.config.ts", "oxlint.config.ts", "oxfmt.config.ts"]
 }

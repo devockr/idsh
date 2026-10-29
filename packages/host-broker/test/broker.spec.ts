@@ -32,7 +32,7 @@ import {
   startBroker,
   TAIL_WINDOW_BYTES,
   type BrokerResponse,
-} from '../src/index.ts'
+} from '@idsh/host-broker'
 
 // The bounds these tests assert against; named here because the broker keeps them internal.
 const ALIGN = 32

@@ -19,6 +19,7 @@
 **/*.toml
 **/*.yaml
 **/*.yml
+# package.json is the one overlap: prettier-plugin-pkg sorts its fields, oxfmt does not.
 !**/package.json
 **/*.html
 
