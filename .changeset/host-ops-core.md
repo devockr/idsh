@@ -1,5 +1,5 @@
 ---
-'@idsh/host-ops': minor
+"@idsh/host-ops": minor
 ---
 
 Add the agent-facing half of the host broker: the plugin asks it for the operation table at load

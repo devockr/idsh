@@ -173,8 +173,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0(@markuplint/ml-config@5.2.0(supports-color@9.4.0))(@markuplint/vue-parser@5.2.0(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0))(@markuplint/vue-spec@5.2.0(supports-color@9.4.0))(markuplint@5.2.0(@typescript-eslint/types@8.71.2)(@typescript/typescript6@6.0.2)(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0))
       '@1stg/oxfmt-config':
-        specifier: ^1.0.0
-        version: 1.0.0(oxfmt@0.75.0(svelte@5.57.2(@typescript-eslint/types@8.71.2)))
+        specifier: ^1.1.0
+        version: 1.1.0(oxfmt@0.75.0(svelte@5.57.2(@typescript-eslint/types@8.71.2)))
       '@1stg/oxlint-config':
         specifier: ^1.1.0
         version: 1.1.0(oxlint@1.90.0)
@@ -361,8 +361,8 @@ packages:
       '@markuplint/vue-spec':
         optional: true
 
-  '@1stg/oxfmt-config@1.0.0':
-    resolution: {integrity: sha512-AAzgdQShGj8mw/6SI5IRX5JpAXnES+gsA18rIFY2Y+1F785z2eNoaBqKc00nBbVWAy5g4KwEplTV7W/OJW0qLQ==}
+  '@1stg/oxfmt-config@1.1.0':
+    resolution: {integrity: sha512-aoNUtJsat066D5VQEjuHFrVQ9eUtDwdWKWsJwlf5J++B2MLFMuQLc6F/+ydJaH0ySw5tqdCzF//gF1muHd4rKQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
     peerDependencies:
       oxfmt: '>=0.74.0'
@@ -3934,7 +3934,7 @@ snapshots:
       '@markuplint/vue-parser': 5.2.0(eslint@10.13.0(jiti@2.7.0)(supports-color@9.4.0))(supports-color@9.4.0)
       '@markuplint/vue-spec': 5.2.0(supports-color@9.4.0)
 
-  '@1stg/oxfmt-config@1.0.0(oxfmt@0.75.0(svelte@5.57.2(@typescript-eslint/types@8.71.2)))':
+  '@1stg/oxfmt-config@1.1.0(oxfmt@0.75.0(svelte@5.57.2(@typescript-eslint/types@8.71.2)))':
     dependencies:
       oxfmt: 0.75.0(svelte@5.57.2(@typescript-eslint/types@8.71.2))
 

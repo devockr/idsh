@@ -1,5 +1,5 @@
 ---
-'@idsh/host-broker': minor
+"@idsh/host-broker": minor
 ---
 
 Add `net.status`: the host's addresses, routes and neighbours, read with `ip -br` — `what` picks

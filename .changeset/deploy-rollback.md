@@ -1,5 +1,5 @@
 ---
-'@idsh/host-broker': minor
+"@idsh/host-broker": minor
 ---
 
 Add `deploy.rollback`: retag `:dev` to the image recorded in `<stateDir>/rollback` before the last

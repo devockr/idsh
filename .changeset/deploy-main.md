@@ -1,5 +1,5 @@
 ---
-'@idsh/host-broker': minor
+"@idsh/host-broker": minor
 ---
 
 Add `deploy.main`: resolve the tip of `origin/main`, build it as `:dev` with the same root-surface
