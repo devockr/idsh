@@ -1,4 +1,3 @@
-/* oxlint-disable no-magic-numbers -- this file is a list of named numbers */
 /**
  * Every number the broker is built from, in one place.
  *
@@ -13,16 +12,16 @@ export const NEWLINE_BYTE = 10
 export const BYTES_PER_KIB = 1024
 
 /** One protocol line may not exceed this many bytes. */
-export const MAX_LINE_BYTES = 16 * BYTES_PER_KIB
+export const MAX_LINE_BYTES = 16_384 // 16 KiB
 
 /** One answer may not exceed this many bytes. */
-export const MAX_OUTPUT_BYTES = 64 * BYTES_PER_KIB
+export const MAX_OUTPUT_BYTES = 65_536 // 64 KiB
 
 /** The default rate-limit window, one minute. */
 export const DEFAULT_WINDOW_MS = 60_000
 
 /** How much of the end of a log one tail reads. */
-export const TAIL_WINDOW_BYTES = 256 * BYTES_PER_KIB
+export const TAIL_WINDOW_BYTES = 262_144 // 256 KiB
 
 /** The longest `log.tail` pattern, in characters. */
 export const MAX_PATTERN_CHARS = 200
@@ -79,10 +78,10 @@ export const DRAIN_TIMEOUT_MS = 5000
 export const SEND_TIMEOUT_MS = 5000
 
 /** A compose that never returns must not hold the deployment lock forever. */
-export const COMPOSE_TIMEOUT_MS = 15 * 60_000
+export const COMPOSE_TIMEOUT_MS = 900_000 // 15 minutes
 
 /** A build may take minutes; the per-program default is ten seconds. */
-export const BUILD_TIMEOUT_MS = 15 * 60_000
+export const BUILD_TIMEOUT_MS = 900_000 // 15 minutes
 
 /** How long a deferred action waits after its answer is written, so the client can read it. */
 export const AFTER_RESPONSE_DELAY_MS = 500

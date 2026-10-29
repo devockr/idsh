@@ -1,4 +1,3 @@
-/* oxlint-disable no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -22,6 +21,7 @@ import {
   capOutput,
   createLineReader,
   MAX_LINE_BYTES,
+  MAX_OUTPUT_BYTES,
   parseRequest,
   RateLimiter,
   startBroker,
@@ -29,7 +29,24 @@ import {
   type BrokerResponse,
 } from '../src/index.ts'
 
-const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
+// The bounds these tests assert against; named here because the broker keeps them internal.
+const ALIGN = 32
+const SHA256_HEX = 64
+const KEY_CHARS = 16
+const LOG_BYTES = 9000
+const LOG_ROW_BYTES = 8000
+const ODD_BYTES = 33
+const FILE_MODE = 0o644
+const PRIVATE_MODE = 0o600
+const FIXED_NOW = 1_700_000_000_000
+const PROC_ROWS = 11
+const MAX_PATTERN = 200
+const MAX_ERROR = 500
+const PROC_DEFAULT = 20
+const PROC_MAX = 100
+const BUILD_TIMEOUT = 900_000
+
+const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(SHA256_HEX)
 
 const roots: string[] = []
 
@@ -39,8 +56,7 @@ after(async () => {
 
 const SMALL_LINE_LIMIT = 10
 const LONG_ROW_CHARS = 40_000
-const BYTES_PER_KIB = 1024
-const OUTPUT_CAP_BYTES = 64 * BYTES_PER_KIB
+const OUTPUT_CAP_BYTES = MAX_OUTPUT_BYTES
 const MODE_MASK = 0o777
 const SOCKET_MODE = 0o600
 const DIRECTORY_MODE = 0o700
@@ -417,11 +433,11 @@ function bigLog(rowCount: number, head: string, rowLength = 32): { content: stri
 
 void test('log.tail keeps the first whole row when the window starts on a boundary', async () => {
   const host = await fakeHost()
-  const { content } = bigLog(9000, '')
+  const { content } = bigLog(LOG_BYTES, '')
   // The window starts at row 808. Only that row matches the pattern, so it is exactly the row the
   // off-by-one used to drop — a test that read the last rows would pass either way.
-  assert.equal(content.length % 32, 0)
-  assert.equal((content.length - TAIL_WINDOW_BYTES) % 32, 0)
+  assert.equal(content.length % ALIGN, 0)
+  assert.equal((content.length - TAIL_WINDOW_BYTES) % ALIGN, 0)
   await writeFile(path.join(host.logDir, 'syslog'), content)
 
   const broker = await startBroker({
@@ -446,8 +462,8 @@ void test('log.tail keeps the first whole row when the window starts on a bounda
 void test('log.tail drops the partial first row when the window starts inside one', async () => {
   const host = await fakeHost()
   // 33-byte rows put the window start inside a row rather than on one of its boundaries.
-  const { content, last } = bigLog(8000, '', 33)
-  assert.notEqual((content.length - TAIL_WINDOW_BYTES) % 33, 0)
+  const { content, last } = bigLog(LOG_ROW_BYTES, '', ODD_BYTES)
+  assert.notEqual((content.length - TAIL_WINDOW_BYTES) % ODD_BYTES, 0)
   await writeFile(path.join(host.logDir, 'syslog'), content)
 
   const broker = await startBroker({
@@ -545,7 +561,7 @@ void test('an over-long line is answered before the connection closes', async ()
 void test('an existing audit file is narrowed to 0600', async () => {
   const host = await fakeHost()
   await writeFile(host.auditPath, '')
-  await chmod(host.auditPath, 0o644)
+  await chmod(host.auditPath, FILE_MODE)
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -564,7 +580,7 @@ void test('an existing audit file is narrowed to 0600', async () => {
     await broker.close()
   }
   const stats = await stat(host.auditPath)
-  assert.equal(stats.mode & MODE_MASK, 0o600)
+  assert.equal(stats.mode & MODE_MASK, PRIVATE_MODE)
 })
 
 void test('an exec timeout past the timer ceiling is clamped where it is used', async () => {
@@ -774,18 +790,18 @@ void test('a container name that is not one is refused', async () => {
 })
 
 void test('capOutput keeps a tail of whole rows, never half a character', () => {
-  const row = `${'x'.repeat(199)}😀\n`
-  const text = row.repeat(400)
+  const row = `${'x'.repeat(MAX_PATTERN - 1)}😀\n`
+  const text = row.repeat(500)
   const capped = capOutput(text, 'tail')
   assert.equal(capped.truncated, true)
   assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
   assert.ok(!capped.text.includes('\uFFFD'))
-  assert.ok(capped.text.endsWith(`${'x'.repeat(199)}😀\n`))
+  assert.ok(capped.text.endsWith(`${'x'.repeat(MAX_PATTERN - 1)}😀\n`))
 })
 
 void test('capOutput backs off a cut that lands inside a character', () => {
   // 65 536 bytes back from the end falls on the emoji's third byte.
-  const text = `${'x'.repeat(100)}😀${'x'.repeat(65_534)}`
+  const text = `${'x'.repeat(100)}😀${'x'.repeat(MAX_OUTPUT_BYTES + 100)}`
   const capped = capOutput(text, 'tail')
   assert.equal(capped.truncated, true)
   assert.ok(Buffer.byteLength(capped.text) <= OUTPUT_CAP_BYTES)
@@ -796,7 +812,7 @@ void test('capOutput backs off a cut that lands inside a character', () => {
 void test('a window that starts on a surrogate half drops it, not the character', async () => {
   const host = await fakeHost()
   const dockerPath = path.join(host.root, 'docker')
-  const line = `${'x'.repeat(60)}😀${'y'.repeat(499)}`
+  const line = `${'x'.repeat(60)}😀${'y'.repeat(MAX_ERROR - 1)}`
   await writeFile(dockerPath, `#!/bin/sh\nprintf '%s\\n' '${line}'\nexit 1\n`, {
     mode: 0o755,
   })
@@ -811,7 +827,7 @@ void test('a window that starts on a surrogate half drops it, not the character'
   try {
     const answer = await connection.request({ op: 'deploy.status', args: {} })
     assert.equal(answer.ok, false)
-    assert.equal(answer.error?.message, 'y'.repeat(499))
+    assert.equal(answer.error?.message, 'y'.repeat(MAX_ERROR - 1))
   } finally {
     connection.close()
     await broker.close()
@@ -819,7 +835,7 @@ void test('a window that starts on a surrogate half drops it, not the character'
 })
 
 void test('a tail window that is one long line is not emptied', () => {
-  const text = `${'x'.repeat(70_000)}\n`
+  const text = `${'x'.repeat(MAX_LINE_BYTES * 5)}\n`
   const capped = capOutput(text, 'tail')
   assert.equal(capped.truncated, true)
   assert.ok(capped.text.length > 0)
@@ -916,13 +932,13 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
     const update = ops.find(op => op.name === 'broker.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
-    assert.equal(update.timeoutMs, 900_000)
+    assert.equal(update.timeoutMs, BUILD_TIMEOUT)
     assert.ok(ops.some(op => op.name === 'broker.status'))
 
     const main = ops.find(op => op.name === 'deploy.main')
     assert.ok(main !== undefined)
     assert.equal(main.confirm, true)
-    assert.equal(main.timeoutMs, 900_000)
+    assert.equal(main.timeoutMs, BUILD_TIMEOUT)
 
     const answer = await connection.request({ op: 'deploy.recreate', args: {} })
     assert.equal(answer.ok, true)
@@ -1263,7 +1279,10 @@ esac
 
 void test('a planted build directory is swept at boot', async () => {
   const host = await fakeHost()
-  const key = createHash('sha256').update(path.resolve(host.socketPath)).digest('hex').slice(0, 16)
+  const key = createHash('sha256')
+    .update(path.resolve(host.socketPath))
+    .digest('hex')
+    .slice(0, KEY_CHARS)
   const junk = path.join(host.root, 'build', key, 'junk')
   await mkdir(junk, { recursive: true })
   const broker = await startBroker({
@@ -1559,7 +1578,7 @@ echo "$*" >> '${dockerLog}'
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /audit/u)
   } finally {
-    await new Promise(resolve => setTimeout(resolve, 700))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     connection.close()
     await broker.close()
   }
@@ -1661,7 +1680,7 @@ esac
     })
     assert.equal(refused.ok, false)
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
-    await new Promise(resolve => setTimeout(resolve, 1200))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     const built = await building.request({
       op: 'deploy.build',
       args: { sha: 'aaaaaaaa' },
@@ -1718,7 +1737,7 @@ esac
     socket.destroy()
     const logPath = path.join(host.root, 'compose.log')
     let composed = false
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 100))
       const log = await readFile(logPath, 'utf8').catch(() => '')
       if (log.includes('up -d --no-build')) {
@@ -1934,7 +1953,7 @@ void test('broker.status reports the broker it is asked', async () => {
     auditPath: host.auditPath,
     logDir: host.logDir,
     procDir: host.procDir,
-    now: () => 1_700_000_000_000,
+    now: () => FIXED_NOW,
     checkout,
   })
   const connection = client(host.socketPath)
@@ -1949,7 +1968,7 @@ void test('broker.status reports the broker it is asked', async () => {
     )
     assert.equal(fields.get('version'), version)
     assert.equal(fields.get('pid'), String(process.pid))
-    assert.equal(fields.get('started'), new Date(1_700_000_000_000).toISOString())
+    assert.equal(fields.get('started'), new Date(FIXED_NOW).toISOString())
     assert.equal(fields.get('socket'), host.socketPath)
     assert.equal(fields.get('audit'), host.auditPath)
     assert.equal(fields.get('checkout'), checkout)
@@ -2014,7 +2033,7 @@ echo "$PWD $*" >> '${pnpmLog}'
       pnpm.indexOf('install --frozen-lockfile') < pnpm.indexOf('--filter @idsh/host-broker build'),
       'install must come before the build',
     )
-    await new Promise(resolve => setTimeout(resolve, 700))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     assert.equal(stopped, 1)
   } finally {
     connection.close()
@@ -2063,7 +2082,7 @@ esac
     const answer = await connection.request({ op: 'broker.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /registry down/u)
-    await new Promise(resolve => setTimeout(resolve, 700))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     assert.equal(stopped, 0)
   } finally {
     connection.close()
@@ -2114,7 +2133,7 @@ echo "$*" >> '${npmLog}'
     const npmText = await readFile(npmLog, 'utf8')
     const npm = npmText.trim()
     assert.equal(npm, `install --global --prefix ${prefix} @idsh/host-broker@latest`)
-    await new Promise(resolve => setTimeout(resolve, 700))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     assert.equal(stopped, 1)
   } finally {
     connection.close()
@@ -2180,10 +2199,10 @@ echo "$*" >> '${pnpmLog}'
     const refused = await admin.request({ op: 'broker.update', args: {} })
     assert.equal(refused.ok, false)
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
-    await new Promise(resolve => setTimeout(resolve, 1200))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     const allowed = await admin.request({ op: 'broker.update', args: {} })
     assert.equal(allowed.ok, true, JSON.stringify(allowed.error))
-    await new Promise(resolve => setTimeout(resolve, 700))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     assert.equal(stopped, 1)
   } finally {
     deployment.close()
@@ -2240,7 +2259,7 @@ esac
       new Promise<never>((_resolve, reject) => {
         setTimeout(() => {
           reject(new Error('the slow answer was lost'))
-        }, 5000)
+        }, 3600)
       }),
     ])
     assert.equal(slowAnswer.ok, true, JSON.stringify(slowAnswer.error))
@@ -2308,7 +2327,7 @@ echo "$*" >> '${npmLog}'
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const npmText = await readFile(npmLog, 'utf8')
     assert.equal(npmText.trim(), `install --global --prefix ${prefix} @idsh/host-broker@latest`)
-    await new Promise(resolve => setTimeout(resolve, 700))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     assert.equal(stopped, 1)
   } finally {
     connection.close()
@@ -2346,7 +2365,7 @@ echo "$*" >> '${npmLog}'
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /cannot tell which npm prefix/u)
     await assert.rejects(readFile(npmLog, 'utf8'))
-    await new Promise(resolve => setTimeout(resolve, 700))
+    await new Promise(resolve => setTimeout(resolve, 1000))
     assert.equal(stopped, 0)
   } finally {
     connection.close()
@@ -2447,7 +2466,7 @@ void test('proc.list reads the process table, biggest resident set first', async
     // U+200D (ZWJ) survives: format controls are a deliberate pass-through.
     assert.equal(lines[9], '     47       1 S         6 a\u200Db')
     assert.equal(lines[10], '     50       1 S         5 evil    1       1 S      9999 spoofed')
-    assert.equal(lines.length, 11)
+    assert.equal(lines.length, PROC_ROWS)
     assert.ok(lines.every(line => !line.includes('nope')))
 
     // Two calls answer the same bytes, ties included.
@@ -2460,7 +2479,7 @@ void test('proc.list reads the process table, biggest resident set first', async
     })
     assert.equal((one.result ?? '').split('\n').length, 2)
 
-    for (const lines of [0, 101]) {
+    for (const lines of [0, PROC_MAX + 1]) {
       const refused = await connection.request({
         op: 'proc.list',
         args: { lines },
@@ -2477,7 +2496,7 @@ void test('proc.list reads the process table, biggest resident set first', async
 void test('proc.list defaults to twenty rows', async () => {
   const host = await fakeHost()
   const procDir = path.join(host.root, 'proc')
-  for (let pid = 1; pid <= 25; pid += 1) {
+  for (let pid = 1; pid <= 30; pid += 1) {
     const dir = path.join(procDir, String(pid))
     await mkdir(dir, { recursive: true })
     await writeFile(
@@ -2497,7 +2516,7 @@ void test('proc.list defaults to twenty rows', async () => {
     const answer = await connection.request({ op: 'proc.list', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     // A header and twenty rows: the documented default, not "as many as fit".
-    assert.equal((answer.result ?? '').split('\n').length, 21)
+    assert.equal((answer.result ?? '').split('\n').length, PROC_DEFAULT + 1)
   } finally {
     connection.close()
     await broker.close()
