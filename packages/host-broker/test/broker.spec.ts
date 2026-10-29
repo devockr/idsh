@@ -293,6 +293,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'net.sockets',
         'broker.status',
         'broker.update',
+        'proc.list',
         'disk.usage',
       ],
     )
@@ -2415,6 +2416,193 @@ echo "$*" >> '${npmLog}'
     await assert.rejects(readFile(npmLog, 'utf8'))
     await new Promise(resolve => setTimeout(resolve, 700))
     assert.equal(stopped, 0)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('proc.list reads the process table, biggest resident set first', async () => {
+  const host = await fakeHost()
+  const procDir = path.join(host.root, 'proc')
+  for (const pid of [
+    '10',
+    '20',
+    '30',
+    '40',
+    '50',
+    '60',
+    '61',
+    '41',
+    '42',
+    '44',
+    '45',
+    '46',
+    '47',
+  ]) {
+    await mkdir(path.join(procDir, pid), { recursive: true })
+  }
+  const stat = (pid: string, comm: string, state: string, ppid: number) =>
+    `${pid} (${comm}) ${state} ${ppid} 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+`
+  // A process that exited between its stat and its status: skipped, not an error.
+  await writeFile(path.join(procDir, '30', 'stat'), stat('30', 'gone', 'S', 1))
+  await writeFile(path.join(procDir, '10', 'stat'), stat('10', 'small', 'S', 1))
+  await writeFile(path.join(procDir, '10', 'status'), 'VmRSS:\t  1200 kB\n')
+  await writeFile(
+    path.join(procDir, '20', 'stat'),
+    stat('20', 'big one', 'R', 1),
+  )
+  await writeFile(path.join(procDir, '20', 'status'), 'VmRSS:\t  4096 kB\n')
+  // A comm with an inner ')' proves the parse uses the last one: 'sd) pam' survives.
+  await writeFile(
+    path.join(procDir, '40', 'stat'),
+    '40 (sd) pam) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n',
+  )
+  await writeFile(path.join(procDir, '40', 'status'), 'VmRSS:\t  10 kB\n')
+  // A comm cannot forge a row: control characters become spaces.
+  await writeFile(
+    path.join(procDir, '50', 'stat'),
+    stat('50', 'evil\n   1       1 S      9999 spoofed', 'S', 1),
+  )
+  await writeFile(path.join(procDir, '50', 'status'), 'VmRSS:\t  5 kB\n')
+  // Equal resident sets are ordered by pid.
+  for (const pid of ['60', '61']) {
+    await writeFile(path.join(procDir, pid, 'stat'), stat(pid, 'same', 'S', 1))
+    await writeFile(path.join(procDir, pid, 'status'), 'VmRSS:\t  500 kB\n')
+  }
+  // A stat with nothing after the comm, and a non-numeric parent: both rows are dropped.
+  await writeFile(path.join(procDir, '41', 'stat'), '41 (empty)')
+  await writeFile(path.join(procDir, '41', 'status'), 'VmRSS:\t  3 kB\n')
+  await writeFile(path.join(procDir, '42', 'stat'), '42 (badppid) S xx 1 0')
+  await writeFile(path.join(procDir, '42', 'status'), 'VmRSS:\t  4 kB\n')
+  // A line separator (U+2028) folds to a space too: a renderer would draw it as a line break.
+  await writeFile(
+    path.join(procDir, '45', 'stat'),
+    stat('45', 'line\u2028sep', 'S', 1),
+  )
+  await writeFile(path.join(procDir, '45', 'status'), 'VmRSS:\t  9 kB\n')
+  // A paragraph separator (U+2029) folds as well.
+  await writeFile(
+    path.join(procDir, '46', 'stat'),
+    stat('46', 'para\u2029sep', 'S', 1),
+  )
+  await writeFile(path.join(procDir, '46', 'status'), 'VmRSS:\t  7 kB\n')
+  // Format controls (Cf) are kept on purpose: ZWJ is one, and emoji names depend on it.
+  await writeFile(
+    path.join(procDir, '47', 'stat'),
+    stat('47', 'a\u200Db', 'S', 1),
+  )
+  await writeFile(path.join(procDir, '47', 'status'), 'VmRSS:\t  6 kB\n')
+  // A printable Unicode name keeps its characters; only control characters are replaced.
+  await writeFile(path.join(procDir, '44', 'stat'), stat('44', '中文', 'S', 1))
+  await writeFile(path.join(procDir, '44', 'status'), 'VmRSS:\t  8 kB\n')
+  // A directory whose name is not a pid has a valid stat: only the filter can exclude it.
+  await mkdir(path.join(procDir, 'not-a-pid'), { recursive: true })
+  await writeFile(
+    path.join(procDir, 'not-a-pid', 'stat'),
+    stat('1', 'nope', 'S', 1),
+  )
+  await writeFile(path.join(procDir, 'not-a-pid', 'status'), 'VmRSS:\t  7 kB\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'proc.list', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const lines = (answer.result ?? '').split('\n')
+    // Byte-for-byte, because a whitespace-tolerant match hides a column that is off by one.
+    assert.equal(lines[0], '    pid    ppid s    rssKiB comm')
+    // Exact rows: a whitespace-tolerant match would let the whole table drift.
+    assert.equal(lines[1], '     20       1 R      4096 big one')
+    assert.equal(lines[2], '     10       1 S      1200 small')
+    assert.equal(lines[3], '     60       1 S       500 same')
+    assert.equal(lines[4], '     61       1 S       500 same')
+    // The closing paren survives, and the newline in comm became a space.
+    assert.equal(lines[5], '     40       1 S        10 sd) pam')
+    assert.equal(lines[6], '     45       1 S         9 line sep')
+    assert.equal(lines[7], '     44       1 S         8 中文')
+    assert.equal(lines[8], '     46       1 S         7 para sep')
+    // U+200D (ZWJ) survives: format controls are a deliberate pass-through.
+    assert.equal(lines[9], '     47       1 S         6 a\u200Db')
+    assert.equal(
+      lines[10],
+      '     50       1 S         5 evil    1       1 S      9999 spoofed',
+    )
+    assert.equal(lines.length, 11)
+    assert.ok(lines.every(line => !line.includes('nope')))
+
+    // Two calls answer the same bytes, ties included.
+    const again = await connection.request({ op: 'proc.list', args: {} })
+    assert.equal(again.result, answer.result)
+
+    const one = await connection.request({
+      op: 'proc.list',
+      args: { lines: 1 },
+    })
+    assert.equal((one.result ?? '').split('\n').length, 2)
+
+    for (const lines of [0, 101]) {
+      const refused = await connection.request({
+        op: 'proc.list',
+        args: { lines },
+      })
+      assert.equal(refused.ok, false)
+      assert.equal(refused.error?.code, 'bad-argument')
+    }
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('proc.list defaults to twenty rows', async () => {
+  const host = await fakeHost()
+  const procDir = path.join(host.root, 'proc')
+  for (let pid = 1; pid <= 25; pid += 1) {
+    const dir = path.join(procDir, String(pid))
+    await mkdir(dir, { recursive: true })
+    await writeFile(
+      path.join(dir, 'stat'),
+      `${String(pid)} (p) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n`,
+    )
+    await writeFile(path.join(dir, 'status'), 'VmRSS:\t  1 kB\n')
+  }
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'proc.list', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    // A header and twenty rows: the documented default, not "as many as fit".
+    assert.equal((answer.result ?? '').split('\n').length, 21)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('proc.list answers unavailable when /proc is not readable', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: path.join(host.root, 'missing-proc'),
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'proc.list', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'unavailable')
   } finally {
     connection.close()
     await broker.close()
