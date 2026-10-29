@@ -64,7 +64,6 @@ globalThis.__ModuleLoader__.load({
         }
         // 229 is the IME processing key code Safari reports when a composition is being committed,
         // and keyCode is the only place it appears — hence the deprecation suppression below.
-
         if (event.isComposing || event.keyCode === IME_PROCESSING_KEY_CODE) {
           return
         } // mid-IME
@@ -120,7 +119,6 @@ globalThis.__ModuleLoader__.load({
       const link = document.querySelector('link[rel~="icon"]')
       if (!(link instanceof HTMLLinkElement)) {
         // Nothing was installed, so there is nothing to undo.
-
         // oxlint-disable-next-line no-empty-function -- nothing was installed, so there is nothing to undo
         return () => {}
       }
@@ -146,7 +144,6 @@ globalThis.__ModuleLoader__.load({
       const context = canvas.getContext('2d')
       if (context === null) {
         // Nothing was installed, so there is nothing to undo.
-
         // oxlint-disable-next-line no-empty-function -- nothing was installed, so there is nothing to undo
         return () => {}
       }

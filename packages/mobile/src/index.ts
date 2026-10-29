@@ -7,6 +7,5 @@ export const name = '@idsh/mobile'
 
 /** Nothing to do on the host: no service, no config, no state. */
 // The host half has nothing to do; the browser half does the work.
-
 // oxlint-disable-next-line no-empty-function -- the host half has nothing to do
 export function apply(): void {}
