@@ -80,10 +80,7 @@ const resolveDocker = async (): Promise<string> => {
 }
 
 let dockerBin: string | undefined
-const docker = async (
-  args: string[],
-  extraEnv?: Record<string, string>,
-): Promise<string> => {
+const docker = async (args: string[], extraEnv?: Record<string, string>): Promise<string> => {
   const bin = dockerBin ?? (await resolveDocker())
   dockerBin = bin
   return run(bin, args, extraEnv)
@@ -117,9 +114,7 @@ interface Mount {
 interface Resolved {
   services?: Record<string, { image?: string; volumes?: Mount[] }>
 }
-const resolved = JSON.parse(
-  await compose(['config', '--format', 'json']),
-) as Resolved
+const resolved = JSON.parse(await compose(['config', '--format', 'json'])) as Resolved
 const service = resolved.services?.dsh ?? {}
 const image = service.image ?? 'devockr/idsh:dev'
 console.log(`deploy:dev: image ${image}`)
@@ -131,10 +126,7 @@ console.log(`deploy:dev: image ${image}`)
 // resolve, and checking one would create a stray volume; a bind compose creates cannot fail either.
 const mounts = (service.volumes ?? []).filter(
   mount =>
-    mount.type === 'bind' &&
-    mount.source &&
-    mount.target &&
-    (mount.source ?? '').startsWith('/'),
+    mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
 )
 // Only an explicit `create_host_path: false` means compose will refuse a missing source. The
 // default is true, and compose either writes it out or leaves it to the default depending on its
@@ -146,8 +138,7 @@ const strict = mounts.filter(mount => mount.bind?.create_host_path === false)
 // for the very mount it exists to catch, and would leave a root-owned directory behind even on
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
 // instead: this daemon refuses a quoted field outright (measured), a standard engine accepts it.
-const needsQuoting = (mount: Mount): boolean =>
-  /[",]/.test(`${mount.source}${mount.target}`)
+const needsQuoting = (mount: Mount): boolean => /[",]/.test(`${mount.source}${mount.target}`)
 const toArgs = (list: Mount[]): string[] =>
   list.flatMap(mount => [
     '--mount',
@@ -160,14 +151,7 @@ if (gated.length === 0) {
   console.log('deploy:dev: no bind needs pre-flighting')
 } else {
   try {
-    await docker([
-      'run',
-      '--rm',
-      ...toArgs(gated),
-      '--entrypoint',
-      'true',
-      image,
-    ])
+    await docker(['run', '--rm', ...toArgs(gated), '--entrypoint', 'true', image])
   } catch (error) {
     die(`bind pre-flight failed, nothing was touched:\n${stderrOf(error)}`)
   }
@@ -177,14 +161,7 @@ if (gated.length === 0) {
 // was missing and which the daemon then refused.
 if (warned.length > 0) {
   try {
-    await docker([
-      'run',
-      '--rm',
-      ...toArgs(warned),
-      '--entrypoint',
-      'true',
-      image,
-    ])
+    await docker(['run', '--rm', ...toArgs(warned), '--entrypoint', 'true', image])
   } catch (error) {
     console.log(
       `deploy:dev: warning — ${warned.length} bind(s) compose may create do not mount here:\n${stderrOf(error)}`,
@@ -212,14 +189,11 @@ if (dry) {
 //    pre-flight run above happens to prove the image exists too, but only when the deployment
 //    mounts something — a config with no mounts never reaches docker before the removal.
 const devImage =
-  service.image ??
-  die('the overlay names no image, so there is nothing to recreate from')
+  service.image ?? die('the overlay names no image, so there is nothing to recreate from')
 try {
   await docker(['image', 'inspect', devImage])
 } catch {
-  die(
-    `image ${devImage} is not in this daemon — run \`pnpm dev\` first; nothing was touched`,
-  )
+  die(`image ${devImage} is not in this daemon — run \`pnpm dev\` first; nothing was touched`)
 }
 console.log('deploy:dev: recreating (remove the container, then up --no-build)')
 try {
@@ -238,19 +212,12 @@ const configuredWaitMs = Number(process.env.DEPLOY_WAIT_MS)
 // An empty value is 0 and a typo is NaN; both would make the loop below never run at all, which is
 // the very false failure this is here to avoid. Only a positive, finite number overrides the default.
 const READINESS_WAIT_MS =
-  Number.isFinite(configuredWaitMs) && configuredWaitMs > 0
-    ? configuredWaitMs
-    : 5 * 60 * 1000
+  Number.isFinite(configuredWaitMs) && configuredWaitMs > 0 ? configuredWaitMs : 5 * 60 * 1000
 const READINESS_POLL_MS = 4000
 
 const isReady = async (): Promise<boolean> => {
   try {
-    const running = await docker([
-      'inspect',
-      'dsh',
-      '--format',
-      '{{.State.Running}}',
-    ])
+    const running = await docker(['inspect', 'dsh', '--format', '{{.State.Running}}'])
     if (running.trim() !== 'true') {
       return false
     }
@@ -264,12 +231,7 @@ const isReady = async (): Promise<boolean> => {
 const attempts = Math.ceil(READINESS_WAIT_MS / READINESS_POLL_MS)
 for (let attempt = 1; attempt <= attempts; attempt++) {
   if (await isReady()) {
-    const runningImage = await docker([
-      'inspect',
-      'dsh',
-      '--format',
-      '{{.Config.Image}}',
-    ])
+    const runningImage = await docker(['inspect', 'dsh', '--format', '{{.Config.Image}}'])
     console.log(`deploy:dev: up — ${runningImage.trim()}`)
     process.exit(0)
   }
@@ -280,14 +242,10 @@ for (let attempt = 1; attempt <= attempts; attempt++) {
 // actually said, so "not up yet" and "up but silent" can be told apart at a glance.
 // `docker logs` writes the container's stderr to its own, and a boot that fails usually says why
 // there — so take both streams, and fall back to the error text when the call itself fails.
-const lastLines = await execFileAsync(
-  dockerBin ?? 'docker',
-  ['logs', '--tail', '20', 'dsh'],
-  {
-    cwd: repo,
-    encoding: 'utf8',
-  },
-)
+const lastLines = await execFileAsync(dockerBin ?? 'docker', ['logs', '--tail', '20', 'dsh'], {
+  cwd: repo,
+  encoding: 'utf8',
+})
   .then(({ stdout, stderr }) => `${stdout}${stderr}`)
   .catch((error: unknown) => stderrOf(error))
 die(

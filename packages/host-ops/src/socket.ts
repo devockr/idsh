@@ -7,12 +7,7 @@
  */
 import net from 'node:net'
 
-import {
-  DEFAULT_TIMEOUT_MS,
-  MAX_RESPONSE_BYTES,
-  MAX_TIMER_MS,
-  NEWLINE_BYTE,
-} from './constants.ts'
+import { DEFAULT_TIMEOUT_MS, MAX_RESPONSE_BYTES, MAX_TIMER_MS, NEWLINE_BYTE } from './constants.ts'
 
 /** Where the broker listens, and how long a call may take. */
 export interface BrokerEndpoint {
@@ -46,10 +41,7 @@ export function callBroker(
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<BrokerAnswer> {
-  const timeoutMs = Math.min(
-    endpoint.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    MAX_TIMER_MS,
-  )
+  const timeoutMs = Math.min(endpoint.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMER_MS)
   return new Promise((resolve, reject) => {
     const socket = net.connect(endpoint.socketPath)
     let buffer = Buffer.alloc(0)
@@ -79,11 +71,7 @@ export function callBroker(
     }
 
     state.timer = setTimeout(() => {
-      finish(
-        new Error(
-          `the host broker did not answer within ${String(timeoutMs)} ms`,
-        ),
-      )
+      finish(new Error(`the host broker did not answer within ${String(timeoutMs)} ms`))
     }, timeoutMs)
 
     state.onAbort = (): void => {
@@ -118,9 +106,7 @@ export function callBroker(
       )
     })
     socket.once('close', () => {
-      finish(
-        new Error('the host broker closed the connection without an answer'),
-      )
+      finish(new Error('the host broker closed the connection without an answer'))
     })
   })
 }
@@ -130,9 +116,7 @@ function answer(line: string): [Error | null, BrokerAnswer?] {
   try {
     value = JSON.parse(line) as unknown
   } catch {
-    return [
-      new TypeError('the host broker answered with a line that is not JSON'),
-    ]
+    return [new TypeError('the host broker answered with a line that is not JSON')]
   }
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return [new TypeError('the host broker answered without an object')]
@@ -142,10 +126,7 @@ function answer(line: string): [Error | null, BrokerAnswer?] {
     if (typeof response.result !== 'string') {
       return [new Error('the host broker answered without a result')]
     }
-    return [
-      null,
-      { text: response.result, truncated: response.truncated === true },
-    ]
+    return [null, { text: response.result, truncated: response.truncated === true }]
   }
   return [new Error(refusal(response))]
 }

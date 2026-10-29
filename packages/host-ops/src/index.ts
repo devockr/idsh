@@ -5,11 +5,7 @@
  * There is no shell here either: a tool call is one request to the broker, which validates the
  * arguments against the same schema and owns the audit line.
  */
-import {
-  DEFAULT_SOCKET_PATH,
-  DEFAULT_STATE_PATH,
-  DEFAULT_TIMEOUT_MS,
-} from './constants.ts'
+import { DEFAULT_SOCKET_PATH, DEFAULT_STATE_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 import { startDeployJob, type Jobs } from './stream.ts'
 
@@ -81,7 +77,10 @@ export interface QuestionAnswer {
 
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
-  /** The harness's background jobs; absent in a host without them, and then deploys stay synchronous. */
+  /**
+   * The harness's background jobs; absent in a host without them, and then deploys stay
+   * synchronous.
+   */
   readonly jobs?: Jobs
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
@@ -119,8 +118,8 @@ export const apply = (ctx: HostContext, config: Config = {}): Promise<void> =>
   })
 
 /**
- * Validate the whole configuration, then register. A bad value rejects here — including
- * `statePath` — so the warning is true: nothing was registered this boot.
+ * Validate the whole configuration, then register. A bad value rejects here — including `statePath`
+ * — so the warning is true: nothing was registered this boot.
  */
 async function discover(ctx: HostContext, config: Config): Promise<void> {
   const endpoint = endpointOf(config)
@@ -144,9 +143,7 @@ export async function registerTools(
     throw new TypeError('the broker did not describe a table of operations')
   }
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value =>
-    toolFor(ctx, endpoint, asOp(value), call, statePath),
-  )
+  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call, statePath))
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -190,10 +187,10 @@ function endpointOf(config: Config): BrokerEndpoint {
 }
 
 /**
- * The model-facing tool name. Providers only accept `[a-zA-Z0-9_-]`, while an operation name is
- * the broker's own (`log.tail`); the tool calls the broker with the operation name it was given.
- * The `idsh_` prefix namespaces them, so a sanitized name such as `read` or `bash` cannot collide
- * with a built-in tool or another plugin's.
+ * The model-facing tool name. Providers only accept `[a-zA-Z0-9_-]`, while an operation name is the
+ * broker's own (`log.tail`); the tool calls the broker with the operation name it was given. The
+ * `idsh_` prefix namespaces them, so a sanitized name such as `read` or `bash` cannot collide with
+ * a built-in tool or another plugin's.
  */
 /** Start one long operation as a job and return its id. */
 function enqueueDeploy(
@@ -246,8 +243,7 @@ function toolFor(
   statePath: string,
 ): HostTool {
   // A long operation says so; the tool call and the socket wait inherit it together.
-  const timeoutMs =
-    op.timeoutMs === undefined ? undefined : op.timeoutMs + OP_TIMEOUT_SLACK_MS
+  const timeoutMs = op.timeoutMs === undefined ? undefined : op.timeoutMs + OP_TIMEOUT_SLACK_MS
   return {
     name: toolName(op.name),
     description: op.summary,
@@ -277,9 +273,7 @@ function toolFor(
     },
     async execute(args, exec) {
       const confirmation: Confirmation =
-        op.confirm === true
-          ? await confirmed(ctx, op, args, exec)
-          : { ok: true }
+        op.confirm === true ? await confirmed(ctx, op, args, exec) : { ok: true }
       if (confirmation.ok === false) {
         throw new Error(
           `host-ops: ${op.name} was not confirmed; the host was not touched` +
@@ -288,38 +282,19 @@ function toolFor(
               : `; the person replied: ${JSON.stringify(confirmation.reply)}`),
         )
       }
-      const endpointForCall =
-        timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
+      const endpointForCall = timeoutMs === undefined ? endpoint : { ...endpoint, timeoutMs }
       // A long operation is not enough: only a build with a per-build log can be followed. An
       // older broker declares no `log` and writes one shared file, so it stays synchronous.
-      const properties = op.input['properties'] as
-        Record<string, unknown> | undefined
+      const properties = op.input['properties'] as Record<string, unknown> | undefined
       const supportsLog = typeof properties?.['log'] === 'object'
-      if (
-        ctx.jobs !== undefined &&
-        supportsLog &&
-        FOLLOWS_BUILD_LOG.has(op.name)
-      ) {
-        const id = enqueueDeploy(
-          ctx,
-          op,
-          args,
-          exec,
-          call,
-          endpointForCall,
-          statePath,
-        )
+      if (ctx.jobs !== undefined && supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
+        const id = enqueueDeploy(ctx, op, args, exec, call, endpointForCall, statePath)
         return {
           text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
           truncated: false,
         }
       }
-      return call(
-        endpointForCall,
-        op.name,
-        args as Record<string, unknown>,
-        exec.signal,
-      )
+      return call(endpointForCall, op.name, args as Record<string, unknown>, exec.signal)
     },
   }
 }
@@ -328,10 +303,7 @@ function asOp(value: unknown): DescribedOp {
   if (value === null || typeof value !== 'object') {
     throw new Error('the broker described an operation that is not an object')
   }
-  const { name, summary, input, confirm, timeoutMs } = value as Record<
-    string,
-    unknown
-  >
+  const { name, summary, input, confirm, timeoutMs } = value as Record<string, unknown>
   if (
     typeof name !== 'string' ||
     typeof summary !== 'string' ||
@@ -339,9 +311,7 @@ function asOp(value: unknown): DescribedOp {
     typeof input !== 'object' ||
     Array.isArray(input)
   ) {
-    throw new Error(
-      'the broker described an operation without a name, summary or object input',
-    )
+    throw new Error('the broker described an operation without a name, summary or object input')
   }
   return {
     name,
@@ -350,9 +320,7 @@ function asOp(value: unknown): DescribedOp {
     ...(confirm === true ? { confirm: true } : {}),
     // The broker's per-operation budget travels with the operation; dropping it silently is how
     // a long build ends up waiting the default 15 seconds again.
-    ...(typeof timeoutMs === 'number' &&
-    Number.isInteger(timeoutMs) &&
-    timeoutMs > 0
+    ...(typeof timeoutMs === 'number' && Number.isInteger(timeoutMs) && timeoutMs > 0
       ? { timeoutMs }
       : {}),
   }
@@ -380,10 +348,7 @@ async function confirmed(
         id: 'confirm',
         header: 'Host operation',
         question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}\n\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
-        options: [
-          { label: CONFIRM_OPTION, description: op.summary },
-          { label: 'Cancel' },
-        ],
+        options: [{ label: CONFIRM_OPTION, description: op.summary }, { label: 'Cancel' }],
       },
     ],
     signal: exec.signal,
@@ -397,7 +362,5 @@ async function confirmed(
   // A typed answer is the person asking something, not approving: pass it back so the assistant
   // can answer and ask again, and leave the host untouched.
   const reply = item?.custom?.trim()
-  return reply === undefined || reply === ''
-    ? { ok: false }
-    : { ok: false, reply }
+  return reply === undefined || reply === '' ? { ok: false } : { ok: false, reply }
 }

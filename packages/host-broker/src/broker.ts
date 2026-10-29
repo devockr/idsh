@@ -8,16 +8,7 @@
  */
 import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import {
-  access,
-  appendFile,
-  chmod,
-  lstat,
-  mkdir,
-  rm,
-  stat,
-  unlink,
-} from 'node:fs/promises'
+import { access, appendFile, chmod, lstat, mkdir, rm, stat, unlink } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
@@ -115,9 +106,7 @@ export interface RunningBroker {
 }
 
 /** First candidate that exists and is executable. */
-async function firstExisting(
-  candidates: readonly string[],
-): Promise<string | undefined> {
+async function firstExisting(candidates: readonly string[]): Promise<string | undefined> {
   for (const candidate of candidates) {
     try {
       await access(candidate, fsConstants.X_OK)
@@ -142,35 +131,25 @@ const DEFAULTS = {
 } as const
 
 /** Start the broker and resolve once the socket is accepting. */
-export async function startBroker(
-  options: BrokerOptions,
-): Promise<RunningBroker> {
+export async function startBroker(options: BrokerOptions): Promise<RunningBroker> {
   const logDir = options.logDir ?? DEFAULTS.logDir
   const procDir = options.procDir ?? DEFAULTS.procDir
   const container = options.container ?? DEFAULTS.container
   if (!/^\w[\w.-]*$/u.test(container)) {
-    throw new Error(
-      `container must be a docker container name, got ${JSON.stringify(container)}`,
-    )
+    throw new Error(`container must be a docker container name, got ${JSON.stringify(container)}`)
   }
   const dockerPath = options.dockerPath ?? DEFAULTS.dockerPath
   const gitPath = options.gitPath ?? DEFAULTS.gitPath
-  const ipPath =
-    options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? DEFAULT_IP
-  const ssPath =
-    options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
-  const checkout =
-    options.checkout === undefined ? undefined : path.resolve(options.checkout)
+  const ipPath = options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? DEFAULT_IP
+  const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
+  const checkout = options.checkout === undefined ? undefined : path.resolve(options.checkout)
   if (checkout !== undefined) {
     const stats = await stat(checkout).catch(() => null)
     if (stats?.isDirectory() !== true) {
-      throw new Error(
-        `--checkout must be an existing directory, got ${checkout}`,
-      )
+      throw new Error(`--checkout must be an existing directory, got ${checkout}`)
     }
   }
-  const rateLimitPerMinute =
-    options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
+  const rateLimitPerMinute = options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
   // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,
   // and a program started with a delay past Node's ceiling is killed at 1 ms.
   const execTimeoutMs = Math.min(
@@ -234,9 +213,7 @@ export async function startBroker(
   // Only now is it clear no other broker is serving this socket; a tree another uid owns must not
   // keep the broker from starting, so the sweep is best effort.
   await rm(buildRoot, { recursive: true, force: true }).catch(() => null)
-  await mkdir(buildRoot, { recursive: true, mode: DIRECTORY_MODE }).catch(
-    () => null,
-  )
+  await mkdir(buildRoot, { recursive: true, mode: DIRECTORY_MODE }).catch(() => null)
   let inFlight = 0
   const server = net.createServer(socket => {
     sockets.add(socket)
@@ -335,14 +312,9 @@ function serve(
       queue = queue
         .then(() => {
           tracker.start()
-          return answer(
-            line,
-            sendAndWait,
-            context,
-            limiter,
-            auditPath,
-            now,
-          ).finally(() => tracker.end())
+          return answer(line, sendAndWait, context, limiter, auditPath, now).finally(() =>
+            tracker.end(),
+          )
         })
         .catch(() => {
           // One broken request must not stall every later one on this connection.
@@ -537,8 +509,7 @@ async function answer(
     if (error instanceof BrokerFault) {
       fault = error
     } else {
-      const message =
-        error instanceof Error ? error.message : 'the operation failed'
+      const message = error instanceof Error ? error.message : 'the operation failed'
       fault = new BrokerFault('internal', message)
     }
     await finish(faultAnswer(fault, requestId), {
@@ -561,10 +532,7 @@ async function execute(
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
   const definition = request.op === DESCRIBE_OP ? undefined : findOp(request.op)
-  const bucket =
-    request.op === DESCRIBE_OP
-      ? DESCRIBE_OP
-      : (definition?.name ?? UNKNOWN_BUCKET)
+  const bucket = request.op === DESCRIBE_OP ? DESCRIBE_OP : (definition?.name ?? UNKNOWN_BUCKET)
   if (!limiter.take(bucket, started)) {
     throw new BrokerFault(
       'too-many-requests',
@@ -574,10 +542,7 @@ async function execute(
     )
   }
   if (request.op !== DESCRIBE_OP && definition === undefined) {
-    throw new BrokerFault(
-      'unknown-op',
-      `no operation named ${JSON.stringify(request.op)}`,
-    )
+    throw new BrokerFault('unknown-op', `no operation named ${JSON.stringify(request.op)}`)
   }
   const raw =
     definition === undefined
@@ -585,9 +550,7 @@ async function execute(
       : await runOp(definition, request.args, context, deadline, controller)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
-    definition === undefined
-      ? capOutput(value.text)
-      : capOutput(value.text, definition.keep)
+    definition === undefined ? capOutput(value.text) : capOutput(value.text, definition.keep)
   return {
     ...capped,
     ...(value.after === undefined ? {} : { after: value.after }),
@@ -595,10 +558,7 @@ async function execute(
 }
 
 /** One failed answer, with the request id when the caller sent one. */
-function faultAnswer(
-  fault: BrokerFault,
-  requestId: string | undefined,
-): BrokerResponse {
+function faultAnswer(fault: BrokerFault, requestId: string | undefined): BrokerResponse {
   return {
     ...(requestId === undefined ? {} : { id: requestId }),
     ok: false,
@@ -637,10 +597,7 @@ function runOp(
   controller?: AbortController,
 ): Promise<Execution | string> {
   const running = op.run(args, context)
-  const bounded = withTimeout(
-    running,
-    Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS,
-  )
+  const bounded = withTimeout(running, Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS)
   // A timed-out operation is also stopped: the program's group is killed through the signal, so it
   // cannot keep working (or retag an image) after the answer.
   void bounded.catch(() => controller?.abort())
@@ -674,10 +631,7 @@ function boundedArgs(args: Record<string, unknown>): string {
     : `${encoded.slice(0, MAX_AUDIT_ARGS_CHARS)}…`
 }
 
-function appendAudit(
-  file: string,
-  record: Record<string, unknown>,
-): Promise<void> {
+function appendAudit(file: string, record: Record<string, unknown>): Promise<void> {
   // `appendFile` writes the whole line (looping over partial writes) and creates the file with
   // `FILE_MODE`; the startup chmod covers a file that rotation installed.
   return appendFile(file, `${JSON.stringify(record)}\n`, { mode: FILE_MODE })
@@ -735,9 +689,7 @@ function socketIsLive(socketPath: string): Promise<boolean> {
     socket.setTimeout(LIVENESS_TIMEOUT_MS, () => done(true))
     socket.once('connect', () => done(true))
     socket.once('error', (error: NodeJS.ErrnoException) => {
-      done(
-        error.code === 'ECONNREFUSED' || error.code === 'ENOENT' ? false : true,
-      )
+      done(error.code === 'ECONNREFUSED' || error.code === 'ENOENT' ? false : true)
     })
   })
 }

@@ -3,23 +3,20 @@
 /**
  * Boot a throwaway `dsh web` instance and drive it with a real browser.
  *
- * The point is to verify things that only a browser can show — a client plugin's
- * runtime effect, the settings surface a remote page gets, touch behaviour — without
- * touching the live profile or the live session. Everything lives in a disposable
- * $DSH_HOME; the browser itself lives under ~/.dsh/cache so a container rebuild does
- * not re-download it.
+ * The point is to verify things that only a browser can show — a client plugin's runtime effect,
+ * the settings surface a remote page gets, touch behaviour — without touching the live profile or
+ * the live session. Everything lives in a disposable $DSH_HOME; the browser itself lives under
+ * ~/.dsh/cache so a container rebuild does not re-download it.
  *
- * Usage:
- *   node tools/dev/ui-probe.mts [--install <pnpm-spec>]... [--bare] [--host <host>] [--keep] [--shot <name>]
+ * Usage: node tools/dev/ui-probe.mts [--install <pnpm-spec>]... [--bare] [--host <host>] [--keep]
+ * [--shot <name>]
  *
- * --install     add a package to the probe profile before booting (repeatable); a spec whose
- *               package is already there replaces it
- * --bare        start from the shipped web template alone, without the plugin set the image
- *               baked. The default inherits that set, since finding bugs in those plugins is
- *               what this tool is for; --bare narrows down which one is at fault
- * --host        the authority to browse, default 127.0.0.1; pass a LAN address to
- *               reproduce what a remote page sees
- * --keep        leave the probe instance and its $DSH_HOME behind for poking
+ * --install add a package to the probe profile before booting (repeatable); a spec whose package is
+ * already there replaces it --bare start from the shipped web template alone, without the plugin
+ * set the image baked. The default inherits that set, since finding bugs in those plugins is what
+ * this tool is for; --bare narrows down which one is at fault --host the authority to browse,
+ * default 127.0.0.1; pass a LAN address to reproduce what a remote page sees --keep leave the probe
+ * instance and its $DSH_HOME behind for poking
  */
 
 // Must be set before playwright resolves its browser path. The default is a bind
@@ -34,7 +31,8 @@ const argv = process.argv.slice(2)
 const flag = (name: string): boolean => argv.includes(name)
 /**
  * Every operand of a repeatable `name`, rejecting an absent one or a following flag: a silently
- * defaulted `--host` would probe the wrong origin, and an operand that looks like a flag is a typo.
+ * defaulted `--host` would probe the wrong origin, and an operand that looks like a flag is a
+ * typo.
  */
 const values = (name: string): string[] => {
   const found: string[] = []
@@ -56,10 +54,7 @@ const values = (name: string): string[] => {
 }
 /** The loopback authority, however it is spelled — `localhost` is not a remote origin. */
 const isLoopback = (host: string): boolean =>
-  host === 'localhost' ||
-  host === '::1' ||
-  host === '[::1]' ||
-  host.startsWith('127.')
+  host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.')
 
 // Named so the numbers say what they are: waits are for the UI to settle, and the slices are how
 // much of a long value is worth printing. Numbers inside a page.evaluate stay literal — that code
@@ -94,9 +89,7 @@ const PROFILE = process.env.PROBE_PROFILE ?? 'probe'
 // Every use of it is a path component under PROFILES, and the --bare cleanup deletes that tree, so
 // a value that is anything but a single directory name is refused rather than joined onto a path.
 if (!/^\w[\w.-]*$/.test(PROFILE)) {
-  throw new Error(
-    `PROBE_PROFILE must be a single directory name, not ${JSON.stringify(PROFILE)}`,
-  )
+  throw new Error(`PROBE_PROFILE must be a single directory name, not ${JSON.stringify(PROFILE)}`)
 }
 const HOST = values('--host')[0] ?? '127.0.0.1'
 const INSTALLS = values('--install')
@@ -114,9 +107,7 @@ const SCENARIO = values('--scenario')[0]
 const DSH = process.env.PROBE_DSH ?? 'dsh'
 // The launcher wants --expose-internals, exactly as entrypoint.sh invokes it.
 const dshArgv = (args: string[]): [string, string[]] =>
-  DSH.endsWith('.js')
-    ? [process.execPath, ['--expose-internals', DSH, ...args]]
-    : [DSH, args]
+  DSH.endsWith('.js') ? [process.execPath, ['--expose-internals', DSH, ...args]] : [DSH, args]
 
 // The instance is ours to clean up whatever happens: a rejected boot, a thrown scenario or an
 // early exit all land here, so nothing outlives the probe unless --keep asked for it — and a HOME
@@ -183,12 +174,8 @@ const run = (
     let stderr = ''
     proc.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString()))
     proc.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString()))
-    proc.on('error', (error: Error) =>
-      resolve({ status: 1, stdout, stderr: String(error) }),
-    )
-    proc.on('close', (status: number | null) =>
-      resolve({ status: status ?? 1, stdout, stderr }),
-    )
+    proc.on('error', (error: Error) => resolve({ status: 1, stdout, stderr: String(error) }))
+    proc.on('close', (status: number | null) => resolve({ status: status ?? 1, stdout, stderr }))
   })
 
 /**
@@ -223,8 +210,7 @@ async function bakedSpecs(): Promise<string[]> {
 
 /** Say which set is in play: a silent default that installed nothing reads as success. */
 function reportBaked(inherited: string[]) {
-  const found =
-    inherited.length > 0 ? `${inherited.length} to install` : 'none found'
+  const found = inherited.length > 0 ? `${inherited.length} to install` : 'none found'
   process.stdout.write(`image plugin set: ${found}\n`)
   if (inherited.length === 0) {
     process.stderr.write(
@@ -253,16 +239,9 @@ async function prepareProfile() {
       () => false,
     ))
   ) {
-    const created = await run([
-      PROFILE,
-      '--from-default-profile',
-      'web',
-      '--dump-config',
-    ])
+    const created = await run([PROFILE, '--from-default-profile', 'web', '--dump-config'])
     if (created.status !== 0) {
-      throw new Error(
-        `could not create the probe profile:\n${created.stdout}${created.stderr}`,
-      )
+      throw new Error(`could not create the probe profile:\n${created.stdout}${created.stderr}`)
     }
   }
   // Say which set is in play: a silent default that installed nothing looked exactly like a
@@ -277,15 +256,11 @@ async function prepareProfile() {
   ]
   for (const [spec, source] of specs) {
     const r = await run(['plugin', '--profile', PROFILE, 'add', spec])
-    process.stdout.write(
-      `install (${source}) ${spec}: ${r.status === 0 ? 'ok' : 'FAILED'}\n`,
-    )
+    process.stdout.write(`install (${source}) ${spec}: ${r.status === 0 ? 'ok' : 'FAILED'}\n`)
     if (r.status !== 0) {
       // Booting anyway would probe a profile without the plugin that was asked for — the baked
       // set or the caller's — and still exit 0. Fail here, where the message means something.
-      throw new Error(
-        `could not install ${spec} (from ${source}):\n${r.stdout}${r.stderr}`,
-      )
+      throw new Error(`could not install ${spec} (from ${source}):\n${r.stdout}${r.stderr}`)
     }
   }
 }
@@ -293,10 +268,10 @@ async function prepareProfile() {
 /**
  * Boot the instance, wait for the readiness line, return { url, token, child }.
  *
- * `--host` is what defines `ctx.webStartup.host`. The baked profile ships
- * @idsh/remote-access, whose webserver row falls back to the wildcard when that is undefined,
- * and 0.2.1-alpha.2 and later refuse the wildcard from any layer — so leaving the bind to the
- * profile cannot boot at all, and a patch overlay is not needed to say one concrete address.
+ * `--host` is what defines `ctx.webStartup.host`. The baked profile ships @idsh/remote-access,
+ * whose webserver row falls back to the wildcard when that is undefined, and 0.2.1-alpha.2 and
+ * later refuse the wildcard from any layer — so leaving the bind to the profile cannot boot at all,
+ * and a patch overlay is not needed to say one concrete address.
  */
 async function boot() {
   // Launcher options have to precede the app's: the launcher hands everything from
@@ -317,47 +292,43 @@ async function boot() {
     env: { ...process.env, DSH_HOME: HOME },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  return new Promise<{ url: string; token: string | null; out: string }>(
-    (resolve, reject) => {
-      if (child === undefined) {
-        reject(new Error('dsh did not spawn'))
+  return new Promise<{ url: string; token: string | null; out: string }>((resolve, reject) => {
+    if (child === undefined) {
+      reject(new Error('dsh did not spawn'))
 
+      return
+    }
+
+    const proc = child
+    let out = ''
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM')
+      reject(new Error(`no readiness line in 60s:\n${out}`))
+    }, READINESS_TIMEOUT_MS)
+    const onData = (chunk: Buffer): void => {
+      out += chunk.toString()
+      const m = /dsh web: (https?:\/\/\S+)/.exec(out)
+      if (!m) {
         return
       }
-
-      const proc = child
-      let out = ''
-      const timer = setTimeout(() => {
-        proc.kill('SIGTERM')
-        reject(new Error(`no readiness line in 60s:\n${out}`))
-      }, READINESS_TIMEOUT_MS)
-      const onData = (chunk: Buffer): void => {
-        out += chunk.toString()
-        const m = /dsh web: (https?:\/\/\S+)/.exec(out)
-        if (!m) {
-          return
-        }
-        clearTimeout(timer)
-        proc.stdout?.off('data', onData)
-        const url = new URL(
-          isLoopback(HOST) ? m[1] : m[1].replace(/\/\/[^/:]+/, `//${HOST}`),
-        )
-        resolve({
-          url: url.toString(),
-          token: url.searchParams.get('token'),
-          out,
-        })
-      }
-      proc.stdout?.on('data', onData)
-      proc.stderr?.on('data', (c: Buffer) => (out += c.toString()))
-      proc.on('exit', (code: number | null) => {
-        // The timer would otherwise hold the event loop for its full minute and then kill a
-        // process that has already exited.
-        clearTimeout(timer)
-        reject(new Error(`dsh exited early (${code}):\n${out}`))
+      clearTimeout(timer)
+      proc.stdout?.off('data', onData)
+      const url = new URL(isLoopback(HOST) ? m[1] : m[1].replace(/\/\/[^/:]+/, `//${HOST}`))
+      resolve({
+        url: url.toString(),
+        token: url.searchParams.get('token'),
+        out,
       })
-    },
-  )
+    }
+    proc.stdout?.on('data', onData)
+    proc.stderr?.on('data', (c: Buffer) => (out += c.toString()))
+    proc.on('exit', (code: number | null) => {
+      // The timer would otherwise hold the event loop for its full minute and then kill a
+      // process that has already exited.
+      clearTimeout(timer)
+      reject(new Error(`dsh exited early (${code}):\n${out}`))
+    })
+  })
 }
 
 const { chromium } = await import('playwright')
@@ -391,19 +362,13 @@ if (flag('--no-browser')) {
     failed = true
   }
   const cookieNote = cookie ? `${cookie.length} bytes` : 'NONE'
-  process.stdout.write(
-    `token       : ${exchange.status} → cookie ${cookieNote}\n`,
-  )
+  process.stdout.write(`token       : ${exchange.status} → cookie ${cookieNote}\n`)
   const res = await fetch(`${origin}/`, { headers: { cookie } })
   const html = await res.text()
   // The shell injects it as globalThis["__DSH_BOOT__"], with `<` and `&` escaped so a
   // plugin-controlled string cannot break out of the script element.
-  const boot = /globalThis\["__DSH_BOOT__"\]\s*=\s*(\S[\s\S]*?)<\/script>/.exec(
-    html,
-  )
-  const graph = (boot?.[1] ?? '')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&amp;', '&')
+  const boot = /globalThis\["__DSH_BOOT__"\]\s*=\s*(\S[\s\S]*?)<\/script>/.exec(html)
+  const graph = (boot?.[1] ?? '').replaceAll('&quot;', '"').replaceAll('&amp;', '&')
   process.stdout.write(
     `shell       : ${res.status} ${res.headers.get('content-type') ?? ''} ${html.length} bytes\n`,
   )
@@ -433,11 +398,9 @@ if (flag('--no-browser')) {
   // URLs appear both escaped (inside the boot graph) and as plain script attributes.
   const urls = [
     ...new Set(
-      [
-        ...html.matchAll(
-          /["']((?:plugins|\/plugins)\/[^"']+client\.js[^"']*)["']/g,
-        ),
-      ].map(m => m[1].replaceAll('&quot;', '"').replaceAll('&amp;', '&')),
+      [...html.matchAll(/["']((?:plugins|\/plugins)\/[^"']+client\.js[^"']*)["']/g)].map(m =>
+        m[1].replaceAll('&quot;', '"').replaceAll('&amp;', '&'),
+      ),
     ),
   ]
   process.stdout.write(`bundle urls : ${urls.length}\n`)
@@ -457,9 +420,7 @@ if (flag('--no-browser')) {
     if (res.status >= HTTP_BAD_REQUEST) {
       failed = true
     }
-    process.stdout.write(
-      `  ${res.status} ${res.headers.get('content-type') ?? ''} ${u}\n`,
-    )
+    process.stdout.write(`  ${res.status} ${res.headers.get('content-type') ?? ''} ${u}\n`)
   }
   if (KEEP) {
     process.stdout.write(`kept: ${HOME} (pid ${child?.pid})\n`)
@@ -505,15 +466,10 @@ const page = await browser.newPage(
 const failures: string[] = []
 
 /** The marker's last stage is the icon: a run that stopped short is a failure, not a value. */
-function checkMobileMarker(probe: {
-  marker?: string
-  appleTouchIcon: boolean
-}): void {
+function checkMobileMarker(probe: { marker?: string; appleTouchIcon: boolean }): void {
   const marker = probe.marker
   if (!marker?.includes('icon:')) {
-    failures.push(
-      `the mobile marker never reached its icon stage: ${marker ?? '(absent)'}`,
-    )
+    failures.push(`the mobile marker never reached its icon stage: ${marker ?? '(absent)'}`)
   } else if (!marker.endsWith('icon:ok')) {
     failures.push(`the mobile marker stopped at ${marker}`)
   }
@@ -537,13 +493,9 @@ page.on('pageerror', e => problems.push(`pageerror: ${e.message}`))
 // Name the failing URL: a bare "502" in the console says nothing about who answered.
 page.on(
   'response',
-  r =>
-    r.status() >= HTTP_BAD_REQUEST &&
-    problems.push(`http ${r.status()} ${r.url()}`),
+  r => r.status() >= HTTP_BAD_REQUEST && problems.push(`http ${r.status()} ${r.url()}`),
 )
-page.on('requestfailed', r =>
-  problems.push(`failed ${r.url()} — ${r.failure()?.errorText ?? ''}`),
-)
+page.on('requestfailed', r => problems.push(`failed ${r.url()} — ${r.failure()?.errorText ?? ''}`))
 
 try {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
@@ -558,8 +510,7 @@ try {
   // way and only the timeout ends it; --scenario mobile is what fails the run when it never comes.
   try {
     await page.waitForFunction(
-      (stage: string) =>
-        document.body.dataset.idshMobile?.includes(stage) ?? false,
+      (stage: string) => document.body.dataset.idshMobile?.includes(stage) ?? false,
       'icon:',
       { timeout: WAIT_FOR_SETTLE_MS },
     )
@@ -574,9 +525,7 @@ try {
   if (SCENARIO === 'discover-settings') {
     const clicked = await page.evaluate(() => {
       const all = [
-        ...document.querySelectorAll(
-          'button, a, [role="button"], [role="tab"], li, span, div',
-        ),
+        ...document.querySelectorAll('button, a, [role="button"], [role="tab"], li, span, div'),
       ]
       const el = all.findLast(e => e.textContent.trim() === 'Settings')
       if (!el) {
@@ -606,9 +555,7 @@ try {
         .filter(x => x.t),
     )
     const controlLines = controls.map(c => `  ${c.r} — ${c.t}`).join('\n')
-    process.stdout.write(
-      `clicked settings: ${clicked}\ncontrols:\n${controlLines}\n`,
-    )
+    process.stdout.write(`clicked settings: ${clicked}\ncontrols:\n${controlLines}\n`)
     await page.screenshot({ path: path.join(SHOTS, `${SHOT}-settings.png`) })
   }
 
@@ -618,9 +565,7 @@ try {
     const clickText = (text: string): Promise<boolean> =>
       page.evaluate(t => {
         const all = [
-          ...document.querySelectorAll(
-            'button, a, [role="button"], [role="tab"], li, span, div',
-          ),
+          ...document.querySelectorAll('button, a, [role="button"], [role="tab"], li, span, div'),
         ]
 
         const el = all.findLast(e => e.textContent.trim() === t)
@@ -639,9 +584,7 @@ try {
         scheme: getComputedStyle(document.documentElement).colorScheme,
         bg: getComputedStyle(document.body).backgroundColor,
         buttons: [...document.querySelectorAll('button')]
-          .filter(b =>
-            ['Light', 'Dark', 'System'].includes(b.textContent.trim()),
-          )
+          .filter(b => ['Light', 'Dark', 'System'].includes(b.textContent.trim()))
           .map(
             b =>
               `${b.textContent.trim()}:${b.getAttribute('aria-pressed') ?? b.getAttribute('aria-checked') ?? b.className.slice(0, 24)}`,
@@ -650,20 +593,14 @@ try {
 
     process.stdout.write(`open settings: ${await clickText('Settings')}\n`)
     await page.waitForTimeout(WAIT_FOR_RENDER_MS)
-    process.stdout.write(
-      `before       : ${JSON.stringify(await themeState())}\n`,
-    )
+    process.stdout.write(`before       : ${JSON.stringify(await themeState())}\n`)
     process.stdout.write(`click DARK   : ${await clickText('Dark')}\n`)
     await page.waitForTimeout(WAIT_AFTER_CLICK_MS)
-    process.stdout.write(
-      `after click  : ${JSON.stringify(await themeState())}\n`,
-    )
+    process.stdout.write(`after click  : ${JSON.stringify(await themeState())}\n`)
     await page.screenshot({ path: path.join(SHOTS, `${SHOT}-after-dark.png`) })
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(WAIT_FOR_SETTLE_MS)
-    process.stdout.write(
-      `after reload : ${JSON.stringify(await themeState())}\n`,
-    )
+    process.stdout.write(`after reload : ${JSON.stringify(await themeState())}\n`)
     await page.screenshot({
       path: path.join(SHOTS, `${SHOT}-after-reload.png`),
     })
@@ -674,11 +611,7 @@ try {
   // the real page — not by reading the plugin's own source back.
   if (SCENARIO === 'discover-composer') {
     const found = await page.evaluate(() =>
-      [
-        ...document.querySelectorAll(
-          '[contenteditable="true"], textarea, input',
-        ),
-      ].map(el => ({
+      [...document.querySelectorAll('[contenteditable="true"], textarea, input')].map(el => ({
         tag: el.tagName,
         inXterm: !!el.closest('.xterm'),
         attrs: [...el.attributes]
@@ -722,9 +655,7 @@ try {
         const editable = document.createElement('div')
         editable.setAttribute('contenteditable', value)
         editable.style.cssText = 'position:fixed;left:-9999px;top:0'
-        editable.addEventListener('beforeinput', e =>
-          insertedBreaks.push(e.inputType),
-        )
+        editable.addEventListener('beforeinput', e => insertedBreaks.push(e.inputType))
         document.body.append(editable)
         editable.focus()
         editable.dispatchEvent(
@@ -773,19 +704,14 @@ try {
         enterEvents,
         insertedBreaks,
         inputEvents: inputSeen,
-        composerEditables:
-          document.querySelectorAll('[contenteditable]').length,
+        composerEditables: document.querySelectorAll('[contenteditable]').length,
         marker: document.body.dataset.idshMobile,
-        appleTouchIcon: !!document.querySelector(
-          'link[rel="apple-touch-icon"]',
-        ),
+        appleTouchIcon: !!document.querySelector('link[rel="apple-touch-icon"]'),
       }
     })
     // The rewrite is the point of this scenario, so it has to fail the run when it stops working.
     if (probe.enterEvents.length > 0) {
-      failures.push(
-        `the plain Enter reached the document: ${JSON.stringify(probe.enterEvents)}`,
-      )
+      failures.push(`the plain Enter reached the document: ${JSON.stringify(probe.enterEvents)}`)
     }
     if (
       probe.insertedBreaks.length !== 2 ||
@@ -840,9 +766,7 @@ try {
     // Printing and returning leaves the piped server attached to this process, so the probe would
     // never give the shell back: unref the child and end on purpose, leaving it running. `else`, not
     // an early return — a return in a finally would discard a thrown scenario's stack trace.
-    process.stdout.write(
-      `kept: ${HOME} (pid ${child?.pid})\n${out.slice(-OUTPUT_TAIL_CHARS)}\n`,
-    )
+    process.stdout.write(`kept: ${HOME} (pid ${child?.pid})\n${out.slice(-OUTPUT_TAIL_CHARS)}\n`)
     child?.unref()
   } else {
     child?.kill('SIGTERM')

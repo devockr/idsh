@@ -5,12 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import {
-  apply,
-  registerTools,
-  type HostContext,
-  type HostTool,
-} from '../src/index.ts'
+import { apply, registerTools, type HostContext, type HostTool } from '../src/index.ts'
 import { buildLogSource, type JobSpec } from '../src/stream.ts'
 
 import { fakeBroker } from './server.ts'
@@ -99,10 +94,7 @@ void test('the broker table becomes one tool per operation', async () => {
       { signal: new AbortController().signal },
     )
     assert.deepEqual(result, { text: 'answer', truncated: false })
-    const rendered = tools[0].output.render(
-      {},
-      { text: 'answer', truncated: true },
-    )
+    const rendered = tools[0].output.render({}, { text: 'answer', truncated: true })
     assert.match(rendered[0].text, /capped this answer/u)
     assert.deepEqual(broker.requests.at(-1), {
       op: 'log.tail',
@@ -122,8 +114,7 @@ void test('a broker that is down warns and registers no tools', async () => {
 
 void test('a table that is not an array registers nothing', async () => {
   const broker = await fakeBroker(
-    () =>
-      `${JSON.stringify({ ok: true, result: JSON.stringify({ nope: true }) })}\n`,
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify({ nope: true }) })}\n`,
   )
   try {
     const { ctx, tools, warnings } = context()
@@ -158,19 +149,13 @@ void test('a bad config registers nothing and warns', async () => {
   const alsoBad = context()
   await apply(alsoBad.ctx, { timeoutMs: 0 })
   assert.deepEqual(alsoBad.tools, [])
-  assert.match(
-    alsoBad.warnings[0] ?? '',
-    /timeoutMs must be a positive integer/u,
-  )
+  assert.match(alsoBad.warnings[0] ?? '', /timeoutMs must be a positive integer/u)
 
   // statePath is part of the same contract now: an invalid one registers no tools either.
   const stateBad = context()
   await apply(stateBad.ctx, { statePath: '' })
   assert.deepEqual(stateBad.tools, [])
-  assert.match(
-    stateBad.warnings[0] ?? '',
-    /statePath must be a non-empty string/u,
-  )
+  assert.match(stateBad.warnings[0] ?? '', /statePath must be a non-empty string/u)
 })
 
 void test('a registration that fails rolls back the ones already made', async () => {
@@ -192,15 +177,11 @@ void test('a registration that fails rolls back the ones already made', async ()
     },
     logger: { warn: () => true },
     userQuestions: {
-      ask: () =>
-        Promise.resolve({ answers: [{ id: 'confirm', selected: [] }] }),
+      ask: () => Promise.resolve({ answers: [{ id: 'confirm', selected: [] }] }),
     },
   }
   try {
-    await assert.rejects(
-      registerTools(ctx, { socketPath: broker.socketPath }),
-      /registry is full/u,
-    )
+    await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }), /registry is full/u)
     assert.deepEqual(tools, ['idsh_log_tail'])
     assert.deepEqual(disposed, ['idsh_log_tail'])
   } finally {
@@ -215,10 +196,7 @@ void test('two operations that map to the same tool name register nothing', asyn
   )
   try {
     const { ctx, tools } = context()
-    await assert.rejects(
-      registerTools(ctx, { socketPath: broker.socketPath }),
-      /same tool name/u,
-    )
+    await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }), /same tool name/u)
     assert.deepEqual(tools, [])
   } finally {
     await broker.close()
@@ -231,10 +209,7 @@ void test('a table entry that is not an object rejects the table', async () => {
   )
   try {
     const { ctx, tools } = context()
-    await assert.rejects(
-      registerTools(ctx, { socketPath: broker.socketPath }),
-      /not an object/u,
-    )
+    await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }), /not an object/u)
     assert.deepEqual(tools, [])
   } finally {
     await broker.close()
@@ -273,10 +248,7 @@ void test('a destructive operation asks before it calls the broker', async () =>
 
     const accepted = context(['Run'])
     await registerTools(accepted.ctx, { socketPath: broker.socketPath })
-    const answer = await accepted.tools[0].execute(
-      {},
-      { signal: new AbortController().signal },
-    )
+    const answer = await accepted.tools[0].execute({}, { signal: new AbortController().signal })
     assert.deepEqual(answer, { text: JSON.stringify(table), truncated: false })
     assert.deepEqual(
       broker.requests.map(request => request.op),
@@ -321,9 +293,7 @@ void test('execute passes the operation timeout to the caller', async () => {
     },
   ]
   const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
-  const broker = await fakeBroker(request =>
-    request.op === 'ops.describe' ? describe : null,
-  )
+  const broker = await fakeBroker(request => (request.op === 'ops.describe' ? describe : null))
   const calls: Array<{ timeoutMs?: number }> = []
   const call = (
     endpoint: { timeoutMs?: number },
@@ -334,9 +304,7 @@ void test('execute passes the operation timeout to the caller', async () => {
       return Promise.resolve({ text: JSON.stringify(table), truncated: false })
     }
     calls.push(endpoint)
-    return Promise.reject(
-      new Error(`did not answer within ${String(endpoint.timeoutMs)} ms`),
-    )
+    return Promise.reject(new Error(`did not answer within ${String(endpoint.timeoutMs)} ms`))
   }
   try {
     const { ctx, tools } = context(['Run'])
@@ -373,10 +341,7 @@ void test('a typed answer is a reply, not a confirmation', async () => {
     )
     try {
       await registerTools(ctx, { socketPath: broker.socketPath })
-      return await tools[0].execute(
-        {},
-        { signal: new AbortController().signal },
-      )
+      return await tools[0].execute({}, { signal: new AbortController().signal })
     } finally {
       await broker.close()
     }
@@ -683,15 +648,10 @@ void test('a call id the broker would reject is replaced by a safe log name', as
     }
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
     // A dot is not a broker-safe log id, so the plugin must not forward it.
-    await built.tools[0].execute(
-      {},
-      { signal: new AbortController().signal, callId: 'call.1' },
-    )
+    await built.tools[0].execute({}, { signal: new AbortController().signal, callId: 'call.1' })
     const spec = started[0]
     // The safe name is what the label's arguments carry, since that is what the broker sees.
-    const log = (
-      JSON.parse(spec.label.slice('deploy.build '.length)) as { log: string }
-    ).log
+    const log = (JSON.parse(spec.label.slice('deploy.build '.length)) as { log: string }).log
     assert.match(log, /^build-[A-Za-z0-9]+$/u)
     assert.doesNotMatch(log, /call\.1/u)
   } finally {
@@ -731,10 +691,7 @@ void test('a broker without the log argument stays synchronous', async () => {
       },
     }
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
-    await built.tools[0].execute(
-      {},
-      { signal: new AbortController().signal, callId: 'call-1' },
-    )
+    await built.tools[0].execute({}, { signal: new AbortController().signal, callId: 'call-1' })
     // No per-build log to follow, so an old broker stays synchronous: no job, the answer is the call.
     assert.deepEqual(started, [])
   } finally {

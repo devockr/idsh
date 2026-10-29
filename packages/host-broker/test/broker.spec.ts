@@ -34,11 +34,7 @@ const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
 const roots: string[] = []
 
 after(async () => {
-  await Promise.all(
-    roots.map(root =>
-      rm(root, { recursive: true, force: true }).catch(() => null),
-    ),
-  )
+  await Promise.all(roots.map(root => rm(root, { recursive: true, force: true }).catch(() => null)))
 })
 
 const SMALL_LINE_LIMIT = 10
@@ -60,7 +56,7 @@ interface FakeHost {
 /**
  * A throwaway host: a log directory, a proc directory, a socket and an audit log.
  *
- * @returns the paths the broker is started with.
+ * @returns The paths the broker is started with.
  */
 async function fakeHost(): Promise<FakeHost> {
   const root = await mkdtemp(path.join(tmpdir(), 'idsh-host-'))
@@ -71,12 +67,7 @@ async function fakeHost(): Promise<FakeHost> {
   await mkdir(procDir)
   await writeFile(
     path.join(logDir, 'messages'),
-    [
-      'boot ok',
-      'error: disk 1 failed',
-      'warn: smart pending',
-      'error: retry failed',
-    ].join('\n'),
+    ['boot ok', 'error: disk 1 failed', 'warn: smart pending', 'error: retry failed'].join('\n'),
   )
   await writeFile(
     path.join(procDir, 'mdstat'),
@@ -103,8 +94,8 @@ interface Client {
 /**
  * A line-oriented client: send one request, await the next response.
  *
- * @param socketPath the broker's socket.
- * @returns the client.
+ * @param socketPath The broker's socket.
+ * @returns The client.
  */
 function client(socketPath: string): Client {
   const socket = net.connect(socketPath)
@@ -143,13 +134,10 @@ function client(socketPath: string): Client {
 }
 
 void test('parseRequest accepts the shape it documents', () => {
-  assert.deepEqual(
-    parseRequest('{"op":"proc.read","args":{"file":"mdstat"}}'),
-    {
-      op: 'proc.read',
-      args: { file: 'mdstat' },
-    },
-  )
+  assert.deepEqual(parseRequest('{"op":"proc.read","args":{"file":"mdstat"}}'), {
+    op: 'proc.read',
+    args: { file: 'mdstat' },
+  })
   assert.deepEqual(parseRequest('{"id":"1","op":"x","args":{}}'), {
     id: '1',
     op: 'x',
@@ -420,15 +408,10 @@ void test('capOutput never splits a character or passes its ceiling', () => {
 })
 
 /** A log big enough to exercise the tail window; each row is exactly `rowLength` bytes. */
-function bigLog(
-  rowCount: number,
-  head: string,
-  rowLength = 32,
-): { content: string; last: string } {
+function bigLog(rowCount: number, head: string, rowLength = 32): { content: string; last: string } {
   const row = (index: number) =>
     `R${String(index).padStart(7, '0')}-${'x'.repeat(rowLength - 10)}\n`
-  const content =
-    head + Array.from({ length: rowCount }, (_, i) => row(i)).join('')
+  const content = head + Array.from({ length: rowCount }, (_, i) => row(i)).join('')
   return { content, last: row(rowCount - 1).trimEnd() }
 }
 
@@ -527,9 +510,7 @@ void test('an over-long line is answered before the connection closes', async ()
     procDir: host.procDir,
   })
   const socket = net.connect(host.socketPath)
-  const closed = new Promise<void>(resolve =>
-    socket.once('close', () => resolve()),
-  )
+  const closed = new Promise<void>(resolve => socket.once('close', () => resolve()))
   const answer = await new Promise<BrokerResponse>((resolve, reject) => {
     let buffer = ''
     socket.on('data', (chunk: Buffer) => {
@@ -633,10 +614,7 @@ void test('deploy.status and deploy.log drive the docker client', async () => {
   try {
     const status = await connection.request({ op: 'deploy.status', args: {} })
     assert.equal(status.ok, true)
-    assert.match(
-      status.result ?? '',
-      /^inspect --type container --format .*web$/mu,
-    )
+    assert.match(status.result ?? '', /^inspect --type container --format .*web$/mu)
     assert.match(status.result ?? '', /\{\{\.Config\.Image\}\}/u)
     assert.match(status.result ?? '', /container=\{\{\.Id\}\}/u)
     assert.match(status.result ?? '', /index \.State "Health"/u)
@@ -852,11 +830,9 @@ void test('a timed-out program does not leave its child behind', async () => {
   const host = await fakeHost()
   const dockerPath = path.join(host.root, 'docker')
   const pidFile = path.join(host.root, 'child.pid')
-  await writeFile(
-    dockerPath,
-    `#!/bin/sh\nsleep 5 &\necho $! > '${pidFile}'\nwait\n`,
-    { mode: 0o755 },
-  )
+  await writeFile(dockerPath, `#!/bin/sh\nsleep 5 &\necho $! > '${pidFile}'\nwait\n`, {
+    mode: 0o755,
+  })
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -1120,10 +1096,7 @@ esac
     assert.match(docker, /--entrypoint sh/u)
     assert.match(
       docker,
-      new RegExp(
-        `--user ${String(process.getuid?.())}:${String(process.getgid?.())}`,
-        'u',
-      ),
+      new RegExp(`--user ${String(process.getuid?.())}:${String(process.getgid?.())}`, 'u'),
     )
     assert.match(docker, /--file .*Dockerfile\.dev/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
@@ -1290,10 +1263,7 @@ esac
 
 void test('a planted build directory is swept at boot', async () => {
   const host = await fakeHost()
-  const key = createHash('sha256')
-    .update(path.resolve(host.socketPath))
-    .digest('hex')
-    .slice(0, 16)
+  const key = createHash('sha256').update(path.resolve(host.socketPath)).digest('hex').slice(0, 16)
   const junk = path.join(host.root, 'build', key, 'junk')
   await mkdir(junk, { recursive: true })
   const broker = await startBroker({
@@ -1362,10 +1332,7 @@ echo "$*"
   try {
     const answer = await connection.request({ op: 'deploy.rollback', args: {} })
     assert.equal(answer.ok, true)
-    assert.match(
-      answer.result ?? '',
-      new RegExp('^rollback queued to ' + ROLLBACK_TARGET, 'u'),
-    )
+    assert.match(answer.result ?? '', new RegExp('^rollback queued to ' + ROLLBACK_TARGET, 'u'))
     // The tag and compose are deferred: nothing has happened when the answer arrives.
     const logPath = path.join(host.root, 'compose.log')
     await assert.rejects(readFile(logPath, 'utf8'))
@@ -1382,10 +1349,7 @@ echo "$*"
       /compose -f docker-compose\.yml -f docker-compose\.dev\.yml up -d --no-build/u,
     )
     const docker = await readFile(dockerLog, 'utf8')
-    assert.match(
-      docker,
-      new RegExp('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev', 'u'),
-    )
+    assert.match(docker, new RegExp('tag ' + ROLLBACK_TARGET + ' devockr/idsh:dev', 'u'))
   } finally {
     connection.close()
     await broker.close()
@@ -1414,10 +1378,7 @@ void test('deploy.rollback without a recorded target is refused', async () => {
 
 void test('deploy.rollback refuses a rollback file with more than one line', async () => {
   const host = await fakeHost()
-  await writeFile(
-    path.join(host.root, 'rollback'),
-    ROLLBACK_TARGET + '\nextra\n',
-  )
+  await writeFile(path.join(host.root, 'rollback'), ROLLBACK_TARGET + '\nextra\n')
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -1487,10 +1448,7 @@ esac
     assert.match(JSON.stringify(refused.error), /deployment is in progress/u)
     const mainRefused = await rolling.request({ op: 'deploy.main', args: {} })
     assert.equal(mainRefused.ok, false)
-    assert.match(
-      JSON.stringify(mainRefused.error),
-      /deployment is in progress/u,
-    )
+    assert.match(JSON.stringify(mainRefused.error), /deployment is in progress/u)
     const built = await build
     assert.equal(built.ok, true, JSON.stringify(built.error))
     const again = await rolling.request({ op: 'deploy.rollback', args: {} })
@@ -1505,8 +1463,7 @@ esac
     }
     assert.ok(log.includes('tag ' + ROLLBACK_TARGET))
     assert.ok(
-      log.indexOf('build --tag devockr/idsh:dev') <
-        log.indexOf('tag ' + ROLLBACK_TARGET),
+      log.indexOf('build --tag devockr/idsh:dev') < log.indexOf('tag ' + ROLLBACK_TARGET),
       'the build finished before the retried rollback tagged',
     )
   } finally {
@@ -1713,8 +1670,7 @@ esac
     const log = await readFile(dockerLog, 'utf8')
     assert.ok(log.includes('tag ' + ROLLBACK_TARGET))
     assert.ok(
-      log.indexOf('tag ' + ROLLBACK_TARGET) <
-        log.indexOf('build --tag devockr/idsh:dev'),
+      log.indexOf('tag ' + ROLLBACK_TARGET) < log.indexOf('build --tag devockr/idsh:dev'),
       'the rollback tagged before the retried build rebuilt',
     )
   } finally {
@@ -1888,10 +1844,7 @@ echo "ip $*"
       args: { what: 'route' },
     })
     assert.equal(route.ok, true)
-    assert.equal(
-      route.result,
-      '## route (ipv4)\nip -4 -br route\n## route (ipv6)\nip -6 -br route',
-    )
+    assert.equal(route.result, '## route (ipv4)\nip -4 -br route\n## route (ipv6)\nip -6 -br route')
 
     // An unknown string must not widen to "all": the published enum is the contract.
     const unknown = await connection.request({
@@ -1935,10 +1888,7 @@ echo "ss $*"
   try {
     const all = await connection.request({ op: 'net.sockets', args: {} })
     assert.equal(all.ok, true)
-    assert.match(
-      all.result ?? '',
-      /## listen\nss -tulpn\n## connections\nss -tunp/u,
-    )
+    assert.match(all.result ?? '', /## listen\nss -tulpn\n## connections\nss -tunp/u)
 
     const listen = await connection.request({
       op: 'net.sockets',
@@ -1975,9 +1925,9 @@ void test('broker.status reports the broker it is asked', async () => {
     '{"name":"@idsh/host-broker"}\n',
   )
   const version = (
-    JSON.parse(
-      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
-    ) as { version?: string }
+    JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version?: string
+    }
   ).version
   const broker = await startBroker({
     socketPath: host.socketPath,
@@ -1999,10 +1949,7 @@ void test('broker.status reports the broker it is asked', async () => {
     )
     assert.equal(fields.get('version'), version)
     assert.equal(fields.get('pid'), String(process.pid))
-    assert.equal(
-      fields.get('started'),
-      new Date(1_700_000_000_000).toISOString(),
-    )
+    assert.equal(fields.get('started'), new Date(1_700_000_000_000).toISOString())
     assert.equal(fields.get('socket'), host.socketPath)
     assert.equal(fields.get('audit'), host.auditPath)
     assert.equal(fields.get('checkout'), checkout)
@@ -2064,8 +2011,7 @@ echo "$PWD $*" >> '${pnpmLog}'
     assert.match(pnpm, /checkout install --frozen-lockfile/u)
     assert.match(pnpm, /checkout --filter @idsh\/host-broker build/u)
     assert.ok(
-      pnpm.indexOf('install --frozen-lockfile') <
-        pnpm.indexOf('--filter @idsh/host-broker build'),
+      pnpm.indexOf('install --frozen-lockfile') < pnpm.indexOf('--filter @idsh/host-broker build'),
       'install must come before the build',
     )
     await new Promise(resolve => setTimeout(resolve, 700))
@@ -2167,10 +2113,7 @@ echo "$*" >> '${npmLog}'
     assert.match(answer.result ?? '', /^updated from npm/u)
     const npmText = await readFile(npmLog, 'utf8')
     const npm = npmText.trim()
-    assert.equal(
-      npm,
-      `install --global --prefix ${prefix} @idsh/host-broker@latest`,
-    )
+    assert.equal(npm, `install --global --prefix ${prefix} @idsh/host-broker@latest`)
     await new Promise(resolve => setTimeout(resolve, 700))
     assert.equal(stopped, 1)
   } finally {
@@ -2354,15 +2297,7 @@ echo "$*" >> '${npmLog}'
     logDir: host.logDir,
     procDir: host.procDir,
     npmPath,
-    entryPath: path.join(
-      prefix,
-      'lib',
-      'node_modules',
-      '@idsh',
-      'host-broker',
-      'lib',
-      'cli.js',
-    ),
+    entryPath: path.join(prefix, 'lib', 'node_modules', '@idsh', 'host-broker', 'lib', 'cli.js'),
     stop: () => {
       stopped += 1
     },
@@ -2372,10 +2307,7 @@ echo "$*" >> '${npmLog}'
     const answer = await connection.request({ op: 'broker.update', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const npmText = await readFile(npmLog, 'utf8')
-    assert.equal(
-      npmText.trim(),
-      `install --global --prefix ${prefix} @idsh/host-broker@latest`,
-    )
+    assert.equal(npmText.trim(), `install --global --prefix ${prefix} @idsh/host-broker@latest`)
     await new Promise(resolve => setTimeout(resolve, 700))
     assert.equal(stopped, 1)
   } finally {
@@ -2449,10 +2381,7 @@ void test('proc.list reads the process table, biggest resident set first', async
   await writeFile(path.join(procDir, '30', 'stat'), stat('30', 'gone', 'S', 1))
   await writeFile(path.join(procDir, '10', 'stat'), stat('10', 'small', 'S', 1))
   await writeFile(path.join(procDir, '10', 'status'), 'VmRSS:\t  1200 kB\n')
-  await writeFile(
-    path.join(procDir, '20', 'stat'),
-    stat('20', 'big one', 'R', 1),
-  )
+  await writeFile(path.join(procDir, '20', 'stat'), stat('20', 'big one', 'R', 1))
   await writeFile(path.join(procDir, '20', 'status'), 'VmRSS:\t  4096 kB\n')
   // A comm with an inner ')' proves the parse uses the last one: 'sd) pam' survives.
   await writeFile(
@@ -2477,32 +2406,20 @@ void test('proc.list reads the process table, biggest resident set first', async
   await writeFile(path.join(procDir, '42', 'stat'), '42 (badppid) S xx 1 0')
   await writeFile(path.join(procDir, '42', 'status'), 'VmRSS:\t  4 kB\n')
   // A line separator (U+2028) folds to a space too: a renderer would draw it as a line break.
-  await writeFile(
-    path.join(procDir, '45', 'stat'),
-    stat('45', 'line\u2028sep', 'S', 1),
-  )
+  await writeFile(path.join(procDir, '45', 'stat'), stat('45', 'line\u2028sep', 'S', 1))
   await writeFile(path.join(procDir, '45', 'status'), 'VmRSS:\t  9 kB\n')
   // A paragraph separator (U+2029) folds as well.
-  await writeFile(
-    path.join(procDir, '46', 'stat'),
-    stat('46', 'para\u2029sep', 'S', 1),
-  )
+  await writeFile(path.join(procDir, '46', 'stat'), stat('46', 'para\u2029sep', 'S', 1))
   await writeFile(path.join(procDir, '46', 'status'), 'VmRSS:\t  7 kB\n')
   // Format controls (Cf) are kept on purpose: ZWJ is one, and emoji names depend on it.
-  await writeFile(
-    path.join(procDir, '47', 'stat'),
-    stat('47', 'a\u200Db', 'S', 1),
-  )
+  await writeFile(path.join(procDir, '47', 'stat'), stat('47', 'a\u200Db', 'S', 1))
   await writeFile(path.join(procDir, '47', 'status'), 'VmRSS:\t  6 kB\n')
   // A printable Unicode name keeps its characters; only control characters are replaced.
   await writeFile(path.join(procDir, '44', 'stat'), stat('44', '中文', 'S', 1))
   await writeFile(path.join(procDir, '44', 'status'), 'VmRSS:\t  8 kB\n')
   // A directory whose name is not a pid has a valid stat: only the filter can exclude it.
   await mkdir(path.join(procDir, 'not-a-pid'), { recursive: true })
-  await writeFile(
-    path.join(procDir, 'not-a-pid', 'stat'),
-    stat('1', 'nope', 'S', 1),
-  )
+  await writeFile(path.join(procDir, 'not-a-pid', 'stat'), stat('1', 'nope', 'S', 1))
   await writeFile(path.join(procDir, 'not-a-pid', 'status'), 'VmRSS:\t  7 kB\n')
   const broker = await startBroker({
     socketPath: host.socketPath,
@@ -2529,10 +2446,7 @@ void test('proc.list reads the process table, biggest resident set first', async
     assert.equal(lines[8], '     46       1 S         7 para sep')
     // U+200D (ZWJ) survives: format controls are a deliberate pass-through.
     assert.equal(lines[9], '     47       1 S         6 a\u200Db')
-    assert.equal(
-      lines[10],
-      '     50       1 S         5 evil    1       1 S      9999 spoofed',
-    )
+    assert.equal(lines[10], '     50       1 S         5 evil    1       1 S      9999 spoofed')
     assert.equal(lines.length, 11)
     assert.ok(lines.every(line => !line.includes('nope')))
 

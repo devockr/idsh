@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * A release that changes what the image bakes has to move the image's version, because `release.yml`
- * publishes the image from that version and from nothing else. Without this check such a release
- * would publish packages and quietly ship no image at all: the version would not move, so the job
- * that waits for it would not run.
+ * A release that changes what the image bakes has to move the image's version, because
+ * `release.yml` publishes the image from that version and from nothing else. Without this check
+ * such a release would publish packages and quietly ship no image at all: the version would not
+ * move, so the job that waits for it would not run.
  *
- * One bump is enough. `changeset version` applies every pending changeset at once, so the image only
- * has to be named somewhere in the release, not in each changeset. What CI can see is one pull
- * request's changesets — a release consumes them, so `main` has none — which makes the rule stricter
- * than the release itself: a pull request that changes a baked package carries the bump itself.
+ * One bump is enough. `changeset version` applies every pending changeset at once, so the image
+ * only has to be named somewhere in the release, not in each changeset. What CI can see is one pull
+ * request's changesets — a release consumes them, so `main` has none — which makes the rule
+ * stricter than the release itself: a pull request that changes a baked package carries the bump
+ * itself.
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -26,9 +27,7 @@ const fail = (message: string): never => {
 /** The image's own name, which is the only thing this check reads from its manifest. */
 const image =
   (
-    JSON.parse(
-      await fs.readFile(path.join(repo, 'image/package.json'), 'utf8'),
-    ) as {
+    JSON.parse(await fs.readFile(path.join(repo, 'image/package.json'), 'utf8')) as {
       name?: string
     }
   ).name ?? fail('image/package.json has no name')
@@ -53,9 +52,7 @@ const namedIn = (source: string): string[] => {
     // `changeset add` writes double quotes; a changeset written by hand often arrives with single
     // ones, and YAML does not care which — so a check that only understood one of them would quietly
     // ignore exactly the changesets a person wrote.
-    const match = /^["'](?<name>[^"']+)["']: (?:major|minor|patch)$/u.exec(
-      line.trim(),
-    )
+    const match = /^["'](?<name>[^"']+)["']: (?:major|minor|patch)$/u.exec(line.trim())
     const name = match?.groups?.name
     if (name) {
       names.push(name)
@@ -65,24 +62,18 @@ const namedIn = (source: string): string[] => {
 }
 
 const entries = await fs.readdir(path.join(repo, '.changeset'))
-const files = entries.filter(
-  file => file.endsWith('.md') && file !== 'README.md',
-)
+const files = entries.filter(file => file.endsWith('.md') && file !== 'README.md')
 
 const changesets: Array<{ file: string; names: string[] }> = []
 for (const file of files) {
   changesets.push({
     file,
-    names: namedIn(
-      await fs.readFile(path.join(repo, '.changeset', file), 'utf8'),
-    ),
+    names: namedIn(await fs.readFile(path.join(repo, '.changeset', file), 'utf8')),
   })
 }
 
 /** The changesets that change a package the image bakes, whichever ones bump the image. */
-const changes = changesets.filter(entry =>
-  entry.names.some(name => baked.has(name)),
-)
+const changes = changesets.filter(entry => entry.names.some(name => baked.has(name)))
 const bumpsImage = changesets.some(entry => entry.names.includes(image))
 
 if (changes.length > 0 && !bumpsImage) {
@@ -91,9 +82,7 @@ if (changes.length > 0 && !bumpsImage) {
       `this release changes what the image bakes, but no pending changeset bumps ${image}:`,
       ...changes.map(
         entry =>
-          `  .changeset/${entry.file} (${entry.names
-            .filter(name => baked.has(name))
-            .join(', ')})`,
+          `  .changeset/${entry.file} (${entry.names.filter(name => baked.has(name)).join(', ')})`,
       ),
       '',
       `Add \`"${image}"\` to one of them, with the bump the change deserves — \`patch\`,`,

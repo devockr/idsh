@@ -93,10 +93,7 @@ export interface OpDefinition {
   readonly timeoutMs?: number
   /** Runs under the deployment lock: no build, recreate or rollback overlaps it. */
   readonly serial?: boolean
-  run(
-    args: Record<string, unknown>,
-    ctx: OpContext,
-  ): Promise<Execution | string>
+  run(args: Record<string, unknown>, ctx: OpContext): Promise<Execution | string>
 }
 
 /**
@@ -128,9 +125,7 @@ function runFixed(
   const keep = options.keep ?? 'head'
   const timeoutMs = options.timeoutMs ?? ctx.execTimeoutMs
   if (ctx.signal?.aborted === true) {
-    return Promise.reject(
-      new BrokerFault('timeout', 'the operation was cancelled'),
-    )
+    return Promise.reject(new BrokerFault('timeout', 'the operation was cancelled'))
   }
   return new Promise((resolve, reject) => {
     let logChain: Promise<unknown> = Promise.resolve()
@@ -139,9 +134,7 @@ function runFixed(
       // Its own group, so a timeout can stop whatever the program started too.
       detached: true,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.env === undefined
-        ? {}
-        : { env: { ...process.env, ...options.env } }),
+      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
     })
     const state: { settled: boolean; timer?: NodeJS.Timeout } = {
       settled: false,
@@ -183,9 +176,7 @@ function runFixed(
       if (options.logPath !== undefined) {
         // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
         logChain = logChain
-          .then(() =>
-            appendFile(options.logPath as string, chunk, { mode: FILE_MODE }),
-          )
+          .then(() => appendFile(options.logPath as string, chunk, { mode: FILE_MODE }))
           .catch(() => null)
       }
       buffer = Buffer.concat([buffer, chunk])
@@ -209,17 +200,10 @@ function runFixed(
           child.kill('SIGKILL')
         }
       }
-      settle(
-        new BrokerFault('timeout', `no answer within ${String(timeoutMs)} ms`),
-      )
+      settle(new BrokerFault('timeout', `no answer within ${String(timeoutMs)} ms`))
     }, timeoutMs)
     child.once('error', (error: NodeJS.ErrnoException) => {
-      settle(
-        new BrokerFault(
-          'unavailable',
-          `${error.code ?? 'spawn failed'}: ${error.message}`,
-        ),
-      )
+      settle(new BrokerFault('unavailable', `${error.code ?? 'spawn failed'}: ${error.message}`))
     })
     child.once('close', (code, signal) => {
       if (code === 0) {
@@ -244,9 +228,7 @@ function runFixed(
       settle(
         new BrokerFault(
           'unavailable',
-          message === ''
-            ? `${program} exited with ${code ?? signal ?? 'no status'}`
-            : message,
+          message === '' ? `${program} exited with ${code ?? signal ?? 'no status'}` : message,
         ),
       )
     })
@@ -255,16 +237,10 @@ function runFixed(
 
 /* ------------------------------------------------------------------ argument checks */
 
-function rejectUnknown(
-  args: Record<string, unknown>,
-  allowed: readonly string[],
-): void {
+function rejectUnknown(args: Record<string, unknown>, allowed: readonly string[]): void {
   for (const key of Object.keys(args)) {
     if (!allowed.includes(key)) {
-      throw new BrokerFault(
-        'bad-argument',
-        `unknown argument ${JSON.stringify(key)}`,
-      )
+      throw new BrokerFault('bad-argument', `unknown argument ${JSON.stringify(key)}`)
     }
   }
 }
@@ -295,25 +271,13 @@ function integer(
   if (value === undefined) {
     return fallback
   }
-  if (
-    typeof value !== 'number' ||
-    !Number.isInteger(value) ||
-    value < min ||
-    value > max
-  ) {
-    throw new BrokerFault(
-      'bad-argument',
-      `${name} must be an integer between ${min} and ${max}`,
-    )
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new BrokerFault('bad-argument', `${name} must be an integer between ${min} and ${max}`)
   }
   return value
 }
 
-function text(
-  args: Record<string, unknown>,
-  name: string,
-  maxChars: number,
-): string | undefined {
+function text(args: Record<string, unknown>, name: string, maxChars: number): string | undefined {
   const value = args[name]
   if (value === undefined) {
     return undefined
@@ -363,10 +327,7 @@ async function tail(
   try {
     info = await stat(filePath)
   } catch {
-    throw new BrokerFault(
-      'unavailable',
-      `${file} is not being written on this host`,
-    )
+    throw new BrokerFault('unavailable', `${file} is not being written on this host`)
   }
   if (!info.isFile()) {
     throw new BrokerFault('unavailable', `${file} is not a regular file`)
@@ -396,13 +357,7 @@ async function tail(
 /* ------------------------------------------------------------------ proc.read */
 
 /** The fixed set `proc.read` can answer from. */
-const PROC_TARGETS = [
-  'mdstat',
-  'loadavg',
-  'meminfo',
-  'uptime',
-  'vmstat',
-] as const
+const PROC_TARGETS = ['mdstat', 'loadavg', 'meminfo', 'uptime', 'vmstat'] as const
 
 type ProcFile = (typeof PROC_TARGETS)[number]
 
@@ -433,19 +388,14 @@ interface ProcEntry {
   readonly comm: string
 }
 
-function parseProcStat(
-  pid: string,
-  stat: string,
-): Omit<ProcEntry, 'rssKb'> | undefined {
+function parseProcStat(pid: string, stat: string): Omit<ProcEntry, 'rssKb'> | undefined {
   const open = stat.indexOf('(')
   const close = stat.lastIndexOf(')')
   if (open === -1 || close === -1 || close < open) {
     return undefined
   }
   // A newline in a comm would add a line that looks like a row of its own; printable Unicode stays.
-  const comm = stat
-    .slice(open + 1, close)
-    .replaceAll(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ')
+  const comm = stat.slice(open + 1, close).replaceAll(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ')
   const fields = stat
     .slice(close + 2)
     .trim()
@@ -469,10 +419,7 @@ async function procList(ctx: OpContext, lines: number): Promise<string> {
   try {
     names = await readdir(ctx.procDir)
   } catch {
-    throw new BrokerFault(
-      'unavailable',
-      'the process table is not readable on this host',
-    )
+    throw new BrokerFault('unavailable', 'the process table is not readable on this host')
   }
   const entries: ProcEntry[] = []
   for (const name of names) {
@@ -489,19 +436,13 @@ async function procList(ctx: OpContext, lines: number): Promise<string> {
       if (parsed === undefined) {
         continue
       }
-      const status = await readFile(
-        path.join(ctx.procDir, name, 'status'),
-        'utf8',
-      )
+      const status = await readFile(path.join(ctx.procDir, name, 'status'), 'utf8')
       entries.push({ ...parsed, rssKb: readRssKb(status) })
     } catch {
       // A process that exited while it was being read is not an error.
     }
   }
-  entries.sort(
-    (left, right) =>
-      right.rssKb - left.rssKb || Number(left.pid) - Number(right.pid),
-  )
+  entries.sort((left, right) => right.rssKb - left.rssKb || Number(left.pid) - Number(right.pid))
   const rows = entries
     .slice(0, lines)
     .map(
@@ -548,9 +489,9 @@ function git(
  * Start `docker compose` on the host, detached from this request.
  *
  * A recreate removes and replaces the container the caller runs in, so the request cannot wait for
- * it: the broker flushes its answer, the scheduler waits `AFTER_RESPONSE_DELAY_MS`, and only then is
- * this called. The child is detached and unref'd, so neither the broker's exit nor a timeout stops
- * it, and compose's own log records the outcome.
+ * it: the broker flushes its answer, the scheduler waits `AFTER_RESPONSE_DELAY_MS`, and only then
+ * is this called. The child is detached and unref'd, so neither the broker's exit nor a timeout
+ * stops it, and compose's own log records the outcome.
  */
 async function composeDetached(
   ctx: OpContext,
@@ -567,14 +508,7 @@ async function composeDetached(
     const gid = process.getgid?.()
     const child = spawn(
       ctx.dockerPath,
-      [
-        'compose',
-        '-f',
-        'docker-compose.yml',
-        '-f',
-        'docker-compose.dev.yml',
-        ...args,
-      ],
+      ['compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.dev.yml', ...args],
       {
         detached: true,
         cwd: checkout,
@@ -603,11 +537,9 @@ async function composeDetached(
           child.kill('SIGKILL')
         }
       }
-      void appendFile(
-        logPath,
-        `compose did not finish within ${String(COMPOSE_TIMEOUT_MS)} ms\n`,
-        { mode: FILE_MODE },
-      ).catch(() => null)
+      void appendFile(logPath, `compose did not finish within ${String(COMPOSE_TIMEOUT_MS)} ms\n`, {
+        mode: FILE_MODE,
+      }).catch(() => null)
     }, COMPOSE_TIMEOUT_MS)
     try {
       await new Promise<void>(resolve => {
@@ -662,8 +594,8 @@ function remaining(deadline: number): number {
 const BROKER_PACKAGE = '@idsh/host-broker'
 
 /**
- * How this broker was installed, read from the program it is running: inside the checkout it
- * builds there (the entry it is running from), otherwise the published package is what to update.
+ * How this broker was installed, read from the program it is running: inside the checkout it builds
+ * there (the entry it is running from), otherwise the published package is what to update.
  */
 function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
   if (ctx.checkout === undefined) {
@@ -695,10 +627,7 @@ interface UpdateStep {
   readonly cwd?: string
 }
 
-function brokerUpdate(
-  ctx: OpContext,
-  source: 'checkout' | 'npm',
-): UpdateStep[] {
+function brokerUpdate(ctx: OpContext, source: 'checkout' | 'npm'): UpdateStep[] {
   if (source === 'checkout' && ctx.checkout !== undefined) {
     return [
       {
@@ -730,13 +659,7 @@ function brokerUpdate(
     {
       // The unit runs `<prefix>/bin/idsh-host`, so the update has to land in that prefix.
       program: ctx.npmPath,
-      args: [
-        'install',
-        '--global',
-        '--prefix',
-        prefix,
-        `${BROKER_PACKAGE}@latest`,
-      ],
+      args: ['install', '--global', '--prefix', prefix, `${BROKER_PACKAGE}@latest`],
     },
   ]
 }
@@ -782,10 +705,7 @@ type NetWhat = (typeof NET_WHAT)[number]
 type NetTable = (typeof NET_TABLES)[number]
 
 /** What each table renders. Adding a table to NET_TABLES fails to type-check until it is here. */
-const NET_RENDER: Record<
-  NetTable,
-  ReadonlyArray<{ label: string; args: readonly string[] }>
-> = {
+const NET_RENDER: Record<NetTable, ReadonlyArray<{ label: string; args: readonly string[] }>> = {
   addr: [{ label: 'addr', args: ['-br', 'addr'] }],
   route: [
     // `ip route` alone is IPv4: a dual-stack LAN needs both tables, labelled.
@@ -817,10 +737,7 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
   try {
     text = await readFile(path.join(ctx.stateDir, 'rollback'), 'utf8')
   } catch {
-    throw new BrokerFault(
-      'unavailable',
-      'no rollback target recorded; run deploy.build first',
-    )
+    throw new BrokerFault('unavailable', 'no rollback target recorded; run deploy.build first')
   }
   // One line, plus the newline recordRollback writes; any other break is a broken file.
   const lines = text.split('\n')
@@ -848,8 +765,7 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 export const OPS: readonly OpDefinition[] = [
   {
     name: 'log.tail',
-    summary:
-      'The last lines of a host log, optionally only the lines containing a literal string.',
+    summary: 'The last lines of a host log, optionally only the lines containing a literal string.',
     keep: 'tail',
     input: {
       type: 'object',
@@ -880,8 +796,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'proc.read',
-    summary:
-      'One of a fixed set of kernel state files: mdstat, loadavg, meminfo, uptime, vmstat.',
+    summary: 'One of a fixed set of kernel state files: mdstat, loadavg, meminfo, uptime, vmstat.',
     input: {
       type: 'object',
       properties: {
@@ -901,8 +816,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'deploy.status',
-    summary:
-      'The deployment container: its image, creation time and state, straight from docker.',
+    summary: 'The deployment container: its image, creation time and state, straight from docker.',
     input: { type: 'object', properties: {}, additionalProperties: false },
     async run(args, ctx) {
       rejectUnknown(args, [])
@@ -936,11 +850,7 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, ['lines'])
       const lines = integer(args, 'lines', 1, MAX_LOG_LINES, DEFAULT_LOG_LINES)
-      return docker(
-        ctx,
-        ['logs', '--tail', String(lines), ctx.container],
-        'tail',
-      )
+      return docker(ctx, ['logs', '--tail', String(lines), ctx.container], 'tail')
     },
   },
   {
@@ -955,8 +865,7 @@ export const OPS: readonly OpDefinition[] = [
       properties: {
         pr: {
           type: 'integer',
-          description:
-            'A same-repository PR number; its head must be on an origin branch.',
+          description: 'A same-repository PR number; its head must be on an origin branch.',
         },
         sha: {
           type: 'string',
@@ -964,8 +873,7 @@ export const OPS: readonly OpDefinition[] = [
         },
         log: {
           type: 'string',
-          description:
-            'Log id this build writes as build-<log>.log; the client follows it.',
+          description: 'Log id this build writes as build-<log>.log; the client follows it.',
         },
       },
       additionalProperties: false,
@@ -981,8 +889,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'deploy.main',
-    summary:
-      'Build the tip of main as :dev, then recreate the container from it.',
+    summary: 'Build the tip of main as :dev, then recreate the container from it.',
     confirm: true,
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
@@ -991,8 +898,7 @@ export const OPS: readonly OpDefinition[] = [
       properties: {
         log: {
           type: 'string',
-          description:
-            'Log id this build writes as build-<log>.log; the client follows it.',
+          description: 'Log id this build writes as build-<log>.log; the client follows it.',
         },
       },
       additionalProperties: false,
@@ -1012,8 +918,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'deploy.rollback',
-    summary:
-      'Retag :dev to the image recorded before the last build, then recreate from it.',
+    summary: 'Retag :dev to the image recorded before the last build, then recreate from it.',
     confirm: true,
     serial: true,
     input: { type: 'object', properties: {}, additionalProperties: false },
@@ -1029,8 +934,7 @@ export const OPS: readonly OpDefinition[] = [
           try {
             await docker(ctx, ['tag', target, BUILD_IMAGE])
           } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error)
+            const message = error instanceof Error ? error.message : String(error)
             await appendFile(
               path.join(ctx.stateDir, 'compose.log'),
               `rollback tag failed: ${message}\n`,
@@ -1045,8 +949,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'deploy.recreate',
-    summary:
-      'Recreate the deployment container from the current :dev image, without building.',
+    summary: 'Recreate the deployment container from the current :dev image, without building.',
     confirm: true,
     serial: true,
     input: { type: 'object', properties: {}, additionalProperties: false },
@@ -1068,8 +971,7 @@ export const OPS: readonly OpDefinition[] = [
         what: {
           type: 'string',
           enum: [...NET_WHAT],
-          description:
-            'Which table to read: addr, route, neigh, or all (the default).',
+          description: 'Which table to read: addr, route, neigh, or all (the default).',
         },
       },
       additionalProperties: false,
@@ -1077,8 +979,7 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, ['what'])
       // Asked for nothing means all of them; anything else must name one of the tables.
-      const what: NetWhat =
-        args['what'] === undefined ? 'all' : choice(args, 'what', NET_WHAT)
+      const what: NetWhat = args['what'] === undefined ? 'all' : choice(args, 'what', NET_WHAT)
       return netStatus(ctx, what)
     },
   },
@@ -1091,8 +992,7 @@ export const OPS: readonly OpDefinition[] = [
         what: {
           type: 'string',
           enum: [...SOCKET_WHAT],
-          description:
-            'Which table to read: listen, connections, or all (the default).',
+          description: 'Which table to read: listen, connections, or all (the default).',
         },
       },
       additionalProperties: false,
@@ -1106,8 +1006,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'broker.status',
-    summary:
-      'This broker: its version, process, start time, socket, audit file and checkout.',
+    summary: 'This broker: its version, process, start time, socket, audit file and checkout.',
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {
       rejectUnknown(args, [])
@@ -1125,8 +1024,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'broker.update',
-    summary:
-      'Update the broker from its checkout (or npm) and let its supervisor restart it.',
+    summary: 'Update the broker from its checkout (or npm) and let its supervisor restart it.',
     confirm: true,
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
@@ -1151,8 +1049,7 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'proc.list',
-    summary:
-      'The process table: pid, parent, state, resident set and command name, biggest first.',
+    summary: 'The process table: pid, parent, state, resident set and command name, biggest first.',
     input: {
       type: 'object',
       properties: {
@@ -1165,13 +1062,7 @@ export const OPS: readonly OpDefinition[] = [
     },
     async run(args, ctx) {
       rejectUnknown(args, ['lines'])
-      const lines = integer(
-        args,
-        'lines',
-        1,
-        MAX_PROC_LINES,
-        DEFAULT_PROC_LINES,
-      )
+      const lines = integer(args, 'lines', 1, MAX_PROC_LINES, DEFAULT_PROC_LINES)
       return procList(ctx, lines)
     },
   },
@@ -1208,10 +1099,7 @@ export function describeOps(): string {
 /** The deployment checkout, or the fault that says why a deploy operation cannot run. */
 function requireCheckout(ctx: OpContext): string {
   if (ctx.checkout === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'no checkout configured; start the broker with --checkout',
-    )
+    throw new BrokerFault('unavailable', 'no checkout configured; start the broker with --checkout')
   }
   return ctx.checkout
 }
@@ -1244,11 +1132,7 @@ function parseLsRemote(text: string): Array<{ sha: string; ref: string }> {
     })
 }
 
-function lsRemote(
-  ctx: OpContext,
-  pattern: string,
-  deadline: number,
-): Promise<string> {
+function lsRemote(ctx: OpContext, pattern: string, deadline: number): Promise<string> {
   return git(ctx, ['ls-remote', 'origin', pattern], {
     timeoutMs: remaining(deadline),
   })
@@ -1277,15 +1161,10 @@ async function resolveBuildSource(
     if (typeof pr !== 'number' || !Number.isInteger(pr) || pr < 1) {
       throw new BrokerFault('bad-argument', 'pr must be a positive integer')
     }
-    const head = parseLsRemote(
-      await lsRemote(ctx, `refs/pull/${String(pr)}/head`, deadline),
-    )
+    const head = parseLsRemote(await lsRemote(ctx, `refs/pull/${String(pr)}/head`, deadline))
     const resolved = head.at(0)?.sha
     if (resolved === undefined) {
-      throw new BrokerFault(
-        'unavailable',
-        `PR ${String(pr)} has no head on origin`,
-      )
+      throw new BrokerFault('unavailable', `PR ${String(pr)} has no head on origin`)
     }
     if (!heads.some(entry => entry.sha === resolved)) {
       throw new BrokerFault(
@@ -1300,36 +1179,21 @@ async function resolveBuildSource(
   }
   // Several branches at one commit is ordinary; only different commits are ambiguous.
   const matches = [
-    ...new Set(
-      heads
-        .map(entry => entry.sha)
-        .filter(candidate => candidate.startsWith(sha)),
-    ),
+    ...new Set(heads.map(entry => entry.sha).filter(candidate => candidate.startsWith(sha))),
   ]
   if (matches.length === 0) {
-    throw new BrokerFault(
-      'unavailable',
-      `sha ${sha} is not the tip of an origin branch`,
-    )
+    throw new BrokerFault('unavailable', `sha ${sha} is not the tip of an origin branch`)
   }
   if (matches.length > 1) {
-    throw new BrokerFault(
-      'bad-argument',
-      `sha ${sha} matches more than one origin branch`,
-    )
+    throw new BrokerFault('bad-argument', `sha ${sha} matches more than one origin branch`)
   }
   return { sha: matches[0], mainSha: main, label: `sha ${sha}` }
 }
 
 /** The tip of main, resolved like any other source. */
-async function resolveMainSource(
-  ctx: OpContext,
-  deadline: number,
-): Promise<BuildSource> {
+async function resolveMainSource(ctx: OpContext, deadline: number): Promise<BuildSource> {
   requireCheckout(ctx)
-  const main = findMain(
-    parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline)),
-  )
+  const main = findMain(parseLsRemote(await lsRemote(ctx, 'refs/heads/*', deadline)))
   return { sha: main, mainSha: main, label: 'main' }
 }
 
@@ -1362,12 +1226,7 @@ async function prepareBuildSource(
   const root = ctx.buildRoot
   await mkdir(root, { recursive: true, mode: DIRECTORY_MODE })
   // The checkout may never have fetched the source: freshen its refs, then clone its objects.
-  await git(
-    ctx,
-    ['fetch', '--quiet', 'origin'],
-    { timeoutMs: remaining(deadline) },
-    checkout,
-  )
+  await git(ctx, ['fetch', '--quiet', 'origin'], { timeoutMs: remaining(deadline) }, checkout)
   const dir = await mkdtemp(path.join(root, 'source-'))
   try {
     await git(
@@ -1408,10 +1267,7 @@ async function recordRollback(ctx: OpContext): Promise<string> {
   ])
   const id = idText.trim().split('\n')[0] ?? ''
   if (id === '') {
-    throw new BrokerFault(
-      'unavailable',
-      'the container has no image to roll back to',
-    )
+    throw new BrokerFault('unavailable', 'the container has no image to roll back to')
   }
   let previous = id
   try {
@@ -1423,9 +1279,7 @@ async function recordRollback(ctx: OpContext): Promise<string> {
       '{{json .RepoDigests}}',
       id,
     ])
-    const list = JSON.parse(
-      digestsText.trim().split('\n')[0] ?? '[]',
-    ) as unknown
+    const list = JSON.parse(digestsText.trim().split('\n')[0] ?? '[]') as unknown
     // A pulled image is one pull away; a local one only exists as its id.
     if (Array.isArray(list) && typeof list[0] === 'string') {
       previous = list[0]
@@ -1445,10 +1299,7 @@ function optionalLog(args: Record<string, unknown>): string | undefined {
     return undefined
   }
   if (typeof log !== 'string' || !/^[\w-]{1,64}$/u.test(log)) {
-    throw new BrokerFault(
-      'bad-argument',
-      'log must be 1-64 letters, digits, "_" or "-"',
-    )
+    throw new BrokerFault('bad-argument', 'log must be 1-64 letters, digits, "_" or "-"')
   }
   return log
 }
@@ -1460,10 +1311,7 @@ async function buildImage(
   logId: string | undefined,
 ): Promise<void> {
   // One file per build: a job follows exactly the log its own call writes.
-  const logPath = path.join(
-    ctx.stateDir,
-    logId === undefined ? 'build.log' : `build-${logId}.log`,
-  )
+  const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
   // Create the log before the first program: a silent failure still leaves the file behind.
   const log = await open(logPath, 'a', FILE_MODE)
   try {
@@ -1473,12 +1321,8 @@ async function buildImage(
   }
   const uid = process.getuid?.()
   const gid = process.getgid?.()
-  const user =
-    uid === undefined || gid === undefined
-      ? undefined
-      : `${String(uid)}:${String(gid)}`
-  const registry =
-    process.env['NPM_REGISTRY'] ?? 'https://registry.npmmirror.com/'
+  const user = uid === undefined || gid === undefined ? undefined : `${String(uid)}:${String(gid)}`
+  const registry = process.env['NPM_REGISTRY'] ?? 'https://registry.npmmirror.com/'
   const cidFile = path.join(dir, 'container.cid')
   // The image's entrypoint is dsh itself; without --entrypoint the command would be handed to it
   // as dsh arguments and boot a second server. --user keeps the mounted tree owned by the broker's

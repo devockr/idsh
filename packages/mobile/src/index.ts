@@ -1,7 +1,7 @@
 /**
- * Host half. It exists so the package composes as a row; every contribution is made in
- * the browser (see ./client), because that is where the pointer type, the keyboard and
- * the home-screen icon live.
+ * Host half. It exists so the package composes as a row; every contribution is made in the browser
+ * (see ./client), because that is where the pointer type, the keyboard and the home-screen icon
+ * live.
  */
 export const name = '@idsh/mobile'
 

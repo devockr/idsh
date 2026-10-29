@@ -19,18 +19,13 @@ if (!version) {
   process.exit(1)
 }
 
-const changelog = await fs.readFile(
-  new URL('../image/CHANGELOG.md', import.meta.url),
-  'utf8',
-)
+const changelog = await fs.readFile(new URL('../image/CHANGELOG.md', import.meta.url), 'utf8')
 
 const lines = changelog.split('\n')
 const start = lines.findIndex(line => line.trim() === `## ${version}`)
 
 if (start === -1) {
-  console.error(
-    `image-release-notes: image/CHANGELOG.md has no "## ${version}" section`,
-  )
+  console.error(`image-release-notes: image/CHANGELOG.md has no "## ${version}" section`)
   process.exit(1)
 }
 

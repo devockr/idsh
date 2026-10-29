@@ -25,9 +25,9 @@ globalThis.__ModuleLoader__.load({
     }
 
     /**
-     * Coarse-pointer CSS, byte for byte what the image injected into index.html:
-     * vertical page panning, and a 16px floor on form controls so iOS does not zoom the
-     * page when one takes focus (the terminal keeps its own size).
+     * Coarse-pointer CSS, byte for byte what the image injected into index.html: vertical page
+     * panning, and a 16px floor on form controls so iOS does not zoom the page when one takes focus
+     * (the terminal keeps its own size).
      */
     const CSS =
       '@media(pointer:coarse){html{touch-action:pan-x pan-y}' +
@@ -44,10 +44,9 @@ globalThis.__ModuleLoader__.load({
     /**
      * Enter inserts a line break on a touch device instead of sending.
      *
-     * Stock behaviour is `event.key === "Enter" && !event.shiftKey` → send, and a shifted
-     * Enter runs the editor's own line-break command. So the plain key is turned into a
-     * shifted one in the capture phase, and the original is stopped before the composer's
-     * handler ever sees it.
+     * Stock behaviour is `event.key === "Enter" && !event.shiftKey` → send, and a shifted Enter
+     * runs the editor's own line-break command. So the plain key is turned into a shifted one in
+     * the capture phase, and the original is stopped before the composer's handler ever sees it.
      */
     /** The key code Safari uses for a composition being committed. */
     const IME_PROCESSING_KEY_CODE = 229
@@ -110,12 +109,12 @@ globalThis.__ModuleLoader__.load({
 
     /**
      * The iOS home-screen icon. iOS ignores an SVG apple-touch-icon and nothing under a plugin
-     * package is reachable by URL, so the artwork comes from the favicon the app already serves
-     * and is rasterised here.
+     * package is reachable by URL, so the artwork comes from the favicon the app already serves and
+     * is rasterised here.
      *
      * One tile, no prefers-color-scheme variant: iOS samples the icon when the shortcut is added,
-     * so a pair would freeze whichever theme was active then, while Apple's own dark-icon
-     * treatment swaps the background by itself. Mid-tone brand blue with a light glyph survives it.
+     * so a pair would freeze whichever theme was active then, while Apple's own dark-icon treatment
+     * swaps the background by itself. Mid-tone brand blue with a light glyph survives it.
      */
     async function rewriteHomeScreenIcon(): Promise<Disposable> {
       const link = document.querySelector('link[rel~="icon"]')
@@ -129,10 +128,7 @@ globalThis.__ModuleLoader__.load({
       const svg = source
         .replaceAll(/(<path[^>]*)fill="#[0-9A-Fa-f]{3,6}"/g, '$1fill="#FFFFFF"')
         .replace(/(<svg[^>]*)viewBox="[^"]*"/, '$1viewBox="-7.83 -7.83 66 66"')
-        .replace(
-          /(<svg[^>]*)width="[0-9.]+" height="[0-9.]+"/,
-          '$1width="1024" height="1024"',
-        )
+        .replace(/(<svg[^>]*)width="[0-9.]+" height="[0-9.]+"/, '$1width="1024" height="1024"')
         .replace(
           /<path/,
           '<rect x="-7.83" y="-7.83" width="66" height="66" rx="12" ry="12" fill="#4D6BFE"/><path',
@@ -161,15 +157,9 @@ globalThis.__ModuleLoader__.load({
     }
 
     function apply(ctx: PluginContext): void {
-      const teardown: Disposable[] = [
-        injectCss(),
-        rewriteEnterOnCoarsePointers(),
-      ]
+      const teardown: Disposable[] = [injectCss(), rewriteEnterOnCoarsePointers()]
       let disposed = false
-      mark(
-        'css+enter coarse:' +
-          globalThis.matchMedia('(pointer: coarse)').matches,
-      )
+      mark('css+enter coarse:' + globalThis.matchMedia('(pointer: coarse)').matches)
       rewriteHomeScreenIcon()
         .then(off => {
           // The icon arrives a fetch later, so a dispose that already happened has to undo it
@@ -181,9 +171,7 @@ globalThis.__ModuleLoader__.load({
           teardown.push(off)
           mark(state + ' icon:ok')
         })
-        .catch((error: unknown) =>
-          mark(state + ' icon:' + (error as Error).message),
-        )
+        .catch((error: unknown) => mark(state + ' icon:' + (error as Error).message))
       // cordis's own teardown: the effect body returns what undoes it.
       ctx.effect(() => () => {
         disposed = true
