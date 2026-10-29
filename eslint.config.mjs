@@ -4,7 +4,7 @@ import { defineConfig } from '@1stg/eslint-config'
 
 export default (async () => [
   { ignores: ['.tasks/**'] },
-  ...(await defineConfig({ oxlint: true })),
+  ...(await defineConfig()),
   {
     // tools/ is not an npm package: n/no-process-exit and n/hashbang both ask whether the file
     // belongs to a published bin, which these repo scripts never do. The shebangs are there and
