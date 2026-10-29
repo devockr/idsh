@@ -53,6 +53,7 @@ function decodeTail(bytes: Buffer, limit: number): string {
   let start = bytes.length - limit
   while (
     start < bytes.length &&
+    // eslint-disable-next-line sonarjs/bitwise-operators -- a UTF-8 byte mask, not a truthiness test
     (bytes[start] & UTF8_CONTINUATION_MASK) === UTF8_CONTINUATION_PREFIX
   ) {
     start += 1

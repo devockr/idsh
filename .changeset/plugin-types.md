@@ -1,7 +1,7 @@
 ---
-"@idsh/mobile": patch
-"@idsh/privileged-ui": patch
-"@idsh/image": patch
+'@idsh/mobile': patch
+'@idsh/privileged-ui': patch
+'@idsh/image': patch
 ---
 
 Publish type declarations for the two plugins' host halves. `declaration` is on, `exports` carries a

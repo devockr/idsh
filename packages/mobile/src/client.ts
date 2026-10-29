@@ -64,7 +64,7 @@ globalThis.__ModuleLoader__.load({
         }
         // 229 is the IME processing key code Safari reports when a composition is being committed,
         // and keyCode is the only place it appears — hence the deprecation suppression below.
-        // eslint-disable-next-line sonarjs/deprecation
+
         if (event.isComposing || event.keyCode === IME_PROCESSING_KEY_CODE) {
           return
         } // mid-IME
@@ -120,7 +120,8 @@ globalThis.__ModuleLoader__.load({
       const link = document.querySelector('link[rel~="icon"]')
       if (!(link instanceof HTMLLinkElement)) {
         // Nothing was installed, so there is nothing to undo.
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- the no-op is the point
+
+        // oxlint-disable-next-line no-empty-function -- nothing was installed, so there is nothing to undo
         return () => {}
       }
       const response = await fetch(link.href)
@@ -145,7 +146,8 @@ globalThis.__ModuleLoader__.load({
       const context = canvas.getContext('2d')
       if (context === null) {
         // Nothing was installed, so there is nothing to undo.
-        // eslint-disable-next-line @typescript-eslint/no-empty-function -- the no-op is the point
+
+        // oxlint-disable-next-line no-empty-function -- nothing was installed, so there is nothing to undo
         return () => {}
       }
       context.drawImage(image, 0, 0, SIZE, SIZE)

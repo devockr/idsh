@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-magic-numbers -- the inputs of these tests are numbers */
 import { strict as assert } from 'node:assert'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,8 +6,14 @@ import { test } from 'node:test'
 
 import { apply, registerTools, type HostContext, type HostTool } from '../src/index.ts'
 import { buildLogSource, type JobSpec } from '../src/stream.ts'
-
 import { fakeBroker } from './server.ts'
+
+// The plugin adds its own slack to an operation's declared budget; keep both numbers named.
+const SLACK_MS = 5_000
+const OP_TIMEOUT_MS = 900_000
+const TOOL_TIMEOUT_MS = OP_TIMEOUT_MS + SLACK_MS
+const SHORT_OP_TIMEOUT_MS = 200
+const SHORT_TOOL_TIMEOUT_MS = SHORT_OP_TIMEOUT_MS + SLACK_MS
 
 const TABLE = [
   {
@@ -266,7 +271,7 @@ void test('an operation with its own timeout sets the tool and the wait', async 
       summary: 'Build the :dev image.',
       input: { type: 'object', properties: {}, additionalProperties: false },
       confirm: true,
-      timeoutMs: 900_000,
+      timeoutMs: OP_TIMEOUT_MS,
     },
   ]
   const broker = await fakeBroker(
@@ -276,7 +281,7 @@ void test('an operation with its own timeout sets the tool and the wait', async 
     const { ctx, tools } = context()
     await registerTools(ctx, { socketPath: broker.socketPath })
     // The broker's budget plus the slack the plugin adds, on the tool and on the socket wait.
-    assert.equal(tools[0]?.timeoutMs, 905_000)
+    assert.equal(tools[0]?.timeoutMs, TOOL_TIMEOUT_MS)
   } finally {
     await broker.close()
   }
@@ -289,7 +294,7 @@ void test('execute passes the operation timeout to the caller', async () => {
       summary: 'Build the :dev image.',
       input: { type: 'object', properties: {}, additionalProperties: false },
       confirm: true,
-      timeoutMs: 200,
+      timeoutMs: SHORT_OP_TIMEOUT_MS,
     },
   ]
   const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
@@ -311,9 +316,9 @@ void test('execute passes the operation timeout to the caller', async () => {
     await registerTools(ctx, { socketPath: broker.socketPath }, call)
     await assert.rejects(
       tools[0].execute({}, { signal: new AbortController().signal }),
-      /did not answer within 5200 ms/u,
+      new RegExp(`did not answer within ${String(SHORT_TOOL_TIMEOUT_MS)} ms`, 'u'),
     )
-    assert.equal(calls[0]?.timeoutMs, 5200)
+    assert.equal(calls[0]?.timeoutMs, SHORT_TOOL_TIMEOUT_MS)
   } finally {
     await broker.close()
   }

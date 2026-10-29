@@ -1,5 +1,5 @@
 ---
-"@idsh/host-broker": minor
+'@idsh/host-broker': minor
 ---
 
 Add the first slice of the host broker: the unix-socket protocol, `log.tail`, `proc.read`,

@@ -34,7 +34,8 @@ interface HostContext {
 /** What dsh's own API would do with this request: a status code to reject it, or nothing. */
 function rejectionFor(ctx: HostContext, request: RouteRequest): number | undefined {
   const connection = ctx.get('connection') as
-    { requestRejection?: (request: unknown) => number | undefined } | undefined
+    | { requestRejection?: (request: unknown) => number | undefined }
+    | undefined
   const gate = connection?.requestRejection
 
   // A host older than that service has no gate to ask. Nothing gets privileged on a guess: the

@@ -1,5 +1,5 @@
 ---
-"@idsh/host-broker": minor
+'@idsh/host-broker': minor
 ---
 
 Add `broker.status` (version, pid, start time, socket, audit file, checkout) and `broker.update`:

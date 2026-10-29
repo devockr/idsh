@@ -1,10 +1,10 @@
 // The shared config skips the state directory and any lib/ on its own; the local helpers are not
 // covered by that, and linting them reports findings in scripts that never ship.
-import config from '@1stg/eslint-config'
+import { defineConfig } from '@1stg/eslint-config'
 
-export default [
+export default (async () => [
   { ignores: ['.tasks/**'] },
-  ...config,
+  ...(await defineConfig({ oxlint: true })),
   {
     // tools/ is not an npm package: n/no-process-exit and n/hashbang both ask whether the file
     // belongs to a published bin, which these repo scripts never do. The shebangs are there and
@@ -19,4 +19,4 @@ export default [
     files: ['packages/*/src/globals.d.ts'],
     rules: { 'no-restricted-syntax': 'off' },
   },
-]
+])()

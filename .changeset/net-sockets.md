@@ -1,5 +1,5 @@
 ---
-"@idsh/host-broker": minor
+'@idsh/host-broker': minor
 ---
 
 Add `net.sockets`: the host's listening sockets (`ss -tulpn`) and its TCP/UDP connections

@@ -2,7 +2,6 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 
 import { callBroker } from '../src/socket.ts'
-
 import { fakeBroker } from './server.ts'
 
 const answer = (value: unknown): string => `${JSON.stringify(value)}\n`

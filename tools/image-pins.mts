@@ -39,9 +39,10 @@ export const pinsIn = (line: string): Pin[] => {
 
 /** Rewrite pins on one line; returning `undefined` from `pick` leaves that pin as it was. */
 export const rewritePins = (line: string, pick: (pin: Pin) => string | undefined): string =>
-  line.replaceAll(pinMatcher(), (whole, name: string, version: string) => {
-    return pick({ name, version }) ?? whole
-  })
+  line.replaceAll(
+    pinMatcher(),
+    (whole, name: string, version: string) => pick({ name, version }) ?? whole,
+  )
 
 /**
  * The dsh the image installs — `npm install -g … @deepseek-ai/dsh@<version>` — which is part of

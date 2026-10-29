@@ -1,5 +1,5 @@
 ---
-"@idsh/host-ops": patch
+'@idsh/host-ops': patch
 ---
 
 A destructive operation is confirmed only by the "Run" option. A free-text answer is a reply, not an

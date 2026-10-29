@@ -1,5 +1,5 @@
 ---
-"@idsh/host-broker": minor
+'@idsh/host-broker': minor
 ---
 
 Add `proc.list`: the process table, read from `/proc/<pid>` (never the environment or the argv),

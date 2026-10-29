@@ -13,7 +13,6 @@ import net from 'node:net'
 import path from 'node:path'
 
 import packageJson from '../package.json' with { type: 'json' }
-
 import {
   AFTER_RESPONSE_DELAY_MS,
   BUILD_KEY_CHARS,
@@ -652,6 +651,7 @@ async function prepareSocketDirectory(socketPath: string): Promise<void> {
   })
   if (created === undefined) {
     const existing = await stat(directory)
+    // eslint-disable-next-line sonarjs/bitwise-operators -- a permission mask, not a truthiness test
     if ((existing.mode & FORBIDDEN_DIRECTORY_BITS) !== 0) {
       throw new Error(`${directory} is group- or world-writable`)
     }

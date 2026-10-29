@@ -1,5 +1,5 @@
 ---
-"@idsh/host-broker": minor
+'@idsh/host-broker': minor
 ---
 
 Add `deploy.status` and `deploy.log`: the broker inspects the deployment container through one

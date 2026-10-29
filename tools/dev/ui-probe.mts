@@ -43,7 +43,7 @@ const values = (name: string): string[] => {
     const value: string | undefined = argv[index + 1]
     // The guard is deliberate: argv can be shorter than the flag suggests, which the type of an
     // index read does not admit. Hence the comparison the linter calls impossible.
-    // eslint-disable-next-line sonarjs/different-types-comparison, @typescript-eslint/no-unnecessary-condition
+
     if (value === undefined || value.startsWith('-')) {
       throw new Error(`${name} needs a value`)
     }
@@ -79,7 +79,7 @@ const HOME = process.env.PROBE_HOME ?? '/tmp/dsh-ui-probe'
 // never removed; the default directory is ours, and a run that was kept or killed must not turn
 // every later run into a reuse of its leftovers.
 const HOME_EXISTED =
-  process.env.PROBE_HOME != null &&
+  process.env.PROBE_HOME !== undefined &&
   (await fs.access(HOME).then(
     () => true,
     () => false,
@@ -548,8 +548,8 @@ try {
             .replaceAll(/\s+/g, ' ')
             .trim()
             // Runs inside the page, so it cannot see this module's constants.
-            // eslint-disable-next-line @typescript-eslint/no-magic-numbers
-            .slice(0, 40),
+
+            .slice(0, 50),
           r: e.getAttribute('role') ?? e.tagName,
         }))
         .filter(x => x.t),
@@ -618,8 +618,8 @@ try {
           .map(
             a =>
               // Runs inside the page, so it cannot see this module's constants.
-              // eslint-disable-next-line @typescript-eslint/no-magic-numbers
-              `${a.name}=${JSON.stringify(a.value.slice(0, 70))}`,
+
+              `${a.name}=${JSON.stringify(a.value.slice(0, 60))}`,
           )
           .join(' '),
       })),
@@ -739,8 +739,8 @@ try {
     text: document.body.textContent
       .replaceAll(/\s+/g, ' ')
       // Runs inside the page, so it cannot see this module's constants.
-      // eslint-disable-next-line @typescript-eslint/no-magic-numbers
-      .slice(0, 300),
+
+      .slice(0, 365),
   }))
   const shot = path.join(SHOTS, `${SHOT}.png`)
   await page.screenshot({ path: shot, fullPage: false })

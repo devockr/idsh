@@ -1,15 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "github>1stG/configs"
-  ],
+  "extends": ["github>1stG/configs"],
   "customManagers": [
     {
       "customType": "regex",
       "description": "Keep the `npm install -g` pins in the Dockerfile up to date; one or several packages per command are read",
-      "managerFilePatterns": [
-        "/(^|/)Dockerfile$/"
-      ],
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
       "matchStringsStrategy": "recursive",
       "matchStrings": [
         "npm install -g (?:\\\\\\n|[^\\n&])+",
@@ -20,9 +16,7 @@
     {
       "customType": "regex",
       "description": "Keep the plugin versions baked into the images up to date; one or several packages per `dsh plugin add` are read",
-      "managerFilePatterns": [
-        "/(^|/)Dockerfile(\\.test)?$/"
-      ],
+      "managerFilePatterns": ["/(^|/)Dockerfile(\\.test)?$/"],
       "matchStringsStrategy": "recursive",
       "matchStrings": [
         "dsh plugin --profile web add (?:\\\\\\n|[^\\n&])+",

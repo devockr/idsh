@@ -1,5 +1,5 @@
 ---
-"@idsh/host-ops": minor
+'@idsh/host-ops': minor
 ---
 
 `deploy.build` and `deploy.main` run as dsh background jobs when the host has a job registry: the

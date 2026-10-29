@@ -14,6 +14,7 @@ import 'github-markdown-css'
  * re-running effects. `useMemo` is a hint React may discard, which here costs at most that
  * remount.
  */
+/* oxlint-disable react/static-components -- each route must remount when its name changes */
 const Readme = () => {
   const { name } = useParams<{ name: string }>()
   const Page = useMemo(
@@ -57,6 +58,8 @@ const Roadmap = () => {
     </Suspense>
   )
 }
+
+/* oxlint-enable react/static-components */
 
 export const App = () => (
   <Router>
