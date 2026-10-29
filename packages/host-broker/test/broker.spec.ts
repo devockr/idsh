@@ -2436,6 +2436,7 @@ void test('proc.list reads the process table, biggest resident set first', async
     '41',
     '42',
     '44',
+    '45',
   ]) {
     await mkdir(path.join(procDir, pid), { recursive: true })
   }
@@ -2473,6 +2474,12 @@ void test('proc.list reads the process table, biggest resident set first', async
   await writeFile(path.join(procDir, '41', 'status'), 'VmRSS:\t  3 kB\n')
   await writeFile(path.join(procDir, '42', 'stat'), '42 (badppid) S xx 1 0')
   await writeFile(path.join(procDir, '42', 'status'), 'VmRSS:\t  4 kB\n')
+  // A line separator (U+2028) folds to a space too: a renderer would draw it as a line break.
+  await writeFile(
+    path.join(procDir, '45', 'stat'),
+    stat('45', 'line\u2028sep', 'S', 1),
+  )
+  await writeFile(path.join(procDir, '45', 'status'), 'VmRSS:\t  9 kB\n')
   // A printable Unicode name keeps its characters; only control characters are replaced.
   await writeFile(path.join(procDir, '44', 'stat'), stat('44', '中文', 'S', 1))
   await writeFile(path.join(procDir, '44', 'status'), 'VmRSS:\t  8 kB\n')
@@ -2503,12 +2510,13 @@ void test('proc.list reads the process table, biggest resident set first', async
     assert.equal(lines[4], '     61       1 S       500 same')
     // The closing paren survives, and the newline in comm became a space.
     assert.equal(lines[5], '     40       1 S        10 sd) pam')
-    assert.equal(lines[6], '     44       1 S         8 中文')
+    assert.equal(lines[6], '     45       1 S         9 line sep')
+    assert.equal(lines[7], '     44       1 S         8 中文')
     assert.equal(
-      lines[7],
+      lines[8],
       '     50       1 S         5 evil    1       1 S      9999 spoofed',
     )
-    assert.equal(lines.length, 8)
+    assert.equal(lines.length, 9)
     assert.ok(lines.every(line => !line.includes('nope')))
 
     // Two calls answer the same bytes, ties included.
