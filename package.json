@@ -16,7 +16,7 @@
     "docs:build": "vite build",
     "docs:dev": "vite",
     "format": "concurrently \"pnpm:format:base:* --write\"",
-    "format:base:oxfmt": "oxfmt --ignore-path .gitignore --ignore-path .oxfmtignore .",
+    "format:base:oxfmt": "oxfmt --ignore-path .gitignore .",
     "format:base:prettier": "prettier .",
     "format:check": "concurrently \"pnpm:format:base:* --check\"",
     "lint": "concurrently -n oxlint,eslint \"pnpm:lint:oxlint\" \"pnpm:lint:eslint\"",
