@@ -131,6 +131,20 @@ void test('a table that is not an array registers nothing', async () => {
   }
 })
 
+void test('an operation whose schema is an array is refused', async () => {
+  const table = [{ ...TABLE[0], input: [] }]
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }), /object input/u)
+    assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
 void test('a bad entry rejects the whole table', async () => {
   const table = [TABLE[0], { name: 'broken' }]
   const broker = await fakeBroker(

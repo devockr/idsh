@@ -8,13 +8,7 @@
 import { DEFAULT_SOCKET_PATH, DEFAULT_STATE_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 import { startDeployJob, type Jobs } from './stream.ts'
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null
-
-/** One field of an object-shaped value, or undefined when there is no such field. */
-const readField = (value: unknown, key: string): unknown =>
-  isRecord(value) ? value[key] : undefined
+import { isRecord, readField } from './values.ts'
 
 /** The broker's own answer, narrowed where the tool runner hands it back untyped. */
 const asAnswer = (value: unknown): BrokerAnswer => {
@@ -324,7 +318,12 @@ function asOp(value: unknown): DescribedOp {
     throw new Error('the broker described an operation that is not an object')
   }
   const { name, summary, input, confirm, timeoutMs } = value
-  if (typeof name !== 'string' || typeof summary !== 'string' || !isRecord(input)) {
+  if (
+    typeof name !== 'string' ||
+    typeof summary !== 'string' ||
+    !isRecord(input) ||
+    Array.isArray(input)
+  ) {
     throw new Error('the broker described an operation without a name, summary or object input')
   }
   return {

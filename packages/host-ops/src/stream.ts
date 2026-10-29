@@ -8,6 +8,7 @@ import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 
 import type { BrokerAnswer, BrokerEndpoint } from './socket.ts'
+import { isRecord } from './values.ts'
 
 /** A host's background-job registry, structurally: the plugin imports no dsh code. */
 export interface JobHandle {
@@ -35,9 +36,6 @@ export interface JobHooks {
   done: Promise<JobOutcome>
   cancel(reason?: string): void
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null
 
 export interface JobSpec {
   readonly kind: string

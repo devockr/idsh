@@ -78,17 +78,16 @@ export function parseRequest(line: string): BrokerRequest {
   if (!isRecord(value) || Array.isArray(value)) {
     throw new BrokerFault('bad-request', 'a request must be a JSON object')
   }
-  const record = value
-  const op = record['op']
+  const op = value['op']
   if (typeof op !== 'string' || op === '') {
     throw new BrokerFault('bad-request', 'op must be a non-empty string')
   }
   // `null` is dropped by `??`, so what is left is an object or a value of another kind.
-  const args: unknown = record['args'] ?? {}
+  const args: unknown = value['args'] ?? {}
   if (!isRecord(args) || Array.isArray(args)) {
     throw new BrokerFault('bad-request', 'args must be an object when present')
   }
-  const id = record['id']
+  const id = value['id']
   if (id !== undefined && typeof id !== 'string') {
     throw new BrokerFault('bad-request', 'id must be a string when present')
   }

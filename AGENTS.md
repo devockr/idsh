@@ -152,7 +152,9 @@ Observe the running thing; do not reason from source.
   `lib/index.js` — or `lib/client.js`, when the package also has a browser half — is missing, or
   whose `src/` is newer than the `*.tsbuildinfo` of its build (the state `tsc -b` itself compares
   against; a single output would false-positive on an incremental rebuild), so a forgotten rebuild
-  fails the build instead of shipping a `link:` target with nothing to load.
+  fails the build instead of shipping a `link:` target with nothing to load. `tsc -b` trusts
+  its own `*.tsbuildinfo`, so a removed `lib/` has to take that state with it (`tsc -b --clean
+  tsconfig.build.json`) — `pnpm build` alone answers "up to date" and leaves the directory absent.
 - **A package has no URL.** Its browser half arrives through the bundle endpoint
   (`plugins/??<pkg>/client.js,…&rev=…`), and nothing else under the package is reachable — on a
   deployment the app's own `/favicon.svg` answers 200 while every `/plugins/…` path answers 404.
@@ -221,7 +223,9 @@ Observe the running thing; do not reason from source.
 - **`pnpm lint` is the whole lint gate**: oxlint, eslint and tsc in parallel
   (`concurrently 'pnpm:lint:*'`, the three legs `lint:ox`, `lint:es`, `lint:tsc`). There is no
   separate typecheck script and CI calls only `pnpm lint`, so a new `lint:…` script joins the gate
-  by being named that way. `pnpm fix` runs the two fixers.
+  by being named that way. `pnpm fix` runs the two fixers. `lint:typecov` runs
+  `tools/typecov.mts`, which measures every project in the workspace (the root one and each
+  package's) because `type-coverage` handles one tsconfig per run.
 - **Only `ci.yml` pins Node lines**: a matrix of 24 (the oldest line `engines`
   allows) and 26 (what the images run). Every other workflow runs `lts/*`, because none of
   them decides what ships.

@@ -246,7 +246,7 @@ function rejectUnknown(args: Record<string, unknown>, allowed: readonly string[]
   }
 }
 
-/** Narrow a string to the allowed values without an assertion. */
+/** Narrow a string to the allowed values, so the return needs no second assertion. */
 function isChoice<T extends string>(allowed: readonly T[], value: string): value is T {
   return allowed.some(item => item === value)
 }

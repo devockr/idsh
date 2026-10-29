@@ -177,7 +177,13 @@ if (!home) {
 
 const live = path.join(home, '.dsh/profiles/web')
 const liveManifest = path.join(live, 'package.json')
-const liveModule = manifestOf(await importJson(liveManifest))
+const liveValue = await importJson(liveManifest)
+const liveModule = manifestOf(liveValue)
+
+if (liveValue !== null && liveModule === undefined) {
+  console.error('sync-companions: the live profile manifest cannot be read')
+  process.exit(1)
+}
 
 if (liveModule) {
   const bakedManifest = manifestOf(await importJson(path.join(baked, 'package.json')))
