@@ -2239,7 +2239,8 @@ echo "$*" >> '${pnpmLog}'
       const allowed = await admin.request({ op: 'broker.update', args: {} })
       return allowed.ok
     })
-    await waitFor(async () => stopped === 1)
+    await waitFor(async () => stopped >= 1)
+    assert.equal(stopped, 1)
   } finally {
     deployment.close()
     admin.close()
