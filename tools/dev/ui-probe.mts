@@ -20,8 +20,8 @@
  * - `--keep` leaves the probe instance and its `$DSH_HOME` behind for poking.
  * - `--shot <name>` prefixes the screenshots it writes, `probe` by default.
  * - `--scenario <name>` picks what the browser run exercises: `mobile` (a phone viewport),
- *   `discover-settings`, `settings-persistence` or `discover-composer`; the default walks the whole
- *   surface.
+ *   `discover-settings`, `settings-persistence` or `discover-composer`. Without it the run only
+ *   reports — facts, a screenshot and console problems — and none of the scenario checks run.
  * - `--no-browser` serves the shell and checks the composed plugin rows and bundle URLs without a
  *   browser — the mode to use where the container has no browser libraries.
  */
