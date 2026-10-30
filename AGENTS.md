@@ -91,7 +91,9 @@ published.
 `Dockerfile.dev` takes the broker's client from `code-vaults/gcb-client:dev` instead of npm — the
 dev image is where a gcb change meets idsh, and a published version would only ever show the last
 release — so that tag has to exist locally first: `docker build --target client -t
-code-vaults/gcb-client:dev .` in the broker's checkout. Its companion service in
+code-vaults/gcb-client:dev .` in the broker's checkout, and the overlay's `gcb` service needs the
+broker image too — `docker build --target host -t code-vaults/gcb-host:dev .` — because
+`deploy:dev` now pre-flights every service the config names. Its companion service in
 `docker-compose.dev.yml` (`gcb`, image `code-vaults/gcb-host:dev`) is the broker itself: one
 process per socket, so it replaces a standalone deployment rather than joining it — drop the service
 when the broker is supervised elsewhere. The socket directory is the state directory's

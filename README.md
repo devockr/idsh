@@ -172,7 +172,12 @@ of the container:
 
 So the container holds no GitHub credential at rest, revocation is a host-side change to the
 allowlist rather than a sweep of every token in flight, and the App's permissions say what a push may
-touch. The same route answers the API calls the agent makes, not just `git push`.
+touch. `gcb setup` writes the deployment user's `~/.gitconfig` and the helper's own socket/CA
+files — configuration, never a credential.
+
+The image ships the client, not a wrapper for every other tool: what an agent uses is `gcb pr`,
+`gcb gh`, `gcb logs` and `gcb run`, which talk to the same socket, so the API calls it chooses to
+make do not need a second credential either.
 
 ### What it does not do
 
@@ -204,7 +209,8 @@ form there.
 For development, the dev image carries the broker's **local** client build
 (`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.dev.yml` runs the
 broker itself as the `gcb` service — `code-vaults/gcb-host:dev`, against the same socket directory
-(`.dsh/git-broker`), and `dsh` waits for it (`depends_on`). One broker serves the host, so it
+(`.dsh/git-broker`), and `dsh` waits for its socket to be bound — the service's healthcheck is
+`test -S /run/git-broker/broker.sock`, and `depends_on` uses `service_healthy`. One broker serves the host, so it
 replaces a standalone deployment rather than being added next to one; drop the service when the
 broker is supervised elsewhere.
 

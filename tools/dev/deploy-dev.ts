@@ -114,8 +114,14 @@ interface Mount {
   read_only?: boolean
   bind?: { create_host_path?: boolean }
 }
+interface Service {
+  image?: string
+  container_name?: string
+  volumes?: Mount[]
+}
 interface Resolved {
-  services?: Record<string, { image?: string; volumes?: Mount[] }>
+  name?: string
+  services?: Record<string, Service>
 }
 const resolved = JSON.parse(await compose(['config', '--format', 'json'])) as Resolved
 const service = resolved.services?.dsh ?? {}
@@ -169,6 +175,64 @@ if (warned.length > 0) {
     console.log(
       `deploy:dev: warning — ${warned.length} bind(s) compose may create do not mount here:\n${stderrOf(error)}`,
     )
+  }
+}
+
+// Every other service the same `up` creates can take the deployment down just as well, so the
+// two failures that need nothing but the config and the daemon are checked here too: an image the
+// daemon does not have, and a container name another project already owns (the broker's sidecar
+// is called `gcb` by default, which is now this overlay's name for it as well).
+const project = resolved.name ?? ''
+for (const [name, other] of Object.entries(resolved.services ?? {})) {
+  if (name === 'dsh') {
+    continue
+  }
+  const otherImage = other.image
+  if (otherImage) {
+    try {
+      await docker(['image', 'inspect', otherImage])
+    } catch {
+      die(`service ${name}: image ${otherImage} is not in this daemon; nothing was touched`)
+    }
+  }
+  const containerName = other.container_name
+  if (containerName) {
+    let owner = ''
+    try {
+      owner = (
+        await docker([
+          'inspect',
+          containerName,
+          '--format',
+          '{{ index .Config.Labels "com.docker.compose.project" }}',
+        ])
+      ).trim()
+    } catch {
+      owner = ''
+    }
+    if (owner !== project) {
+      die(
+        `service ${name}: a container named ${containerName} already exists` +
+          (owner === '' ? '' : ` (project ${owner})`) +
+          '; stop it or drop the service; nothing was touched',
+      )
+    }
+  }
+  const otherBinds = (other.volumes ?? []).filter(
+    mount =>
+      mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
+  )
+  const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path === false)
+  const otherGated = otherStrict.filter(mount => !needsQuoting(mount))
+  if (otherStrict.length > 0 && !otherImage) {
+    die(`service ${name}: its binds cannot be pre-flighted without an image; nothing was touched`)
+  }
+  if (otherImage && otherGated.length > 0) {
+    try {
+      await docker(['run', '--rm', ...toArgs(otherGated), '--entrypoint', 'true', otherImage])
+    } catch (error) {
+      die(`service ${name}: bind pre-flight failed, nothing was touched:\n${stderrOf(error)}`)
+    }
   }
 }
 
