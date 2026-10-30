@@ -131,6 +131,7 @@ const bindsOf = (list: Mount[]): BindMount[] =>
 interface Service {
   image?: string
   container_name?: string
+  pull_policy?: string
   volumes?: Mount[]
 }
 interface Resolved {
@@ -205,7 +206,9 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
   // that exists but has the wrong type or permissions is left to the container — `up` mounts it
   // happily, the healthcheck is what fails, and that lands after the removal. This dev-only script
   // accepts that trade instead of growing a checker per case.
-  if (other.image) {
+  // Only an image compose will not pull is a failure to know about: a pullable one is fetched by
+  // `up` itself, so refusing it here would reject a deployment that works.
+  if (other.image && other.pull_policy === 'never') {
     try {
       await docker(['image', 'inspect', other.image])
     } catch {
