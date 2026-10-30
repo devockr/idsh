@@ -27,6 +27,37 @@ globalThis.__ModuleLoader__.load({
     const exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
+    const isObject = (value: unknown): value is Record<string, unknown> =>
+      typeof value === 'object' && value !== null
+
+    const isLoopbackOf = (value: unknown): value is { isLoopback: boolean } =>
+      isObject(value) && typeof value.isLoopback === 'boolean'
+
+    /** The marker for a connection whose flag cannot be read, naming what it was instead. */
+    const missingFlag = (connection: unknown): string =>
+      'SELF-CHECK-FAILED connection.isLoopback is ' +
+      typeof (isObject(connection) ? connection.isLoopback : undefined)
+
+    /** Write the flag, reporting a frozen one; false means the page cannot be privileged. */
+    const writeFlag = (connection: { isLoopback: boolean }): boolean => {
+      try {
+        connection.isLoopback = true
+        return true
+      } catch (error) {
+        mark(
+          'SELF-CHECK-FAILED not writable: ' +
+            (error instanceof Error ? error.message : String(error)),
+        )
+        return false
+      }
+    }
+
+    /** The gateway's own copy of the flag, which is what the settings pages read. */
+    const factsOf = (services: unknown): unknown => {
+      const remote = isObject(services) ? services.remote : undefined
+      return isObject(remote) ? remote.$host : undefined
+    }
+
     const MARK = 'idshPrivileged'
 
     /** Set when this plugin is disposed, and read again before the flag is written. */
@@ -101,20 +132,14 @@ globalThis.__ModuleLoader__.load({
       // and it declares the flag `readonly` on the host side, because a served page is not supposed
       // to write it at all. Stating the shape here is smaller than a hand-written context interface
       // and keeps everything else — `ctx.effect` included — checked against dsh's own types.
-      const services = ctx as unknown as {
-        connection?: { isLoopback: boolean }
-        remote?: { $host?: { isLoopback?: boolean } }
-      }
-      const connection = services.connection
-      const before = connection?.isLoopback
-      if (connection === undefined || typeof before !== 'boolean') {
-        mark('SELF-CHECK-FAILED connection.isLoopback is ' + typeof before)
+      const services: unknown = ctx
+      const connection = isObject(services) ? services.connection : undefined
+      if (!isLoopbackOf(connection)) {
+        mark(missingFlag(connection))
         return
       }
-      try {
-        connection.isLoopback = true
-      } catch (error) {
-        mark('SELF-CHECK-FAILED not writable: ' + (error as Error).message)
+      const before = connection.isLoopback
+      if (!writeFlag(connection)) {
         return
       }
       // Whether the consumers can see this depends on when they read it: the gateway copies the
@@ -123,8 +148,8 @@ globalThis.__ModuleLoader__.load({
       // is the activation-order regression this package exists to prevent, and it has to fail as
       // loudly as a property that cannot be written. A profile with no gateway at all reports
       // undefined, which is not judged.
-      const facts = services.remote?.$host
-      const host = facts?.isLoopback
+      const facts = factsOf(services)
+      const host = isLoopbackOf(facts) ? facts.isLoopback : undefined
       const state = 'connection:' + before + '->' + connection.isLoopback + ' host:' + host
       const visible = host !== false
       // The one ordering outcome that is still repairable: a live gateway that copied `false` before
@@ -132,7 +157,7 @@ globalThis.__ModuleLoader__.load({
       // reader that has not cached the value itself — and the marker below still reports that the
       // gateway had it wrong, so the regression is visible rather than quietly papered over.
       let repaired = false
-      if (host === false && facts !== undefined) {
+      if (host === false && isObject(facts)) {
         try {
           facts.isLoopback = true
           repaired = true
@@ -145,9 +170,9 @@ globalThis.__ModuleLoader__.load({
         try {
           connection.isLoopback = before
         } catch {}
-        if (repaired) {
+        if (repaired && isObject(facts)) {
           try {
-            ;(facts as { isLoopback?: boolean }).isLoopback = host
+            facts.isLoopback = host
           } catch {}
         }
       })

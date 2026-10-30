@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { apply, registerTools, type HostContext, type HostTool } from '../src/index.ts'
-import { buildLogSource, type JobSpec } from '../src/stream.ts'
+import { apply, registerTools, type Config, type HostContext, type HostTool } from '../src/index.ts'
+import { buildLogSource, startDeployJob, type JobSpec } from '../src/stream.ts'
 import { fakeBroker } from './server.ts'
 
 // The plugin adds its own slack to an operation's declared budget; keep both numbers named.
@@ -131,6 +131,20 @@ void test('a table that is not an array registers nothing', async () => {
   }
 })
 
+void test('an operation whose schema is an array is refused', async () => {
+  const table = [{ ...TABLE[0], input: [] }]
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }), /object input/u)
+    assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
 void test('a bad entry rejects the whole table', async () => {
   const table = [TABLE[0], { name: 'broken' }]
   const broker = await fakeBroker(
@@ -145,9 +159,88 @@ void test('a bad entry rejects the whole table', async () => {
   }
 })
 
+void test('a tool call whose arguments are not an object is refused', async () => {
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    for (const invalid of ['not-an-object', []]) {
+      await assert.rejects(
+        tools[0].execute(invalid, { signal: new AbortController().signal }),
+        /arguments must be an object/u,
+      )
+    }
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a job whose arguments are an array fails before the call', async () => {
+  let reached = false
+  const started: JobSpec[] = []
+  const jobs = {
+    start(spec: JobSpec) {
+      started.push(spec)
+      return 'job-1'
+    },
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), 'host-ops-guard-'))
+  startDeployJob(jobs, {
+    name: 'deploy.build',
+    args: [],
+    endpoint: { socketPath: path.join(dir, 'host.sock') },
+    statePath: dir,
+    logPath: path.join(dir, 'build.log'),
+    call: () => {
+      reached = true
+      return Promise.resolve({ text: 'built', truncated: false })
+    },
+  })
+  const spec = started[0]
+  assert.ok(spec !== undefined)
+  const outcome = await spec.run({ append: () => undefined }).done
+  assert.equal(outcome.status, 'failed')
+  assert.match(String(outcome.detail), /object arguments/u)
+  assert.equal(reached, false)
+  await rm(dir, { recursive: true, force: true })
+})
+
+void test('a job whose arguments are not an object fails before the call', async () => {
+  let reached = false
+  const started: JobSpec[] = []
+  const jobs = {
+    start(spec: JobSpec) {
+      started.push(spec)
+      return 'job-1'
+    },
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), 'host-ops-guard-'))
+  startDeployJob(jobs, {
+    name: 'deploy.build',
+    args: 'not-an-object',
+    endpoint: { socketPath: path.join(dir, 'host.sock') },
+    statePath: dir,
+    logPath: path.join(dir, 'build.log'),
+    call: () => {
+      reached = true
+      return Promise.resolve({ text: 'built', truncated: false })
+    },
+  })
+  const spec = started[0]
+  assert.ok(spec !== undefined)
+  const hooks = spec.run({ append: () => undefined })
+  const outcome = await hooks.done
+  assert.equal(outcome.status, 'failed')
+  assert.match(String(outcome.detail), /object arguments/u)
+  assert.equal(reached, false)
+  await rm(dir, { recursive: true, force: true })
+})
+
 void test('a bad config registers nothing and warns', async () => {
   const bad = context()
-  await apply(bad.ctx, { socketPath: {} as unknown as string })
+  await apply(bad.ctx, { socketPath: {} } as Config)
   assert.deepEqual(bad.tools, [])
   assert.match(bad.warnings[0] ?? '', /socketPath must be a non-empty string/u)
 
@@ -409,14 +502,16 @@ void test('a deploy runs as a job that follows the broker build log', async () =
       },
     }
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
-    const answer = (await built.tools[0].execute(
+    const answer = await built.tools[0].execute(
       {},
       {
         signal: new AbortController().signal,
         agent: { id: 'ses_abc' },
         callId: 'call-1',
       },
-    )) as { text: string }
+    )
+    assert.ok(typeof answer === 'object' && answer !== null && 'text' in answer)
+    assert.ok(typeof answer.text === 'string')
     assert.match(answer.text, /started deploy-1/u)
 
     const spec = started[0]

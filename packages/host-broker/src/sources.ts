@@ -172,11 +172,12 @@ function runFixed(
       settle(new BrokerFault('timeout', 'the operation was cancelled'))
     }
     ctx.signal?.addEventListener('abort', onAbort, { once: true })
+    const logPath = options.logPath
     const collect = (chunk: Buffer): void => {
-      if (options.logPath !== undefined) {
+      if (logPath !== undefined) {
         // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
         logChain = logChain
-          .then(() => appendFile(options.logPath as string, chunk, { mode: FILE_MODE }))
+          .then(() => appendFile(logPath, chunk, { mode: FILE_MODE }))
           .catch(() => null)
       }
       buffer = Buffer.concat([buffer, chunk])
@@ -245,19 +246,24 @@ function rejectUnknown(args: Record<string, unknown>, allowed: readonly string[]
   }
 }
 
+/** Narrow a string to the allowed values, so the return needs no second assertion. */
+function isChoice<T extends string>(allowed: readonly T[], value: string): value is T {
+  return allowed.some(item => item === value)
+}
+
 function choice<T extends string>(
   args: Record<string, unknown>,
   name: string,
   allowed: readonly T[],
 ): T {
   const value = args[name]
-  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+  if (typeof value !== 'string' || !isChoice(allowed, value)) {
     throw new BrokerFault(
       'bad-argument',
       `${name} must be one of ${allowed.map(item => JSON.stringify(item)).join(', ')}`,
     )
   }
-  return value as T
+  return value
 }
 
 function integer(
@@ -323,7 +329,7 @@ async function tail(
   ctx: OpContext,
 ): Promise<string> {
   const filePath = path.join(ctx.logDir, LOG_FILES[file])
-  let info
+  let info: Awaited<ReturnType<typeof stat>>
   try {
     info = await stat(filePath)
   } catch {
@@ -1283,10 +1289,13 @@ async function recordRollback(ctx: OpContext): Promise<string> {
       '{{json .RepoDigests}}',
       id,
     ])
-    const list = JSON.parse(digestsText.trim().split('\n')[0] ?? '[]') as unknown
+    const parsed: unknown = JSON.parse(digestsText.trim().split('\n')[0] ?? '[]')
     // A pulled image is one pull away; a local one only exists as its id.
-    if (Array.isArray(list) && typeof list[0] === 'string') {
-      previous = list[0]
+    if (Array.isArray(parsed)) {
+      const list: unknown[] = parsed
+      if (typeof list[0] === 'string') {
+        previous = list[0]
+      }
     }
   } catch {
     // No digests: the id is the target.

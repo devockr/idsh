@@ -1,8 +1,7 @@
 {
-  "extends": "@1stg/tsconfig/nodenext",
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023", "DOM"],
-    "types": ["node"],
     "noEmit": true,
     "outDir": "dist"
   },

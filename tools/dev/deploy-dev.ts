@@ -39,12 +39,15 @@ const run = async (
 }
 
 const stderrOf = (error: unknown): string => {
-  const stderr = (error as { stderr?: unknown }).stderr
-  if (typeof stderr === 'string') {
-    return stderr.trim()
+  if (typeof error === 'object' && error !== null) {
+    if ('stderr' in error && typeof error.stderr === 'string') {
+      return error.stderr.trim()
+    }
+    if ('message' in error && typeof error.message === 'string') {
+      return error.message.trim()
+    }
   }
-  const message = (error as { message?: unknown }).message
-  return typeof message === 'string' ? message.trim() : String(error).trim()
+  return String(error).trim()
 }
 
 // docker is not on every PATH this runs under — a login shell here has node and pnpm but not
@@ -142,7 +145,7 @@ const needsQuoting = (mount: Mount): boolean => /[",]/.test(`${mount.source}${mo
 const toArgs = (list: Mount[]): string[] =>
   list.flatMap(mount => [
     '--mount',
-    `type=bind,source=${mount.source as string},target=${mount.target as string}${mount.read_only ? ',readonly' : ''}`,
+    `type=bind,source=${mount.source},target=${mount.target}${mount.read_only ? ',readonly' : ''}`,
   ])
 const gated = strict.filter(mount => !needsQuoting(mount))
 const warned = [...created, ...strict.filter(needsQuoting)]

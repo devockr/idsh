@@ -4,8 +4,7 @@
     "noEmit": false,
     "rootDir": "src",
     "outDir": "lib",
-    "declaration": true,
-    "stripInternal": true
+    "composite": true
   },
   "include": ["src"]
 }

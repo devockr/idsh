@@ -40,11 +40,12 @@ jobs:
       - name: Format
         run: pnpm format
 
-      # Anything ESLint can fix is fixed too, but a rule it cannot fix is the CI job's business:
-      # this one has to reach the action below, which commits whatever was changed.
+      # Both fixers run: oxlint for JS/TS, eslint for the Markdown/JSON/YAML/TOML it owns. A rule
+      # neither can fix is the CI job's business; this step has to reach the action below, which
+      # commits whatever was changed.
       - name: Lint
         continue-on-error: true
-        run: pnpm lint:fix
+        run: pnpm fix
 
       - name: Apply autofix.ci
         uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a # v1.3.4

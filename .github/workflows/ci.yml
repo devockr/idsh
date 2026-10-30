@@ -53,13 +53,15 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Typecheck
-        run: pnpm typecheck
-
       # Both images refuse a package whose src is newer than its compiled lib, so a build that
       # fails here is a deployment that cannot be rebuilt.
       - name: Build
         run: pnpm build
+
+      # After the build: a package types through its own declarations, so coverage of an unbuilt
+      # tree is a different measurement.
+      - name: Type Coverage
+        run: pnpm typecov
 
       # The recursive `test` script skips a package without one, so the reach of this step grows as
       # packages gain tests — the host broker is the first.

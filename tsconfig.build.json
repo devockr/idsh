@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "files": [],
+  "references": [
+    { "path": "./packages/host-broker/tsconfig.build.json" },
+    { "path": "./packages/host-ops/tsconfig.build.json" },
+    { "path": "./packages/mobile/tsconfig.json" },
+    { "path": "./packages/privileged-ui/tsconfig.json" }
+  ]
+}

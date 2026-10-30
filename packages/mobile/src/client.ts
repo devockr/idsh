@@ -168,7 +168,9 @@ globalThis.__ModuleLoader__.load({
           teardown.push(off)
           mark(state + ' icon:ok')
         })
-        .catch((error: unknown) => mark(state + ' icon:' + (error as Error).message))
+        .catch((error: unknown) =>
+          mark(state + ' icon:' + (error instanceof Error ? error.message : String(error))),
+        )
       // cordis's own teardown: the effect body returns what undoes it.
       ctx.effect(() => () => {
         disposed = true

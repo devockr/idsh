@@ -8,6 +8,7 @@ import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 
 import type { BrokerAnswer, BrokerEndpoint } from './socket.ts'
+import { isRecord } from './values.ts'
 
 /** A host's background-job registry, structurally: the plugin imports no dsh code. */
 export interface JobHandle {
@@ -127,10 +128,13 @@ export function startDeployJob(jobs: Jobs, target: StreamTarget): string {
     run() {
       const work = (async (): Promise<JobOutcome> => {
         try {
+          if (!isRecord(target.args)) {
+            throw new Error('host-ops: a job must carry object arguments')
+          }
           const answer = await target.call(
             target.endpoint,
             target.name,
-            target.args as Record<string, unknown>,
+            target.args,
             controller.signal,
           )
           // The log arrives through the source; the answer is the job's result, once.

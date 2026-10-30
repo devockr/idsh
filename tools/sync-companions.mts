@@ -30,15 +30,81 @@ const exists = async (path: string): Promise<boolean> => {
   return stat !== null
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+/** Only "there is no such file" is an empty answer; a half-written or unreadable one is not. */
+const isNotFound = (error: unknown): boolean =>
+  isObject(error) && (error.code === 'ENOENT' || error.code === 'ERR_MODULE_NOT_FOUND')
+
 const importJson = async (file: string): Promise<unknown> =>
-  import(file, { with: { type: 'json' } }).catch(() => null)
+  import(file, { with: { type: 'json' } }).catch((error: unknown) => {
+    if (isNotFound(error)) {
+      return null
+    }
+    throw error
+  })
+
+const stringOf = (record: Record<string, unknown>, key: string): string | undefined => {
+  const value = record[key]
+  return typeof value === 'string' ? value : undefined
+}
 
 const packageOf = async (dir: string): Promise<Package | undefined> => {
-  const loaded = (await importJson(path.join(dir, 'package.json'))) as {
-    default?: Package
-  } | null
+  // Deliberately forgiving here: a directory whose manifest cannot be read is no more usable than
+  // a missing one, and the repair below replaces it the way the image installed it.
+  const loaded = await importJson(path.join(dir, 'package.json')).catch(() => null)
+  if (!isObject(loaded) || !isObject(loaded.default)) {
+    return undefined
+  }
+  const entry = loaded.default
+  const version = stringOf(entry, 'version')
+  const main = stringOf(entry, 'main')
+  const exported = isObject(entry.exports) ? entry.exports : undefined
+  return {
+    ...(version === undefined ? {} : { version }),
+    ...(main === undefined ? {} : { main }),
+    ...(exported === undefined ? {} : { exports: exported }),
+  }
+}
 
-  return loaded?.default
+/** The live and baked profile manifests, narrowed once instead of asserted at every use. */
+const manifestOf = (value: unknown): Manifest | undefined => {
+  if (!isObject(value) || !isObject(value.default)) {
+    return undefined
+  }
+  const record = value.default
+  if (!isObject(record.dependencies) || !isObject(record.dsh)) {
+    return undefined
+  }
+  const profile = record.dsh.profile
+  if (!isObject(profile)) {
+    return undefined
+  }
+  const rawBundles: unknown = profile.bundles
+  if (!Array.isArray(rawBundles)) {
+    return undefined
+  }
+  const bundles: unknown[] = rawBundles
+  const dependencies: Record<string, string> = {}
+  for (const [name, spec] of Object.entries(record.dependencies)) {
+    if (typeof spec === 'string') {
+      dependencies[name] = spec
+    }
+  }
+  // The manifest is written back, so everything it already said is kept: only the two fields the
+  // repair recomputes are replaced.
+  return {
+    ...record,
+    dependencies,
+    dsh: {
+      ...record.dsh,
+      profile: {
+        ...profile,
+        bundles: bundles.filter((bundle): bundle is string => typeof bundle === 'string'),
+      },
+    },
+  }
 }
 
 /**
@@ -56,9 +122,7 @@ const entriesOf = (manifest: Package | undefined): string[] => {
     if (typeof value === 'string') {
       return value
     }
-    return value && typeof value === 'object'
-      ? pick((value as Record<string, unknown>).default)
-      : undefined
+    return isObject(value) ? pick(value.default) : undefined
   }
   const exports = manifest?.exports ?? {}
   return [manifest?.main, pick(exports['.']), pick(exports['./client'])].filter(
@@ -129,17 +193,31 @@ if (!home) {
 
 const live = path.join(home, '.dsh/profiles/web')
 const liveManifest = path.join(live, 'package.json')
-const liveModule = (await importJson(liveManifest)) as {
-  default: Manifest
-} | null
+const liveValue = await importJson(liveManifest).catch(() => {
+  console.error('sync-companions: the live profile manifest cannot be read')
+  process.exit(1)
+})
+const liveModule = manifestOf(liveValue)
+
+if (liveValue !== null && liveModule === undefined) {
+  console.error('sync-companions: the live profile manifest cannot be read')
+  process.exit(1)
+}
 
 if (liveModule) {
-  const bakedModule = (await importJson(path.join(baked, 'package.json'))) as {
-    default: Manifest
+  const bakedManifest = manifestOf(
+    await importJson(path.join(baked, 'package.json')).catch(() => {
+      console.error('sync-companions: the baked profile manifest cannot be read')
+      process.exit(1)
+    }),
+  )
+
+  if (bakedManifest === undefined) {
+    console.error('sync-companions: the baked profile manifest cannot be read')
+    process.exit(1)
   }
 
-  const bakedManifest = bakedModule.default
-  const manifest = liveModule.default
+  const manifest = liveModule
   const { dependencies } = manifest
   const { bundles } = manifest.dsh.profile
   const wasInstalled = new Set(Object.keys(dependencies))

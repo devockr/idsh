@@ -339,11 +339,11 @@ async function boot() {
 
 const { chromium } = await import('playwright')
 
-await prepareProfile().catch(async error => {
+await prepareProfile().catch(async (error: unknown) => {
   await forget()
   throw error
 })
-const { url, token, out } = await boot().catch(async error => {
+const { url, token, out } = await boot().catch(async (error: unknown) => {
   await forget()
   throw error
 })
@@ -456,7 +456,7 @@ const browser = await chromium
   })
   // Expected to fail wherever the browser libraries are absent — the published image, say. The
   // process exits on the unhandled rejection either way; this way the directory goes with it.
-  .catch(async error => {
+  .catch(async (error: unknown) => {
     await forget()
     throw error
   })

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@1stg/tsconfig/nodenext",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "importHelpers": false
+  }
+}

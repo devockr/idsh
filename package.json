@@ -9,24 +9,25 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "pnpm --recursive --if-present --workspace-concurrency=1 run build",
+    "build": "tsc -b tsconfig.build.json",
     "deploy:dev": "pnpm dev && node tools/dev/deploy-dev.ts",
     "deploy:dev:dry": "node tools/dev/deploy-dev.ts --dry",
     "dev": "pnpm build && docker build --target base -t devockr/idsh:base . && docker build -f Dockerfile.dev -t devockr/idsh:dev .",
     "docs:build": "vite build",
     "docs:dev": "vite",
-    "format": "concurrently \"pnpm:format:base:* --write\"",
+    "fix": "concurrently 'pnpm:lint:ox --fix' 'pnpm:lint:es --fix'",
+    "format": "concurrently 'pnpm:format:base:* --write'",
     "format:base:oxfmt": "oxfmt --ignore-path .gitignore .",
     "format:base:prettier": "prettier .",
-    "format:check": "concurrently \"pnpm:format:base:* --check\"",
-    "lint": "concurrently -n oxlint,eslint \"pnpm:lint:oxlint\" \"pnpm:lint:eslint\"",
-    "lint:eslint": "eslint --flag unstable_native_nodejs_ts_config . --cache",
-    "lint:fix": "oxlint --fix .",
-    "lint:oxlint": "oxlint .",
+    "format:check": "concurrently 'pnpm:format:base:* --check'",
+    "lint": "concurrently 'pnpm:lint:*'",
+    "lint:es": "eslint --flag unstable_native_nodejs_ts_config . --cache",
+    "lint:ox": "oxlint .",
+    "lint:tsc": "tsc -p tsconfig.json",
     "pack": "pnpm --recursive pack",
     "release": "changeset publish",
     "test": "pnpm --recursive --if-present run test",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecov": "node tools/typecov.mts",
     "version": "changeset version && node tools/sync-image-pins.mts && pnpm install --lockfile-only"
   },
   "devDependencies": {
@@ -35,7 +36,7 @@
     "@1stg/oxfmt-config": "^1.1.0",
     "@1stg/oxlint-config": "^1.1.0",
     "@1stg/prettier-config": "^7.0.0",
-    "@1stg/tsconfig": "^5.0.0",
+    "@1stg/tsconfig": "^5.1.0",
     "@changesets/changelog-github": "^1.0.1",
     "@changesets/cli": "^3.0.3",
     "@mdx-js/rollup": "^3.1.1",
@@ -60,9 +61,21 @@
     "rehype-slug": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "semver": "^7.8.5",
+    "type-coverage": "^2.29.7",
     "typed-query-selector": "^2.12.3",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.71.2",
     "vite": "^8.3.4"
+  },
+  "typeCoverage": {
+    "atLeast": 100,
+    "detail": true,
+    "ignoreAsAssertion": true,
+    "ignoreFiles": [
+      "**/lib/**"
+    ],
+    "ignoreNonNullAssertion": true,
+    "showRelativePath": true,
+    "strict": true
   }
 }
