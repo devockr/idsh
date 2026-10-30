@@ -10,8 +10,7 @@
 // the image ships and runs itself keep the `.mts` extension: /opt/dsh/tools has no package.json,
 // so a `.ts` there would be CommonJS.
 import { execFile } from 'node:child_process'
-import { accessSync, constants, statSync } from 'node:fs'
-import type { Stats } from 'node:fs'
+import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -156,52 +155,10 @@ const mounts = bindsOf(service.volumes ?? [])
 const created = mounts.filter(mount => mount.bind?.create_host_path !== false)
 const strict = mounts.filter(mount => mount.bind?.create_host_path === false)
 
-// Compose creates a missing bind source as a *directory*, so a file that is supposed to be there
-// (a config, a key, a CA bundle) would become an empty directory and its reader would exit at
-// boot — long after `up` returned and, for the broker, after `dsh` was removed. Those sources are
-// checked here by name, because the resolved config cannot say which mounts are files: the
-// `create_host_path` field is written by some compose versions and omitted by others.
-const FILE_SOURCE = /\.(?:json|key|pem|ya?ml|conf|env|crt|log)$/iu
-const fileSources = (list: BindMount[]): BindMount[] =>
-  list.filter(mount => FILE_SOURCE.test(mount.source))
-for (const mount of fileSources(
-  bindsOf(Object.values(resolved.services ?? {}).flatMap(s => s.volumes ?? [])),
-)) {
-  try {
-    // A directory is what a short-syntax mount of a missing file leaves behind, so "it exists"
-    // is not the question: it has to be a file.
-    if (!statSync(mount.source).isFile()) {
-      throw new Error('not a file')
-    }
-  } catch {
-    die(`bind source ${mount.source} is not a file; nothing was touched`)
-  }
-}
 // --mount, not -v: -v creates a missing host path on a standard engine, so the check would pass
 // for the very mount it exists to catch, and would leave a root-owned directory behind even on
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
 // instead: this daemon refuses a quoted field outright (measured), a standard engine accepts it.
-/** `statSync`, or a stop that names the service and the source it could not read. */
-const codeOf = (error: unknown): string => {
-  if (typeof error !== 'object' || error === null || !('code' in error)) {
-    return ''
-  }
-  return typeof error.code === 'string' ? error.code : ''
-}
-const statsOf = (source: string, serviceName: string): Stats => {
-  try {
-    return statSync(source)
-  } catch (error) {
-    if (codeOf(error) === 'ENOENT') {
-      return die(
-        `service ${serviceName}: bind source ${source} does not exist; nothing was touched`,
-      )
-    }
-    return die(
-      `service ${serviceName}: cannot read bind source ${source} (${codeOf(error) || 'unknown error'}); nothing was touched`,
-    )
-  }
-}
 const needsQuoting = (mount: BindMount): boolean => /[",]/.test(mount.source + mount.target)
 const toArgs = (list: BindMount[]): string[] =>
   list.flatMap(mount => [
@@ -234,99 +191,60 @@ if (warned.length > 0) {
 }
 
 // Every other service the same `up` creates can take the deployment down just as well, so the
-// two failures that need nothing but the config and the daemon are checked here too: an image the
-// daemon does not have, and a container name another project already owns (the broker's sidecar
-// is called `gcb` by default, which is now this overlay's name for it as well).
+// three failures that need nothing but the config and the daemon are checked here too: an image
+// the daemon does not have, a container name another project already owns (the broker's sidecar
+// is called `gcb` by default, which is now this overlay's name for it as well), and a strict bind
+// source that is not there.
 const project = resolved.name ?? ''
 for (const [name, other] of Object.entries(resolved.services ?? {})) {
   if (name === 'dsh') {
     continue
   }
-  const otherImage = other.image
-  if (otherImage) {
+  // Three things make `up` fail after the removal, and nothing else does: an image this daemon
+  // does not have, a container name another project holds, and a strict bind source that is not
+  // there. Types and permissions are the daemon's answer at `up`, not a guess worth coding.
+  if (other.image) {
     try {
-      await docker(['image', 'inspect', otherImage])
+      await docker(['image', 'inspect', other.image])
     } catch {
-      die(`service ${name}: image ${otherImage} is not in this daemon; nothing was touched`)
+      die(`service ${name}: image ${other.image} is not in this daemon; nothing was touched`)
     }
   }
   const containerName = other.container_name
   if (containerName) {
-    // `docker inspect` exits non-zero for a container that does not exist, which is the first
-    // deploy and the one after `docker compose down`: the name is free, not a conflict.
+    // `docker inspect` exits non-zero when there is no such container — the first deploy, or the
+    // one after `docker compose down` — which is a free name, not a conflict.
     let owner: string | undefined
-    let heldBy: string | undefined
     try {
-      const labels = (
+      owner = (
         await docker([
           'inspect',
           '--type',
           'container',
           containerName,
           '--format',
-          '{{ index .Config.Labels "com.docker.compose.project" }} {{ index .Config.Labels "com.docker.compose.service" }}',
+          '{{ index .Config.Labels "com.docker.compose.project" }}',
         ])
       ).trim()
-      const [projectLabel = '', serviceLabel = ''] = labels.split(' ')
-      owner = projectLabel
-      heldBy = serviceLabel
-    } catch (error) {
-      const message = stderrOf(error)
-      if (!/no such (?:object|container)/iu.test(message)) {
-        die(`service ${name}: could not inspect container ${containerName}:\n${message.trim()}`)
-      }
+    } catch {
       owner = undefined
     }
-    // The same project is fine only for the same service: another service of this stack holding
-    // the name fails `up` just the same, and by then `dsh` is gone.
-    if (owner !== undefined && (owner !== project || heldBy !== name)) {
+    if (owner !== undefined && owner !== project) {
       die(
         `service ${name}: a container named ${containerName} already exists` +
-          (owner === '' ? '' : ` (project ${owner})`) +
+          (owner === '' ? ' (no compose project)' : ` (project ${owner})`) +
           '; stop it or drop the service; nothing was touched',
       )
     }
   }
-  const otherBinds = bindsOf(other.volumes ?? [])
-  const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path === false)
-  // Checked against the filesystem, not by starting the image: a strict bind source must exist,
-  // and running a companion image just to prove that would fail on one without `true` (distroless).
-  for (const mount of otherStrict) {
-    const stats = statsOf(mount.source, name)
-    // A file source that a directory took over is the case the file check exists for; a directory
-    // that a stray file took over fails the other way — the daemon cannot bind it, the healthcheck
-    // never passes, and `dsh` is already gone by then.
-    if (FILE_SOURCE.test(mount.source)) {
-      if (!stats.isFile()) {
-        die(`service ${name}: bind source ${mount.source} is not a file; nothing was touched`)
-      }
+  for (const mount of bindsOf(other.volumes ?? [])) {
+    if (mount.bind?.create_host_path === false) {
       try {
-        accessSync(mount.source, constants.R_OK)
+        statSync(mount.source)
       } catch {
-        die(`service ${name}: bind source ${mount.source} is not readable; nothing was touched`)
-      }
-      continue
-    }
-    if (!stats.isDirectory()) {
-      die(`service ${name}: bind source ${mount.source} is not a directory; nothing was touched`)
-    }
-    // Written as the same uid the container runs as, so a directory it cannot write is a failure
-    // the pre-flight is allowed to predict — but only when the mount is actually meant to be
-    // written: a read-only bind is not supposed to be, and refusing it would reject a working
-    // deployment.
-    if (mount.read_only !== true) {
-      try {
-        accessSync(mount.source, constants.W_OK)
-      } catch {
-        die(`service ${name}: bind source ${mount.source} is not writable; nothing was touched`)
+        die(`service ${name}: bind source ${mount.source} does not exist; nothing was touched`)
       }
     }
-  }
-  const otherWarned = otherBinds.filter(mount => needsQuoting(mount))
-  if (otherWarned.length > 0) {
-    console.log(
-      `deploy:dev: warning — service ${name}: ${otherWarned.length} bind(s) cannot be pre-flighted (a comma or a quote in a path)`,
-    )
   }
 }
 
