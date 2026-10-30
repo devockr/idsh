@@ -30,8 +30,17 @@ const exists = async (path: string): Promise<boolean> => {
   return stat !== null
 }
 
+/** Only "there is no such file" is an empty answer; a half-written or unreadable one is not. */
+const isNotFound = (error: unknown): boolean =>
+  isRecord(error) && (error.code === 'ENOENT' || error.code === 'ERR_MODULE_NOT_FOUND')
+
 const importJson = async (file: string): Promise<unknown> =>
-  import(file, { with: { type: 'json' } }).catch(() => null)
+  import(file, { with: { type: 'json' } }).catch((error: unknown) => {
+    if (isNotFound(error)) {
+      return null
+    }
+    throw error
+  })
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -42,7 +51,9 @@ const stringOf = (record: Record<string, unknown>, key: string): string | undefi
 }
 
 const packageOf = async (dir: string): Promise<Package | undefined> => {
-  const loaded = await importJson(path.join(dir, 'package.json'))
+  // Deliberately forgiving here: a directory whose manifest cannot be read is no more usable than
+  // a missing one, and the repair below replaces it the way the image installed it.
+  const loaded = await importJson(path.join(dir, 'package.json')).catch(() => null)
   if (!isRecord(loaded) || !isRecord(loaded.default)) {
     return undefined
   }
@@ -182,7 +193,10 @@ if (!home) {
 
 const live = path.join(home, '.dsh/profiles/web')
 const liveManifest = path.join(live, 'package.json')
-const liveValue = await importJson(liveManifest)
+const liveValue = await importJson(liveManifest).catch(() => {
+  console.error('sync-companions: the live profile manifest cannot be read')
+  process.exit(1)
+})
 const liveModule = manifestOf(liveValue)
 
 if (liveValue !== null && liveModule === undefined) {
