@@ -23,6 +23,11 @@ services:
       # path needs no extra volume: with the `gcb` service below (or a host broker on the same
       # directory) git in this container asks the host for a credential instead of holding one.
       - GIT_BROKER_SOCKET=${GIT_BROKER_SOCKET:-/home/app/.dsh/git-broker/broker.sock}
+    # The broker has to be up first: `entrypoint.sh` runs `gcb setup` when the socket is there, and
+    # a boot that beat the socket would come up without a credential helper.
+    depends_on:
+      gcb:
+        condition: service_started
 
   # The credential broker, from its own checkout's dev image: `gcb compose`'s default name, and
   # the same shape it renders into the deployment directory. One broker serves the host, so this
