@@ -182,11 +182,24 @@ for (const mount of fileSources(
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
 // instead: this daemon refuses a quoted field outright (measured), a standard engine accepts it.
 /** `statSync`, or a stop that names the service and the source it could not read. */
+const codeOf = (error: unknown): string => {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return ''
+  }
+  return typeof error.code === 'string' ? error.code : ''
+}
 const statsOf = (source: string, serviceName: string): Stats => {
   try {
     return statSync(source)
-  } catch {
-    return die(`service ${serviceName}: bind source ${source} does not exist; nothing was touched`)
+  } catch (error) {
+    if (codeOf(error) === 'ENOENT') {
+      return die(
+        `service ${serviceName}: bind source ${source} does not exist; nothing was touched`,
+      )
+    }
+    return die(
+      `service ${serviceName}: cannot read bind source ${source} (${codeOf(error) || 'unknown error'}); nothing was touched`,
+    )
   }
 }
 const needsQuoting = (mount: BindMount): boolean => /[",]/.test(mount.source + mount.target)
@@ -247,6 +260,8 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
       const labels = (
         await docker([
           'inspect',
+          '--type',
+          'container',
           containerName,
           '--format',
           '{{ index .Config.Labels "com.docker.compose.project" }} {{ index .Config.Labels "com.docker.compose.service" }}',
@@ -284,6 +299,11 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
     if (FILE_SOURCE.test(mount.source)) {
       if (!stats.isFile()) {
         die(`service ${name}: bind source ${mount.source} is not a file; nothing was touched`)
+      }
+      try {
+        accessSync(mount.source, constants.R_OK)
+      } catch {
+        die(`service ${name}: bind source ${mount.source} is not readable; nothing was touched`)
       }
       continue
     }
