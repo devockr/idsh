@@ -90,8 +90,20 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/log:/var/log/git-cred-broker
-      - ${GCB_SOCKET_DIR:-./.dsh/git-broker}:/run/git-broker
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/log
+        target: /var/log/git-cred-broker
+        bind:
+          create_host_path: false
+      # Created by hand, not by compose: a missing bind source becomes a root-owned directory, and
+      # both of these are written as the dsh uid — the broker would fail to bind its socket and to
+      # write its audit log. `create_host_path: false` makes the pre-flight say so before the
+      # deployment is removed, instead of a healthcheck that never passes.
+      - type: bind
+        source: ${GCB_SOCKET_DIR:-./.dsh/git-broker}
+        target: /run/git-broker
+        bind:
+          create_host_path: false
 
 networks:
   default:

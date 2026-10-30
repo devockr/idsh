@@ -170,9 +170,10 @@ of the container:
 - the broker mints a short-lived installation token for that one push, records the request in its
   audit log, and hands it over; nothing is written to the container's filesystem.
 
-So the container holds no GitHub credential at rest, revocation is a host-side change to the
-allowlist rather than a sweep of every token in flight, and the App's permissions say what a push may
-touch. `gcb setup` writes the deployment user's `~/.gitconfig` and the helper's own socket/CA
+So the container holds no GitHub credential at rest, and a host-side allowlist change controls
+**future** issuance rather than sweeping every token already in flight — one that was minted stays
+usable at GitHub until it expires, about an hour, which is the broker's own documented window. The
+App's permissions say what a push may touch. `gcb setup` writes the deployment user's `~/.gitconfig` and the helper's own socket/CA
 files — configuration, never a credential.
 
 The image ships the client, not a wrapper for every other tool: what an agent uses is `gcb pr`,
