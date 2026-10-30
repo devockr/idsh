@@ -27,16 +27,16 @@ globalThis.__ModuleLoader__.load({
     const exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
-    const isRecord = (value: unknown): value is Record<string, unknown> =>
+    const isObject = (value: unknown): value is Record<string, unknown> =>
       typeof value === 'object' && value !== null
 
     const isLoopbackOf = (value: unknown): value is { isLoopback: boolean } =>
-      isRecord(value) && typeof value.isLoopback === 'boolean'
+      isObject(value) && typeof value.isLoopback === 'boolean'
 
     /** The marker for a connection whose flag cannot be read, naming what it was instead. */
     const missingFlag = (connection: unknown): string =>
       'SELF-CHECK-FAILED connection.isLoopback is ' +
-      typeof (isRecord(connection) ? connection.isLoopback : undefined)
+      typeof (isObject(connection) ? connection.isLoopback : undefined)
 
     /** Write the flag, reporting a frozen one; false means the page cannot be privileged. */
     const writeFlag = (connection: { isLoopback: boolean }): boolean => {
@@ -54,8 +54,8 @@ globalThis.__ModuleLoader__.load({
 
     /** The gateway's own copy of the flag, which is what the settings pages read. */
     const factsOf = (services: unknown): unknown => {
-      const remote = isRecord(services) ? services.remote : undefined
-      return isRecord(remote) ? remote.$host : undefined
+      const remote = isObject(services) ? services.remote : undefined
+      return isObject(remote) ? remote.$host : undefined
     }
 
     const MARK = 'idshPrivileged'
@@ -133,7 +133,7 @@ globalThis.__ModuleLoader__.load({
       // to write it at all. Stating the shape here is smaller than a hand-written context interface
       // and keeps everything else — `ctx.effect` included — checked against dsh's own types.
       const services: unknown = ctx
-      const connection = isRecord(services) ? services.connection : undefined
+      const connection = isObject(services) ? services.connection : undefined
       if (!isLoopbackOf(connection)) {
         mark(missingFlag(connection))
         return
@@ -157,7 +157,7 @@ globalThis.__ModuleLoader__.load({
       // reader that has not cached the value itself — and the marker below still reports that the
       // gateway had it wrong, so the regression is visible rather than quietly papered over.
       let repaired = false
-      if (host === false && isRecord(facts)) {
+      if (host === false && isObject(facts)) {
         try {
           facts.isLoopback = true
           repaired = true
@@ -170,7 +170,7 @@ globalThis.__ModuleLoader__.load({
         try {
           connection.isLoopback = before
         } catch {}
-        if (repaired && isRecord(facts)) {
+        if (repaired && isObject(facts)) {
           try {
             facts.isLoopback = host
           } catch {}

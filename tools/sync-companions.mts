@@ -30,12 +30,12 @@ const exists = async (path: string): Promise<boolean> => {
   return stat !== null
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
 /** Only "there is no such file" is an empty answer; a half-written or unreadable one is not. */
 const isNotFound = (error: unknown): boolean =>
-  isRecord(error) && (error.code === 'ENOENT' || error.code === 'ERR_MODULE_NOT_FOUND')
+  isObject(error) && (error.code === 'ENOENT' || error.code === 'ERR_MODULE_NOT_FOUND')
 
 const importJson = async (file: string): Promise<unknown> =>
   import(file, { with: { type: 'json' } }).catch((error: unknown) => {
@@ -54,13 +54,13 @@ const packageOf = async (dir: string): Promise<Package | undefined> => {
   // Deliberately forgiving here: a directory whose manifest cannot be read is no more usable than
   // a missing one, and the repair below replaces it the way the image installed it.
   const loaded = await importJson(path.join(dir, 'package.json')).catch(() => null)
-  if (!isRecord(loaded) || !isRecord(loaded.default)) {
+  if (!isObject(loaded) || !isObject(loaded.default)) {
     return undefined
   }
   const entry = loaded.default
   const version = stringOf(entry, 'version')
   const main = stringOf(entry, 'main')
-  const exported = isRecord(entry.exports) ? entry.exports : undefined
+  const exported = isObject(entry.exports) ? entry.exports : undefined
   return {
     ...(version === undefined ? {} : { version }),
     ...(main === undefined ? {} : { main }),
@@ -70,15 +70,15 @@ const packageOf = async (dir: string): Promise<Package | undefined> => {
 
 /** The live and baked profile manifests, narrowed once instead of asserted at every use. */
 const manifestOf = (value: unknown): Manifest | undefined => {
-  if (!isRecord(value) || !isRecord(value.default)) {
+  if (!isObject(value) || !isObject(value.default)) {
     return undefined
   }
   const record = value.default
-  if (!isRecord(record.dependencies) || !isRecord(record.dsh)) {
+  if (!isObject(record.dependencies) || !isObject(record.dsh)) {
     return undefined
   }
   const profile = record.dsh.profile
-  if (!isRecord(profile)) {
+  if (!isObject(profile)) {
     return undefined
   }
   const rawBundles: unknown = profile.bundles
@@ -122,7 +122,7 @@ const entriesOf = (manifest: Package | undefined): string[] => {
     if (typeof value === 'string') {
       return value
     }
-    return isRecord(value) ? pick(value.default) : undefined
+    return isObject(value) ? pick(value.default) : undefined
   }
   const exports = manifest?.exports ?? {}
   return [manifest?.main, pick(exports['.']), pick(exports['./client'])].filter(

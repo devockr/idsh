@@ -65,7 +65,7 @@ export function encode(response: BrokerResponse): Buffer {
  * Strict on purpose: an unexpected shape is refused rather than coerced, because everything after
  * this point assumes `args` is an object and `op` is a string.
  */
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
 export function parseRequest(line: string): BrokerRequest {
@@ -75,7 +75,7 @@ export function parseRequest(line: string): BrokerRequest {
   } catch {
     throw new BrokerFault('bad-json', 'the line is not JSON')
   }
-  if (!isRecord(value) || Array.isArray(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new BrokerFault('bad-request', 'a request must be a JSON object')
   }
   const op = value['op']
@@ -84,7 +84,7 @@ export function parseRequest(line: string): BrokerRequest {
   }
   // `null` is dropped by `??`, so what is left is an object or a value of another kind.
   const args: unknown = value['args'] ?? {}
-  if (!isRecord(args) || Array.isArray(args)) {
+  if (!isObject(args) || Array.isArray(args)) {
     throw new BrokerFault('bad-request', 'args must be an object when present')
   }
   const id = value['id']

@@ -31,14 +31,14 @@ interface HostContext {
   effect(body: () => (() => void) | void): void
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
 /** The gate dsh's connection service exposes, narrowed out of the untyped registry value. */
 const requestRejectionOf = (
   connection: unknown,
 ): ((request: unknown) => number | undefined) | undefined => {
-  if (!isRecord(connection)) {
+  if (!isObject(connection)) {
     return undefined
   }
   const gate = connection.requestRejection
