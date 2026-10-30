@@ -30,6 +30,9 @@ const exists = async (path: string): Promise<boolean> => {
   return stat !== null
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
 /** Only "there is no such file" is an empty answer; a half-written or unreadable one is not. */
 const isNotFound = (error: unknown): boolean =>
   isRecord(error) && (error.code === 'ENOENT' || error.code === 'ERR_MODULE_NOT_FOUND')
@@ -41,9 +44,6 @@ const importJson = async (file: string): Promise<unknown> =>
     }
     throw error
   })
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null
 
 const stringOf = (record: Record<string, unknown>, key: string): string | undefined => {
   const value = record[key]

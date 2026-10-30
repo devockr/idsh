@@ -128,8 +128,15 @@ export function startDeployJob(jobs: Jobs, target: StreamTarget): string {
     run() {
       const work = (async (): Promise<JobOutcome> => {
         try {
-          const args = isRecord(target.args) ? target.args : {}
-          const answer = await target.call(target.endpoint, target.name, args, controller.signal)
+          if (!isRecord(target.args)) {
+            throw new Error('host-ops: a job must carry object arguments')
+          }
+          const answer = await target.call(
+            target.endpoint,
+            target.name,
+            target.args,
+            controller.signal,
+          )
           // The log arrives through the source; the answer is the job's result, once.
           return { status: 'completed', result: answer.text }
         } catch (error) {
