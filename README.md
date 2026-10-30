@@ -121,6 +121,8 @@ Environment variables (see `docker-compose.example.yml`):
 | `DSH_BIND_HOST`                                         | Concrete address dsh binds, defaulting to the container's own (the wildcard is refused): set it to `127.0.0.1` to give up remote reach, or to one address when several networks make the default ambiguous | this container                    |
 | `DSH_IPV6_SUBNET`                                       | ULA subnet for the compose network's IPv6 half; override it when it collides with a network or route on the host, or drop the whole `networks` block to stay IPv4-only                                     | `fd00:d5c0:0:1::/64`              |
 | `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` | Outbound proxy for dsh's HTTP requests                                                                                                                                                                     | —                                 |
+| `GIT_BROKER_SOCKET`                                     | Path of the host credential broker's socket inside the container; when it is a mounted socket, git asks the broker at push time instead of holding a token here                                            | —                                 |
+| `GIT_BROKER_REQUIRE`                                    | `1` makes the helper fail closed instead of falling back to another credential helper                                                                                                                      | —                                 |
 
 At boot the registry is written into `~/.npmrc`, `~/.yarnrc` and `~/.yarnrc.yml` (corepack
 and node-gyp mirrors follow), not into the environment — so a project that pins its own
@@ -138,6 +140,14 @@ Ports and volumes:
 - Add the rest yourself, for example `./workspace:/home/app/Workspaces` for a
   workspace or `./ssh:/home/app/.ssh` for an ssh config. The template deliberately
   prescribes none.
+- `/srv/git-broker-socket:/run/git-broker` — optional, and the one mount that replaces a GitHub
+  token: the host's [credential broker](https://github.com/code-vaults/git-credential-broker) writes
+  its socket there, and `GIT_BROKER_SOCKET=/run/git-broker/broker.sock` points the image's
+  `gcb` client at it. At boot `entrypoint.sh` runs `gcb setup` as the deployment user, so git
+  asks the host for a short-lived credential when it needs one; nothing in the container stores it.
+  Without this mount the setup is skipped and the deployment behaves as before.
+  `docker exec -u "$PUID:$PGID" dsh gcb probe --host github.com --repo owner/repo` answers the
+  broker's decision (exit 0 allowed, 1 denied, 3 unreachable).
 
 ## Releasing
 

@@ -48,6 +48,11 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   repository's scripts, and neither is the image. Local helpers live outside the repository, in a
   `tasks/` directory inside that state directory; verification helpers stay on the machine that
   runs them.
+- **The broker socket is the only GitHub credential route.** With `GIT_BROKER_SOCKET` naming a
+  mounted socket, `entrypoint.sh` runs `gcb setup` as the deployment user before dsh: git then asks
+  the host's credential broker at push time, and nothing in this container holds a token. Without
+  the mount the setup is skipped and the deployment behaves as before — no helper, no credentials,
+  no surprise.
 - **Machine specifics never get committed.** The real compose file is gitignored; what is tracked
   is `docker-compose.example.yml` for the deployment and `docker-compose.dev.yml` for the browser
   settings, which are a state-directory path and a public mirror and hold nothing personal.

@@ -253,5 +253,15 @@ fi
 
 # Drop privileges before exec: dsh and everything it spawns must run as the host
 # user, so files written into the bind mounts belong to the host user.
+#
+# The broker's socket, when the deployment mounts it, is what lets the agent reach
+# GitHub without a credential in this container: `gcb setup` records the credential
+# helper in the deployment user's git config, and the helper asks the host at push
+# time. It runs as that user, before dsh, and only when the socket is really there —
+# a deployment without the mount keeps its old behaviour and no helper is configured.
 exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups \
-  node --expose-internals "$(command -v dsh)" --profile web --no-open "$@"
+  sh -c 'if [ -n "${GIT_BROKER_SOCKET:-}" ] && [ -S "$GIT_BROKER_SOCKET" ]; then \
+           gcb setup >/dev/null 2>&1 || echo "entrypoint: gcb setup failed" >&2; \
+         fi; \
+         exec node --expose-internals "$(command -v dsh)" --profile web --no-open "$@"' \
+  sh "$@"
