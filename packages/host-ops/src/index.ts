@@ -287,7 +287,7 @@ function toolFor(
       // that is not an object is a caller error, and turning it into `{}` would hand the broker a
       // request nobody made.
       if (args !== undefined && args !== null && !isRecord(args)) {
-        throw new TypeError('host-ops: arguments must be an object')
+        throw new TypeError('host-ops: arguments must be an object, not an array or a scalar')
       }
       const input = isRecord(args) ? args : {}
       const confirmation: Confirmation =
@@ -322,12 +322,7 @@ function asOp(value: unknown): DescribedOp {
     throw new Error('the broker described an operation that is not an object')
   }
   const { name, summary, input, confirm, timeoutMs } = value
-  if (
-    typeof name !== 'string' ||
-    typeof summary !== 'string' ||
-    !isRecord(input) ||
-    Array.isArray(input)
-  ) {
+  if (typeof name !== 'string' || typeof summary !== 'string' || !isRecord(input)) {
     throw new Error('the broker described an operation without a name, summary or object input')
   }
   return {

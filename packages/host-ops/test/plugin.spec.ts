@@ -166,13 +166,45 @@ void test('a tool call whose arguments are not an object is refused', async () =
   try {
     const { ctx, tools } = context()
     await registerTools(ctx, { socketPath: broker.socketPath })
-    await assert.rejects(
-      tools[0].execute('not-an-object', { signal: new AbortController().signal }),
-      /arguments must be an object/u,
-    )
+    for (const invalid of ['not-an-object', []]) {
+      await assert.rejects(
+        tools[0].execute(invalid, { signal: new AbortController().signal }),
+        /arguments must be an object/u,
+      )
+    }
   } finally {
     await broker.close()
   }
+})
+
+void test('a job whose arguments are an array fails before the call', async () => {
+  let reached = false
+  const started: JobSpec[] = []
+  const jobs = {
+    start(spec: JobSpec) {
+      started.push(spec)
+      return 'job-1'
+    },
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), 'host-ops-guard-'))
+  startDeployJob(jobs, {
+    name: 'deploy.build',
+    args: [],
+    endpoint: { socketPath: path.join(dir, 'host.sock') },
+    statePath: dir,
+    logPath: path.join(dir, 'build.log'),
+    call: () => {
+      reached = true
+      return Promise.resolve({ text: 'built', truncated: false })
+    },
+  })
+  const spec = started[0]
+  assert.ok(spec !== undefined)
+  const outcome = await spec.run({ append: () => undefined }).done
+  assert.equal(outcome.status, 'failed')
+  assert.match(String(outcome.detail), /object arguments/u)
+  assert.equal(reached, false)
+  await rm(dir, { recursive: true, force: true })
 })
 
 void test('a job whose arguments are not an object fails before the call', async () => {
