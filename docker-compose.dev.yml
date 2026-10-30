@@ -47,7 +47,10 @@ services:
       test: ['CMD-SHELL', 'test -S /run/git-broker/broker.sock']
       interval: 2s
       retries: 15
-    user: '${GCB_UID:-${UID:?}}:${GCB_GID:-${GID:?}}'
+    # Same uid as dsh, deliberately: the socket is mode 660 owned by this user, so a broker running
+    # as anyone else would leave the helper unable to connect — the healthcheck would still pass
+    # and every push would fail.
+    user: '${UID:?}:${GID:?}'
     read_only: true
     tmpfs:
       - /tmp
