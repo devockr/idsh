@@ -92,10 +92,10 @@ published.
 dev image is where a gcb change meets idsh, and a published version would only ever show the last
 release — so that tag has to exist locally first: `docker build --target client -t
 code-vaults/gcb-client:dev .` in the broker's checkout. Its companion service in
-`docker-compose.dev.yml` is opt-in (`--profile gcb`, image `code-vaults/gcb-host:dev`) because a
-host broker already serving the socket must not be joined by a second one; the socket directory is
-the state directory's `git-broker`, the deployment directory is `~/.broker-host` unless
-`GCB_DEPLOY_DIR` says otherwise.
+`docker-compose.dev.yml` (`gcb`, image `code-vaults/gcb-host:dev`) is the broker itself: one
+process per socket, so it replaces a standalone deployment rather than joining it — drop the service
+when the broker is supervised elsewhere. The socket directory is the state directory's
+`git-broker`; the deployment directory is `~/.broker-host` unless `GCB_DEPLOY_DIR` says otherwise.
 
 A cached layer once left a browser-dependency set inside `:latest` that the Dockerfile no longer
 declared. After an apt change, check the image instead of trusting the build; `--no-cache` when in
