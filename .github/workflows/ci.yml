@@ -58,6 +58,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # After the build: a package types through its own declarations, so coverage of an unbuilt
+      # tree is a different measurement.
+      - name: Type Coverage
+        run: pnpm typecov
+
       # The recursive `test` script skips a package without one, so the reach of this step grows as
       # packages gain tests — the host broker is the first.
       - name: Test

@@ -18,6 +18,16 @@ for (const entry of readdirSync(path.join(root, 'packages'), { withFileTypes: tr
   }
 }
 
+// The packages typecheck through their own declarations, so a missing build is a refusal, not a
+// lower number: type-coverage would resolve nothing and call the gap "any".
+for (const project of projects.slice(1)) {
+  const built = path.join(path.dirname(project), 'lib/index.d.ts')
+  if (!existsSync(path.join(root, built))) {
+    console.error(`typecov: ${built} is missing — run pnpm build first`)
+    process.exit(1)
+  }
+}
+
 let failed = false
 for (const project of projects) {
   process.stdout.write(`\n# ${project}\n`)

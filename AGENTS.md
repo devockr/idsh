@@ -153,8 +153,9 @@ Observe the running thing; do not reason from source.
   whose `src/` is newer than the `*.tsbuildinfo` of its build (the state `tsc -b` itself compares
   against; a single output would false-positive on an incremental rebuild), so a forgotten rebuild
   fails the build instead of shipping a `link:` target with nothing to load. `tsc -b` trusts
-  its own `*.tsbuildinfo`, so a removed `lib/` has to take that state with it (`tsc -b --clean
-  tsconfig.build.json`) — `pnpm build` alone answers "up to date" and leaves the directory absent.
+  its own `*.tsbuildinfo`, so a removed `lib/` — or a removed `lib/*.d.ts` — has to take that
+  state with it (`tsc -b --clean tsconfig.build.json`, or `--force`); `pnpm build` alone answers
+  "up to date" and leaves the files absent.
 - **A package has no URL.** Its browser half arrives through the bundle endpoint
   (`plugins/??<pkg>/client.js,…&rev=…`), and nothing else under the package is reachable — on a
   deployment the app's own `/favicon.svg` answers 200 while every `/plugins/…` path answers 404.
@@ -223,9 +224,7 @@ Observe the running thing; do not reason from source.
 - **`pnpm lint` is the whole lint gate**: oxlint, eslint and tsc in parallel
   (`concurrently 'pnpm:lint:*'`, the three legs `lint:ox`, `lint:es`, `lint:tsc`). There is no
   separate typecheck script and CI calls only `pnpm lint`, so a new `lint:…` script joins the gate
-  by being named that way. `pnpm fix` runs the two fixers. `lint:typecov` runs
-  `tools/typecov.mts`, which measures every project in the workspace (the root one and each
-  package's) because `type-coverage` handles one tsconfig per run.
+  by being named that way. `pnpm fix` runs the two fixers.
 - **Only `ci.yml` pins Node lines**: a matrix of 24 (the oldest line `engines`
   allows) and 26 (what the images run). Every other workflow runs `lts/*`, because none of
   them decides what ships.
@@ -246,6 +245,10 @@ Observe the running thing; do not reason from source.
   same commit may be re-run, and a failed attempt leaves the version unchanged, which is how `0.0.3`
   was skipped once. A private package publishes nothing, so the action's own `published` flag
   cannot be the image's trigger.
+- **Type coverage is its own CI step, after the build**: `pnpm typecov` runs
+  `tools/typecov.mts`, which measures every project (the root one and each package's, since
+  `type-coverage` handles one tsconfig per run) and refuses to run before `pnpm build` — a package
+  types through its own `lib/*.d.ts`, so an unbuilt tree measures something else.
 - **The image job publishes `Dockerfile`'s final stage** — not `:base`, which is a stage — to
   `ghcr.io/devockr/idsh` and `docker.io/devockr/idsh` as `:latest`, `:sha-<commit>` and `:<version>`.
   It is a multi-arch manifest list for `linux/amd64` and `linux/arm64`: the base pin is a manifest-list
