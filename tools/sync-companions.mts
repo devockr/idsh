@@ -81,10 +81,15 @@ const manifestOf = (value: unknown): Manifest | undefined => {
       dependencies[name] = spec
     }
   }
+  // The manifest is written back, so everything it already said is kept: only the two fields the
+  // repair recomputes are replaced.
   return {
+    ...record,
     dependencies,
     dsh: {
+      ...record.dsh,
       profile: {
+        ...profile,
         bundles: bundles.filter((bundle): bundle is string => typeof bundle === 'string'),
       },
     },

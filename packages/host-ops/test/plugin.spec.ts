@@ -432,7 +432,8 @@ void test('a deploy runs as a job that follows the broker build log', async () =
       },
     )
     assert.ok(typeof answer === 'object' && answer !== null && 'text' in answer)
-    assert.match(String(answer.text), /started deploy-1/u)
+    assert.ok(typeof answer.text === 'string')
+    assert.match(answer.text, /started deploy-1/u)
 
     const spec = started[0]
     assert.equal(spec.kind, 'deploy')

@@ -283,8 +283,12 @@ function toolFor(
       },
     },
     async execute(args, exec) {
-      // The runner hands the arguments back untyped; the broker validates them again, so an
-      // object-shaped value is all this half needs.
+      // The runner hands the arguments back untyped. Absent ones are an empty object; anything else
+      // that is not an object is a caller error, and turning it into `{}` would hand the broker a
+      // request nobody made.
+      if (args !== undefined && args !== null && !isRecord(args)) {
+        throw new TypeError('host-ops: arguments must be an object')
+      }
       const input = isRecord(args) ? args : {}
       const confirmation: Confirmation =
         op.confirm === true ? await confirmed(ctx, op, args, exec) : { ok: true }

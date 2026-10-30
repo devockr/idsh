@@ -47,7 +47,11 @@ const requestRejectionOf = (
   }
   return (request: unknown): number | undefined => {
     const verdict: unknown = gate.call(connection, request)
-    return typeof verdict === 'number' ? verdict : undefined
+    if (verdict === undefined) {
+      return undefined
+    }
+    // A gate that answers something other than a status is not a gate that says "allow".
+    return typeof verdict === 'number' ? verdict : HTTP_FORBIDDEN
   }
 }
 
