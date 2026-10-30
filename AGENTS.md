@@ -48,6 +48,11 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   repository's scripts, and neither is the image. Local helpers live outside the repository, in a
   `tasks/` directory inside that state directory; verification helpers stay on the machine that
   runs them.
+- **The broker socket is the only GitHub credential route.** With `GIT_BROKER_SOCKET` naming a
+  mounted socket, `entrypoint.sh` runs `gcb setup` as the deployment user before dsh: git then asks
+  the host's credential broker at push time, and nothing in this container holds a token. Without
+  the mount the setup is skipped and the deployment behaves as before — no helper, no credentials,
+  no surprise.
 - **Machine specifics never get committed.** The real compose file is gitignored; what is tracked
   is `docker-compose.example.yml` for the deployment and `docker-compose.dev.yml` for the browser
   settings, which are a state-directory path and a public mirror and hold nothing personal.
@@ -82,6 +87,17 @@ freshly built. It needs Compose 2.24.4+ for `!reset`; an older one fails at pars
 building the wrong image.
 `docker compose build` is the published image on its own — the one build that needs the plugins
 published.
+
+`Dockerfile.dev` takes the broker's client from `code-vaults/gcb-client:dev` instead of npm — the
+dev image is where a gcb change meets idsh, and a published version would only ever show the last
+release — so that tag has to exist locally first: `docker build --target client -t
+code-vaults/gcb-client:dev .` in the broker's checkout, and the overlay's `gcb` service needs the
+broker image too — `docker build --target host -t code-vaults/gcb-host:dev .` — because
+`deploy:dev` now pre-flights every service the config names. Its companion service in
+`docker-compose.dev.yml` (`gcb`, image `code-vaults/gcb-host:dev`) is the broker itself: one
+process per socket, so it replaces a standalone deployment rather than joining it — drop the service and `dsh`'s
+`depends_on` entry when the broker is supervised elsewhere. The socket directory is the state directory's
+`git-broker`; the deployment directory is `~/.broker-host` unless `GCB_DEPLOY_DIR` says otherwise.
 
 A cached layer once left a browser-dependency set inside `:latest` that the Dockerfile no longer
 declared. After an apt change, check the image instead of trusting the build; `--no-cache` when in

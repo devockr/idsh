@@ -73,6 +73,16 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 # that lib/ is what dsh loads, a fresh checkout has none until it has run, so it is checked here
 # rather than discovered at runtime. `--chmod` is not decoration either — COPY takes the modes from
 # the build context, so a builder with a strict umask would ship the sources 0600 root:root.
+# The broker's client comes from its own checkout's dev image, not from npm: the dev overlay is
+# where a gcb change is exercised against idsh, and a published version would only ever show the
+# last release. The removal is not decoration — `COPY` merges into a directory, and npm puts the
+# published client's dependency *nested* (`gcb-client/node_modules/gcb-core`), where Node resolves
+# it before the top-level copy; leaving it there silently kept the published core and hid the dev
+# one. The `/usr/local/bin/gcb` symlink npm wrote still points at the path the fresh copy lives in.
+RUN rm -rf /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-core
+COPY --from=code-vaults/gcb-client:dev /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-client
+COPY --from=code-vaults/gcb-client:dev /usr/local/lib/node_modules/gcb-core /usr/local/lib/node_modules/gcb-core
+
 COPY --chmod=755 packages/ /opt/dsh/packages/
 RUN set -e; for d in /opt/dsh/packages/*/; do \
       [ -f "${d}package.json" ] || continue; \

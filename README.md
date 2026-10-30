@@ -121,6 +121,8 @@ Environment variables (see `docker-compose.example.yml`):
 | `DSH_BIND_HOST`                                         | Concrete address dsh binds, defaulting to the container's own (the wildcard is refused): set it to `127.0.0.1` to give up remote reach, or to one address when several networks make the default ambiguous | this container                    |
 | `DSH_IPV6_SUBNET`                                       | ULA subnet for the compose network's IPv6 half; override it when it collides with a network or route on the host, or drop the whole `networks` block to stay IPv4-only                                     | `fd00:d5c0:0:1::/64`              |
 | `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` | Outbound proxy for dsh's HTTP requests                                                                                                                                                                     | —                                 |
+| `GIT_BROKER_SOCKET`                                     | Path of the host credential broker's socket inside the container; when it is a mounted socket, git asks the broker at push time instead of holding a token here                                            | —                                 |
+| `GIT_BROKER_REQUIRE`                                    | `1` makes the helper fail closed instead of falling back to another credential helper                                                                                                                      | —                                 |
 
 At boot the registry is written into `~/.npmrc`, `~/.yarnrc` and `~/.yarnrc.yml` (corepack
 and node-gyp mirrors follow), not into the environment — so a project that pins its own
@@ -138,6 +140,87 @@ Ports and volumes:
 - Add the rest yourself, for example `./workspace:/home/app/Workspaces` for a
   workspace or `./ssh:/home/app/.ssh` for an ssh config. The template deliberately
   prescribes none.
+- `/srv/git-broker-socket:/run/git-broker` — optional: the host credential broker's socket
+  directory. It is the one mount that replaces a GitHub token in this container — see
+  [GitHub without a token in the container](#github-without-a-token-in-the-container) for why, and
+  for the two variables that go with it.
+
+## GitHub without a token in the container
+
+### The problem
+
+The agent works inside this container and pushes commits. That needs a GitHub credential, and every
+obvious way to provide it puts a **standing secret where the agent can read it**: a personal access
+token in an environment variable or a file under the state directory, an ssh key mounted for it, or
+credentials baked into a derived image. A long-lived token there is readable by anything the agent
+runs, survives after the session that needed it, has to be rotated by hand, and travels with every
+copy of the state directory. "The agent should not be able to do that" is not a control when the
+agent is the thing holding the token.
+
+### The design
+
+[git-credential-broker](https://github.com/code-vaults/git-credential-broker) moves the secret out
+of the container:
+
+- the broker runs **on the host**, holds the GitHub App's private key and the allowlist, and talks to
+  GitHub itself;
+- the container mounts **only a unix socket** — a path, not a secret;
+- `gcb setup` (from `entrypoint.sh`, as the deployment user) records git's credential helper, and
+  git asks the socket **at push time**;
+- the broker mints a short-lived installation token for that one push, records the request in its
+  audit log, and hands it over; nothing is written to the container's filesystem.
+
+So the container holds no GitHub credential at rest, and a host-side allowlist change controls
+**future** issuance rather than sweeping every token already in flight — one that was minted stays
+usable at GitHub until it expires, about an hour, which is the broker's own documented window. The
+App's permissions say what a push may touch. `gcb setup` writes the deployment user's `~/.gitconfig` and the helper's own socket/CA
+files — configuration, never a credential.
+
+The image ships the client, not a wrapper for every other tool: what an agent uses is `gcb pr`,
+`gcb gh`, `gcb logs` and `gcb run`, which talk to the same socket, so the API calls it chooses to
+make do not need a second credential either.
+
+### What it does not do
+
+- It is **not a sandbox**: a repository the allowlist admits is one the agent can push to, and the
+  App's permissions bound what a push can change. That is the intended boundary, not a gap.
+- It does **not** keep a credential for anything else — it is not a secret store, and it does not
+  cover registries, npm tokens or ssh.
+- It changes **nothing** when the socket is not mounted: `entrypoint.sh` skips the setup, no helper
+  is configured, and the deployment behaves exactly as before.
+
+### Configure it
+
+```yaml
+environment:
+  - GIT_BROKER_SOCKET=/run/git-broker/broker.sock
+  - GIT_BROKER_REQUIRE=1 # fail closed instead of falling back to another helper
+volumes:
+  - /srv/git-broker-socket:/run/git-broker
+```
+
+The socket is owned by the broker's user and is not world-writable, so `PUID`/`PGID` must be the
+uid/gid the broker runs as — a directory ACL does not help, since access is checked on the socket
+itself.
+
+`docker exec -u app dsh gcb probe --repo owner/repo` answers the
+broker's decision — exit 0 allowed, 1 denied, 3 unreachable — with the credential reduced to a
+fingerprint, so its output is safe to share.
+
+`gcb setup` also rewrites `git@github.com:` remotes to https **inside the container only** — the
+host's ssh workflow is untouched — so a deployment that mounts its own ssh key loses the ssh remote
+form there.
+
+For development, the dev image carries the broker's **local** client build
+(`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.dev.yml` runs the
+broker itself as the `gcb` service — `code-vaults/gcb-host:dev`, against the same socket directory
+(`.dsh/git-broker` — created once by hand, `mkdir -p .dsh/git-broker`, together with the broker's
+own `log` directory; the pre-flight refuses to remove the deployment when either is missing), and
+`dsh` waits for its socket to be bound — the service's healthcheck is
+`test -S /run/git-broker/broker.sock`, and `depends_on` uses `service_healthy`. One broker serves the host, so it
+replaces a standalone deployment rather than being added next to one; when the broker is supervised
+elsewhere, drop the service **and `dsh`'s `depends_on` entry** — compose refuses a dependency on a
+service that is not defined.
 
 ## Releasing
 

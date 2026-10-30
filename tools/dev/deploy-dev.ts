@@ -10,6 +10,7 @@
 // the image ships and runs itself keep the `.mts` extension: /opt/dsh/tools has no package.json,
 // so a `.ts` there would be CommonJS.
 import { execFile } from 'node:child_process'
+import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -114,8 +115,28 @@ interface Mount {
   read_only?: boolean
   bind?: { create_host_path?: boolean }
 }
+/** A bind mount compose will not create: both paths are known and the source is absolute. */
+interface BindMount extends Mount {
+  source: string
+  target: string
+}
+const bindsOf = (list: Mount[]): BindMount[] =>
+  list.filter(
+    (mount): mount is BindMount =>
+      mount.type === 'bind' &&
+      typeof mount.source === 'string' &&
+      typeof mount.target === 'string' &&
+      mount.source.startsWith('/'),
+  )
+interface Service {
+  image?: string
+  container_name?: string
+  pull_policy?: string
+  volumes?: Mount[]
+}
 interface Resolved {
-  services?: Record<string, { image?: string; volumes?: Mount[] }>
+  name?: string
+  services?: Record<string, Service>
 }
 const resolved = JSON.parse(await compose(['config', '--format', 'json'])) as Resolved
 const service = resolved.services?.dsh ?? {}
@@ -127,22 +148,20 @@ console.log(`deploy:dev: image ${image}`)
 //    the same way *after* removing the old container, which is what makes this worth doing.
 // Bind mounts only, and only those compose will not create itself: a named volume cannot fail to
 // resolve, and checking one would create a stray volume; a bind compose creates cannot fail either.
-const mounts = (service.volumes ?? []).filter(
-  mount =>
-    mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
-)
+const mounts = bindsOf(service.volumes ?? [])
 // Only an explicit `create_host_path: false` means compose will refuse a missing source. The
 // default is true, and compose either writes it out or leaves it to the default depending on its
 // version — the 2.20.1 here writes `true`, Compose 5.5.0 omits it — so neither a missing field
 // nor `true` may be read as "compose will create it".
 const created = mounts.filter(mount => mount.bind?.create_host_path !== false)
 const strict = mounts.filter(mount => mount.bind?.create_host_path === false)
+
 // --mount, not -v: -v creates a missing host path on a standard engine, so the check would pass
 // for the very mount it exists to catch, and would leave a root-owned directory behind even on
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
 // instead: this daemon refuses a quoted field outright (measured), a standard engine accepts it.
-const needsQuoting = (mount: Mount): boolean => /[",]/.test(`${mount.source}${mount.target}`)
-const toArgs = (list: Mount[]): string[] =>
+const needsQuoting = (mount: BindMount): boolean => /[",]/.test(mount.source + mount.target)
+const toArgs = (list: BindMount[]): string[] =>
   list.flatMap(mount => [
     '--mount',
     `type=bind,source=${mount.source},target=${mount.target}${mount.read_only ? ',readonly' : ''}`,
@@ -169,6 +188,68 @@ if (warned.length > 0) {
     console.log(
       `deploy:dev: warning — ${warned.length} bind(s) compose may create do not mount here:\n${stderrOf(error)}`,
     )
+  }
+}
+
+// Every other service the same `up` creates can take the deployment down just as well, so the
+// three failures that need nothing but the config and the daemon are checked here too: an image
+// the daemon does not have, a container name another project already owns (the broker's sidecar
+// is called `gcb` by default, which is now this overlay's name for it as well), and a strict bind
+// source that is not there.
+const project = resolved.name ?? ''
+for (const [name, other] of Object.entries(resolved.services ?? {})) {
+  if (name === 'dsh') {
+    continue
+  }
+  // Three things make `up` refuse before it creates anything: an image this daemon does not have,
+  // a container name another project holds, and a strict bind source that is not there. A source
+  // that exists but has the wrong type or permissions is left to the container — `up` mounts it
+  // happily, the healthcheck is what fails, and that lands after the removal. This dev-only script
+  // accepts that trade instead of growing a checker per case.
+  // Only an image compose will not pull is a failure to know about: a pullable one is fetched by
+  // `up` itself, so refusing it here would reject a deployment that works.
+  if (other.image && other.pull_policy === 'never') {
+    try {
+      await docker(['image', 'inspect', other.image])
+    } catch {
+      die(`service ${name}: image ${other.image} is not in this daemon; nothing was touched`)
+    }
+  }
+  const containerName = other.container_name
+  if (containerName) {
+    // `docker inspect` exits non-zero when there is no such container — the first deploy, or the
+    // one after `docker compose down` — which is a free name, not a conflict.
+    let owner: string | undefined
+    try {
+      owner = (
+        await docker([
+          'inspect',
+          '--type',
+          'container',
+          containerName,
+          '--format',
+          '{{ index .Config.Labels "com.docker.compose.project" }}',
+        ])
+      ).trim()
+    } catch {
+      owner = undefined
+    }
+    if (owner !== undefined && owner !== project) {
+      die(
+        `service ${name}: a container named ${containerName} already exists` +
+          (owner === '' ? ' (no compose project)' : ` (project ${owner})`) +
+          '; stop it or drop the service; nothing was touched',
+      )
+    }
+  }
+  for (const mount of bindsOf(other.volumes ?? [])) {
+    if (mount.bind?.create_host_path === false) {
+      try {
+        statSync(mount.source)
+      } catch {
+        die(`service ${name}: bind source ${mount.source} does not exist; nothing was touched`)
+      }
+    }
   }
 }
 

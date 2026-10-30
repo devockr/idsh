@@ -19,6 +19,96 @@ services:
       # public npmmirror of the same builds — the host NPM_REGISTRY already defaults to in both
       # Dockerfiles. Point it elsewhere, or drop the line, if you prefer.
       - PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}
+      # The broker's socket lives inside the state directory, which is already mounted, so the
+      # path needs no extra volume: with the `gcb` service below (or a host broker on the same
+      # directory) git in this container asks the host for a credential instead of holding one.
+      # Fixed, because the broker's socket directory is: an override here without one there would
+      # mount the broker where dsh does not look. A deployment with its own broker drops the `gcb`
+      # service and changes this line.
+      - GIT_BROKER_SOCKET=/home/app/.dsh/git-broker/broker.sock
+    # The broker's socket has to exist first: `entrypoint.sh` runs `gcb setup` when it does, and a
+    # boot that beat it would come up without a credential helper.
+    depends_on:
+      gcb:
+        condition: service_healthy
+
+  # The credential broker, from its own checkout's dev image: `gcb compose`'s default name, and
+  # the same shape it renders. One broker serves the host, so this service replaces a standalone
+  # one rather than joining it — two processes cannot bind the same socket path. The deployment
+  # directory defaults to `~/.broker-host` because that is this overlay's own convention; override
+  # `GCB_DEPLOY_DIR` when the config and key live elsewhere, and drop this service **and `dsh`'s
+  # `depends_on` entry** when the broker is supervised somewhere else — compose refuses a dependency
+  # on a service that is not defined.
+  gcb:
+    image: code-vaults/gcb-host:dev
+    pull_policy: never
+    container_name: gcb
+    restart: unless-stopped
+    # The socket is bound after the daemon starts and has read its config, so "started" is not
+    # enough: dsh waits for this instead, and the entrypoint's own check then sees the socket.
+    healthcheck:
+      test: ['CMD-SHELL', 'test -S /run/git-broker/broker.sock']
+      interval: 2s
+      retries: 15
+    # Same uid as dsh, deliberately: the socket is mode 660 owned by this user, so a broker running
+    # as anyone else would leave the helper unable to connect — the healthcheck would still pass
+    # and every push would fail.
+    user: '${UID:?}:${GID:?}'
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
+      - https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
+      - no_proxy=${no_proxy:-${NO_PROXY:-}}
+      - NODE_USE_ENV_PROXY=1
+      - GCB_PROXY=${GCB_PROXY-default}
+    command:
+      - sh
+      - -c
+      - |
+        case "${GCB_PROXY-default}" in
+          default) ;;
+          "") unset http_proxy https_proxy no_proxy NODE_USE_ENV_PROXY ;;
+          *) export http_proxy="$$GCB_PROXY" https_proxy="$$GCB_PROXY" no_proxy=localhost,127.0.0.1 NODE_USE_ENV_PROXY=1 ;;
+        esac
+        exec gcb daemon --config /etc/git-cred-broker/broker.config.yml
+    volumes:
+      # `create_host_path: false` is what makes a missing deployment directory fail the pre-flight
+      # instead of becoming an empty directory the daemon then refuses — compose creates a missing
+      # short-syntax bind source itself, and the symptom would be a healthcheck that never passes.
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/broker.config.yml
+        target: /etc/git-cred-broker/broker.config.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/app.pem
+        target: /etc/git-cred-broker/app.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/log
+        target: /var/log/git-cred-broker
+        bind:
+          create_host_path: false
+      # Created by hand, not by compose: a missing bind source becomes a root-owned directory, and
+      # both of these are written as the dsh uid — the broker would fail to bind its socket and to
+      # write its audit log. `create_host_path: false` makes the pre-flight say so before the
+      # deployment is removed, instead of a healthcheck that never passes.
+      - type: bind
+        # Not configurable on its own: dsh's GIT_BROKER_SOCKET is set to the path inside this
+        # directory, so a second override could mount the broker where dsh never looks.
+        source: ./.dsh/git-broker
+        target: /run/git-broker
+        bind:
+          create_host_path: false
 
 networks:
   default:
