@@ -291,11 +291,15 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
       die(`service ${name}: bind source ${mount.source} is not a directory; nothing was touched`)
     }
     // Written as the same uid the container runs as, so a directory it cannot write is a failure
-    // the pre-flight is allowed to predict.
-    try {
-      accessSync(mount.source, constants.W_OK)
-    } catch {
-      die(`service ${name}: bind source ${mount.source} is not writable; nothing was touched`)
+    // the pre-flight is allowed to predict — but only when the mount is actually meant to be
+    // written: a read-only bind is not supposed to be, and refusing it would reject a working
+    // deployment.
+    if (mount.read_only !== true) {
+      try {
+        accessSync(mount.source, constants.W_OK)
+      } catch {
+        die(`service ${name}: bind source ${mount.source} is not writable; nothing was touched`)
+      }
     }
   }
   const otherWarned = otherBinds.filter(mount => needsQuoting(mount))
