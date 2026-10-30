@@ -75,13 +75,11 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 # the build context, so a builder with a strict umask would ship the sources 0600 root:root.
 # The broker's client comes from its own checkout's dev image, not from npm: the dev overlay is
 # where a gcb change is exercised against idsh, and a published version would only ever show the
-# last release. The removal is not decoration — `COPY` merges into a directory, and npm puts the
-# published client's dependency *nested* (`gcb-client/node_modules/gcb-core`), where Node resolves
-# it before the top-level copy; leaving it there silently kept the published core and hid the dev
-# one. The `/usr/local/bin/gcb` symlink npm wrote still points at the path the fresh copy lives in.
-RUN rm -rf /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-core
+# last release. `base` carries no client at all (the published stage installs it), so the copy is
+# the only one here; `/usr/local/bin/gcb` is created below and points into the copied package.
 COPY --from=code-vaults/gcb-client:dev /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-client
 COPY --from=code-vaults/gcb-client:dev /usr/local/lib/node_modules/gcb-core /usr/local/lib/node_modules/gcb-core
+RUN ln -sf ../lib/node_modules/gcb-client/bin/gcb.js /usr/local/bin/gcb && gcb --version
 
 COPY --chmod=755 packages/ /opt/dsh/packages/
 RUN set -e; for d in /opt/dsh/packages/*/; do \
