@@ -205,7 +205,12 @@ if (liveValue !== null && liveModule === undefined) {
 }
 
 if (liveModule) {
-  const bakedManifest = manifestOf(await importJson(path.join(baked, 'package.json')))
+  const bakedManifest = manifestOf(
+    await importJson(path.join(baked, 'package.json')).catch(() => {
+      console.error('sync-companions: the baked profile manifest cannot be read')
+      process.exit(1)
+    }),
+  )
 
   if (bakedManifest === undefined) {
     console.error('sync-companions: the baked profile manifest cannot be read')
