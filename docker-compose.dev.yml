@@ -30,11 +30,11 @@ services:
         condition: service_started
 
   # The credential broker, from its own checkout's dev image: `gcb compose`'s default name, and
-  # the same shape it renders into the deployment directory. One broker serves the host, so this
-  # service replaces a standalone one rather than joining it — two processes cannot bind the same
-  # socket path. The paths below are the ones `gcb compose` renders (`~/.broker-host` by
-  # convention); override `GCB_DEPLOY_DIR` when yours is elsewhere, and drop this service entirely
-  # when the broker is supervised somewhere else.
+  # the same shape it renders. One broker serves the host, so this service replaces a standalone
+  # one rather than joining it — two processes cannot bind the same socket path. The deployment
+  # directory defaults to `~/.broker-host` because that is this overlay's own convention; override
+  # `GCB_DEPLOY_DIR` when the config and key live elsewhere, and drop this service entirely when
+  # the broker is supervised somewhere else.
   gcb:
     image: code-vaults/gcb-host:dev
     pull_policy: never

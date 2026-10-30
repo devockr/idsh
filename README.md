@@ -193,9 +193,13 @@ volumes:
   - /srv/git-broker-socket:/run/git-broker
 ```
 
-`docker exec -u "$PUID:$PGID" dsh gcb probe --repo owner/repo` answers the
+`docker exec -u app dsh gcb probe --repo owner/repo` answers the
 broker's decision — exit 0 allowed, 1 denied, 3 unreachable — with the credential reduced to a
 fingerprint, so its output is safe to share.
+
+`gcb setup` also rewrites `git@github.com:` remotes to https **inside the container only** — the
+host's ssh workflow is untouched — so a deployment that mounts its own ssh key loses the ssh remote
+form there.
 
 For development, the dev image carries the broker's **local** client build
 (`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.dev.yml` runs the

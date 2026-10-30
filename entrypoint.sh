@@ -261,7 +261,7 @@ fi
 # a deployment without the mount keeps its old behaviour and no helper is configured.
 exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups \
   sh -c 'if [ -n "${GIT_BROKER_SOCKET:-}" ] && [ -S "$GIT_BROKER_SOCKET" ]; then \
-           gcb setup >/dev/null 2>&1 || echo "entrypoint: gcb setup failed" >&2; \
+           gcb setup >/dev/null || echo "entrypoint: gcb setup failed" >&2; \
          fi; \
          exec node --expose-internals "$(command -v dsh)" --profile web --no-open "$@"' \
   sh "$@"

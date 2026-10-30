@@ -58,17 +58,19 @@ services:
       - https_proxy
       - all_proxy
       - no_proxy
+      # Optional: reach GitHub through the host's credential broker instead of a token in this
+      # container. The socket directory is a host path owned by the broker's user and is mounted
+      # below; the client is already in the image, and `entrypoint.sh` runs `gcb setup` when the
+      # socket is there. `GIT_BROKER_REQUIRE=1` fails closed instead of falling back to another
+      # credential helper.
+      # - GIT_BROKER_SOCKET=/run/git-broker/broker.sock
+      # - GIT_BROKER_REQUIRE=1
     ports:
       # Loopback only: put a reverse proxy in front, or widen this to '15080:3080' when the
       # port itself is what you publish.
       - '127.0.0.1:15080:3080'
-    # Optional: reach GitHub through the host's credential broker instead of a token in this
-    # container. The socket directory is a host path owned by the broker's user; the client is
-    # already in the image and `entrypoint.sh` runs `gcb setup` when the socket is there.
-    # environment:
-    #   - GIT_BROKER_SOCKET=/run/git-broker/broker.sock
-    #   - GIT_BROKER_REQUIRE=1
     volumes:
+      # With the broker: its socket directory, owned by the broker's user.
       # - /srv/git-broker-socket:/run/git-broker
       # Only dsh's own state: what else to mount is yours to decide.
       - ./.dsh:/home/app/.dsh

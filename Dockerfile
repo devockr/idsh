@@ -47,7 +47,7 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 # The web profile's HMR service requires Node's --expose-internals flag, which
 # Node refuses to accept via NODE_OPTIONS, so it is passed in entrypoint.sh.
 # The cache mount persists npm's package cache (named "npm_cache") across builds.
-# Both versions are pinned instead of floating so the build is reproducible; the
+# Every version here is pinned instead of floating so the build is reproducible; the
 # regex custom manager in renovate.json keeps them up to date (npm's own manager
 # does not read RUN lines).
 # pnpm is in the same install because the plugin manager drives it and has no npm
