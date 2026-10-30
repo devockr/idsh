@@ -199,6 +199,10 @@ volumes:
   - /srv/git-broker-socket:/run/git-broker
 ```
 
+The socket is owned by the broker's user and is not world-writable, so `PUID`/`PGID` must be the
+uid/gid the broker runs as — a directory ACL does not help, since access is checked on the socket
+itself.
+
 `docker exec -u app dsh gcb probe --repo owner/repo` answers the
 broker's decision — exit 0 allowed, 1 denied, 3 unreachable — with the credential reduced to a
 fingerprint, so its output is safe to share.

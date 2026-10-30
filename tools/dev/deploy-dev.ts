@@ -219,19 +219,25 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
     // `docker inspect` exits non-zero for a container that does not exist, which is the first
     // deploy and the one after `docker compose down`: the name is free, not a conflict.
     let owner: string | undefined
+    let heldBy: string | undefined
     try {
-      owner = (
+      const labels = (
         await docker([
           'inspect',
           containerName,
           '--format',
-          '{{ index .Config.Labels "com.docker.compose.project" }}',
+          '{{ index .Config.Labels "com.docker.compose.project" }} {{ index .Config.Labels "com.docker.compose.service" }}',
         ])
       ).trim()
+      const [projectLabel = '', serviceLabel = ''] = labels.split(' ')
+      owner = projectLabel
+      heldBy = serviceLabel
     } catch {
       owner = undefined
     }
-    if (owner !== undefined && owner !== project) {
+    // The same project is fine only for the same service: another service of this stack holding
+    // the name fails `up` just the same, and by then `dsh` is gone.
+    if (owner !== undefined && (owner !== project || heldBy !== name)) {
       die(
         `service ${name}: a container named ${containerName} already exists` +
           (owner === '' ? '' : ` (project ${owner})`) +
@@ -244,16 +250,20 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
       mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
   )
   const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path === false)
-  const otherGated = otherStrict.filter(mount => !needsQuoting(mount))
-  if (otherStrict.length > 0 && !otherImage) {
-    die(`service ${name}: its binds cannot be pre-flighted without an image; nothing was touched`)
-  }
-  if (otherImage && otherGated.length > 0) {
+  // Checked against the filesystem, not by starting the image: a strict bind source must exist,
+  // and running a companion image just to prove that would fail on one without `true` (distroless).
+  for (const mount of otherStrict) {
     try {
-      await docker(['run', '--rm', ...toArgs(otherGated), '--entrypoint', 'true', otherImage])
-    } catch (error) {
-      die(`service ${name}: bind pre-flight failed, nothing was touched:\n${stderrOf(error)}`)
+      statSync(mount.source ?? '')
+    } catch {
+      die(`service ${name}: bind source ${mount.source ?? ''} does not exist; nothing was touched`)
     }
+  }
+  const otherWarned = otherBinds.filter(mount => needsQuoting(mount))
+  if (otherWarned.length > 0) {
+    console.log(
+      `deploy:dev: warning — service ${name}: ${otherWarned.length} bind(s) cannot be pre-flighted (a comma or a quote in a path)`,
+    )
   }
 }
 

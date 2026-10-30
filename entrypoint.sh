@@ -260,8 +260,14 @@ fi
 # time. It runs as that user, before dsh, and only when the socket is really there —
 # a deployment without the mount keeps its old behaviour and no helper is configured.
 exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups \
-  sh -c 'if [ -n "${GIT_BROKER_SOCKET:-}" ] && [ -S "$GIT_BROKER_SOCKET" ]; then \
-           gcb setup >/dev/null || echo "entrypoint: gcb setup failed" >&2; \
+  sh -c 'if [ -n "${GIT_BROKER_SOCKET:-}" ]; then \
+           i=0; \
+           while [ ! -S "$GIT_BROKER_SOCKET" ] && [ "$i" -lt 20 ]; do sleep 0.5; i=$((i + 1)); done; \
+           if [ -S "$GIT_BROKER_SOCKET" ]; then \
+             gcb setup >/dev/null || echo "entrypoint: gcb setup failed" >&2; \
+           else \
+             echo "entrypoint: no broker socket at $GIT_BROKER_SOCKET; git has no credential helper" >&2; \
+           fi; \
          fi; \
          exec node --expose-internals "$(command -v dsh)" --profile web --no-open "$@"' \
   sh "$@"

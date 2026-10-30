@@ -100,7 +100,9 @@ services:
       # write its audit log. `create_host_path: false` makes the pre-flight say so before the
       # deployment is removed, instead of a healthcheck that never passes.
       - type: bind
-        source: ${GCB_SOCKET_DIR:-./.dsh/git-broker}
+        # Not configurable on its own: dsh's GIT_BROKER_SOCKET defaults to the path inside this
+        # directory, so a second override could mount the broker where dsh never looks.
+        source: ./.dsh/git-broker
         target: /run/git-broker
         bind:
           create_host_path: false
