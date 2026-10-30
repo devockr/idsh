@@ -19,6 +19,52 @@ services:
       # public npmmirror of the same builds — the host NPM_REGISTRY already defaults to in both
       # Dockerfiles. Point it elsewhere, or drop the line, if you prefer.
       - PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}
+      # The broker's socket lives inside the state directory, which is already mounted, so the
+      # path needs no extra volume: with the `gcb` service below (or a host broker on the same
+      # directory) git in this container asks the host for a credential instead of holding one.
+      - GIT_BROKER_SOCKET=${GIT_BROKER_SOCKET:-/home/app/.dsh/git-broker/broker.sock}
+
+  # The credential broker, from its own checkout's dev image, for a development deployment that
+  # wants one: `docker compose --profile gcb up -d`. It is off by default because a host broker
+  # already serving that socket must not be joined by a second one — two processes cannot bind the
+  # same socket path. The paths below are the ones `gcb compose` renders into the real deployment
+  # (`~/.broker-host` by convention); override `GCB_DEPLOY_DIR` when yours is elsewhere.
+  gcb:
+    image: code-vaults/gcb-host:dev
+    pull_policy: never
+    container_name: gcb-dev
+    profiles:
+      - gcb
+    restart: unless-stopped
+    user: '${GCB_UID:-${UID:?}}:${GCB_GID:-${GID:?}}'
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
+      - https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
+      - no_proxy=${no_proxy:-${NO_PROXY:-}}
+      - NODE_USE_ENV_PROXY=1
+      - GCB_PROXY=${GCB_PROXY-default}
+    command:
+      - sh
+      - -c
+      - |
+        case "${GCB_PROXY-default}" in
+          default) ;;
+          "") unset http_proxy https_proxy no_proxy NODE_USE_ENV_PROXY ;;
+          *) export http_proxy="$$GCB_PROXY" https_proxy="$$GCB_PROXY" no_proxy=localhost,127.0.0.1 NODE_USE_ENV_PROXY=1 ;;
+        esac
+        exec gcb daemon --config /etc/git-cred-broker/broker.config.yml
+    volumes:
+      - ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/broker.config.yml:/etc/git-cred-broker/broker.config.yml:ro
+      - ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/app.pem:/etc/git-cred-broker/app.pem:ro
+      - ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/log:/var/log/git-cred-broker
+      - ${GCB_SOCKET_DIR:-./.dsh/git-broker}:/run/git-broker
 
 networks:
   default:

@@ -149,6 +149,12 @@ Ports and volumes:
   `docker exec -u "$PUID:$PGID" dsh gcb probe --host github.com --repo owner/repo` answers the
   broker's decision (exit 0 allowed, 1 denied, 3 unreachable).
 
+For development, the dev image carries the broker's **local** client build
+(`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.dev.yml` has the
+broker itself as an opt-in service — `docker compose --profile gcb up -d` runs
+`code-vaults/gcb-host:dev` against the same socket directory (`.dsh/git-broker`). It is a profile
+rather than a default because a broker already running on the host owns that socket.
+
 ## Releasing
 
 The companion packages under `packages/` are released with
