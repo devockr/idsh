@@ -200,9 +200,11 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
   if (name === 'dsh') {
     continue
   }
-  // Three things make `up` fail after the removal, and nothing else does: an image this daemon
-  // does not have, a container name another project holds, and a strict bind source that is not
-  // there. Types and permissions are the daemon's answer at `up`, not a guess worth coding.
+  // Three things make `up` refuse before it creates anything: an image this daemon does not have,
+  // a container name another project holds, and a strict bind source that is not there. A source
+  // that exists but has the wrong type or permissions is left to the container — `up` mounts it
+  // happily, the healthcheck is what fails, and that lands after the removal. This dev-only script
+  // accepts that trade instead of growing a checker per case.
   if (other.image) {
     try {
       await docker(['image', 'inspect', other.image])
