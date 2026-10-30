@@ -115,6 +115,19 @@ interface Mount {
   read_only?: boolean
   bind?: { create_host_path?: boolean }
 }
+/** A bind mount compose will not create: both paths are known and the source is absolute. */
+interface BindMount extends Mount {
+  source: string
+  target: string
+}
+const bindsOf = (list: Mount[]): BindMount[] =>
+  list.filter(
+    (mount): mount is BindMount =>
+      mount.type === 'bind' &&
+      typeof mount.source === 'string' &&
+      typeof mount.target === 'string' &&
+      mount.source.startsWith('/'),
+  )
 interface Service {
   image?: string
   container_name?: string
@@ -134,10 +147,7 @@ console.log(`deploy:dev: image ${image}`)
 //    the same way *after* removing the old container, which is what makes this worth doing.
 // Bind mounts only, and only those compose will not create itself: a named volume cannot fail to
 // resolve, and checking one would create a stray volume; a bind compose creates cannot fail either.
-const mounts = (service.volumes ?? []).filter(
-  mount =>
-    mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
-)
+const mounts = bindsOf(service.volumes ?? [])
 // Only an explicit `create_host_path: false` means compose will refuse a missing source. The
 // default is true, and compose either writes it out or leaves it to the default depending on its
 // version — the 2.20.1 here writes `true`, Compose 5.5.0 omits it — so neither a missing field
@@ -151,27 +161,27 @@ const strict = mounts.filter(mount => mount.bind?.create_host_path === false)
 // checked here by name, because the resolved config cannot say which mounts are files: the
 // `create_host_path` field is written by some compose versions and omitted by others.
 const FILE_SOURCE = /\.(?:json|key|pem|ya?ml|conf|env|crt|log)$/iu
-const fileSources = (list: Mount[]): Mount[] =>
-  list.filter(mount => mount.source !== undefined && FILE_SOURCE.test(mount.source))
+const fileSources = (list: BindMount[]): BindMount[] =>
+  list.filter(mount => FILE_SOURCE.test(mount.source))
 for (const mount of fileSources(
-  Object.values(resolved.services ?? {}).flatMap(s => s.volumes ?? []),
+  bindsOf(Object.values(resolved.services ?? {}).flatMap(s => s.volumes ?? [])),
 )) {
   try {
     // A directory is what a short-syntax mount of a missing file leaves behind, so "it exists"
     // is not the question: it has to be a file.
-    if (!statSync(mount.source ?? '').isFile()) {
+    if (!statSync(mount.source).isFile()) {
       throw new Error('not a file')
     }
   } catch {
-    die(`bind source ${mount.source ?? ''} is not a file; nothing was touched`)
+    die(`bind source ${mount.source} is not a file; nothing was touched`)
   }
 }
 // --mount, not -v: -v creates a missing host path on a standard engine, so the check would pass
 // for the very mount it exists to catch, and would leave a root-owned directory behind even on
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
 // instead: this daemon refuses a quoted field outright (measured), a standard engine accepts it.
-const needsQuoting = (mount: Mount): boolean => /[",]/.test(`${mount.source}${mount.target}`)
-const toArgs = (list: Mount[]): string[] =>
+const needsQuoting = (mount: BindMount): boolean => /[",]/.test(mount.source + mount.target)
+const toArgs = (list: BindMount[]): string[] =>
   list.flatMap(mount => [
     '--mount',
     `type=bind,source=${mount.source},target=${mount.target}${mount.read_only ? ',readonly' : ''}`,
@@ -249,18 +259,15 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
       )
     }
   }
-  const otherBinds = (other.volumes ?? []).filter(
-    mount =>
-      mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
-  )
+  const otherBinds = bindsOf(other.volumes ?? [])
   const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path === false)
   // Checked against the filesystem, not by starting the image: a strict bind source must exist,
   // and running a companion image just to prove that would fail on one without `true` (distroless).
   for (const mount of otherStrict) {
     try {
-      statSync(mount.source ?? '')
+      statSync(mount.source)
     } catch {
-      die(`service ${name}: bind source ${mount.source ?? ''} does not exist; nothing was touched`)
+      die(`service ${name}: bind source ${mount.source} does not exist; nothing was touched`)
     }
   }
   const otherWarned = otherBinds.filter(mount => needsQuoting(mount))
