@@ -140,20 +140,69 @@ Ports and volumes:
 - Add the rest yourself, for example `./workspace:/home/app/Workspaces` for a
   workspace or `./ssh:/home/app/.ssh` for an ssh config. The template deliberately
   prescribes none.
-- `/srv/git-broker-socket:/run/git-broker` — optional, and the one mount that replaces a GitHub
-  token: the host's [credential broker](https://github.com/code-vaults/git-credential-broker) writes
-  its socket there, and `GIT_BROKER_SOCKET=/run/git-broker/broker.sock` points the image's
-  `gcb` client at it. At boot `entrypoint.sh` runs `gcb setup` as the deployment user, so git
-  asks the host for a short-lived credential when it needs one; nothing in the container stores it.
-  Without this mount the setup is skipped and the deployment behaves as before.
-  `docker exec -u "$PUID:$PGID" dsh gcb probe --host github.com --repo owner/repo` answers the
-  broker's decision (exit 0 allowed, 1 denied, 3 unreachable).
+- `/srv/git-broker-socket:/run/git-broker` — optional: the host credential broker's socket
+  directory. It is the one mount that replaces a GitHub token in this container — see
+  [GitHub without a token in the container](#github-without-a-token-in-the-container) for why, and
+  for the two variables that go with it.
+
+## GitHub without a token in the container
+
+### The problem
+
+The agent works inside this container and pushes commits. That needs a GitHub credential, and every
+obvious way to provide it puts a **standing secret where the agent can read it**: a personal access
+token in an environment variable or a file under the state directory, an ssh key mounted for it, or
+credentials baked into a derived image. A long-lived token there is readable by anything the agent
+runs, survives after the session that needed it, has to be rotated by hand, and travels with every
+copy of the state directory. "The agent should not be able to do that" is not a control when the
+agent is the thing holding the token.
+
+### The design
+
+[git-credential-broker](https://github.com/code-vaults/git-credential-broker) moves the secret out
+of the container:
+
+- the broker runs **on the host**, holds the GitHub App's private key and the allowlist, and talks to
+  GitHub itself;
+- the container mounts **only a unix socket** — a path, not a secret;
+- `gcb setup` (from `entrypoint.sh`, as the deployment user) records git's credential helper, and
+  git asks the socket **at push time**;
+- the broker mints a short-lived installation token for that one push, records the request in its
+  audit log, and hands it over; nothing is written to the container's filesystem.
+
+So the container holds no GitHub credential at rest, revocation is a host-side change to the
+allowlist rather than a sweep of every token in flight, and the App's permissions say what a push may
+touch. The same route answers the API calls the agent makes, not just `git push`.
+
+### What it does not do
+
+- It is **not a sandbox**: a repository the allowlist admits is one the agent can push to, and the
+  App's permissions bound what a push can change. That is the intended boundary, not a gap.
+- It does **not** keep a credential for anything else — it is not a secret store, and it does not
+  cover registries, npm tokens or ssh.
+- It changes **nothing** when the socket is not mounted: `entrypoint.sh` skips the setup, no helper
+  is configured, and the deployment behaves exactly as before.
+
+### Configure it
+
+```yaml
+environment:
+  - GIT_BROKER_SOCKET=/run/git-broker/broker.sock
+  - GIT_BROKER_REQUIRE=1 # fail closed instead of falling back to another helper
+volumes:
+  - /srv/git-broker-socket:/run/git-broker
+```
+
+`docker exec -u "$PUID:$PGID" dsh gcb probe --host github.com --repo owner/repo` answers the
+broker's decision — exit 0 allowed, 1 denied, 3 unreachable — with the credential reduced to a
+fingerprint, so its output is safe to share.
 
 For development, the dev image carries the broker's **local** client build
 (`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.dev.yml` runs the
 broker itself as the `gcb` service — `code-vaults/gcb-host:dev`, against the same socket directory
-(`.dsh/git-broker`). One broker serves the host, so it replaces a standalone deployment rather than
-being added next to one; drop the service when the broker is supervised elsewhere.
+(`.dsh/git-broker`), and `dsh` waits for it (`depends_on`). One broker serves the host, so it
+replaces a standalone deployment rather than being added next to one; drop the service when the
+broker is supervised elsewhere.
 
 ## Releasing
 
