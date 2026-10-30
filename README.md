@@ -214,7 +214,9 @@ form there.
 For development, the dev image carries the broker's **local** client build
 (`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.dev.yml` runs the
 broker itself as the `gcb` service — `code-vaults/gcb-host:dev`, against the same socket directory
-(`.dsh/git-broker`), and `dsh` waits for its socket to be bound — the service's healthcheck is
+(`.dsh/git-broker` — created once by hand, `mkdir -p .dsh/git-broker`, together with the broker's
+own `log` directory; the pre-flight refuses to remove the deployment when either is missing), and
+`dsh` waits for its socket to be bound — the service's healthcheck is
 `test -S /run/git-broker/broker.sock`, and `depends_on` uses `service_healthy`. One broker serves the host, so it
 replaces a standalone deployment rather than being added next to one; when the broker is supervised
 elsewhere, drop the service **and `dsh`'s `depends_on` entry** — compose refuses a dependency on a

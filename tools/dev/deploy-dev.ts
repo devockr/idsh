@@ -157,9 +157,13 @@ for (const mount of fileSources(
   Object.values(resolved.services ?? {}).flatMap(s => s.volumes ?? []),
 )) {
   try {
-    statSync(mount.source ?? '')
+    // A directory is what a short-syntax mount of a missing file leaves behind, so "it exists"
+    // is not the question: it has to be a file.
+    if (!statSync(mount.source ?? '').isFile()) {
+      throw new Error('not a file')
+    }
   } catch {
-    die(`bind source ${mount.source ?? ''} does not exist; nothing was touched`)
+    die(`bind source ${mount.source ?? ''} is not a file; nothing was touched`)
   }
 }
 // --mount, not -v: -v creates a missing host path on a standard engine, so the check would pass

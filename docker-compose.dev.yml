@@ -22,7 +22,10 @@ services:
       # The broker's socket lives inside the state directory, which is already mounted, so the
       # path needs no extra volume: with the `gcb` service below (or a host broker on the same
       # directory) git in this container asks the host for a credential instead of holding one.
-      - GIT_BROKER_SOCKET=${GIT_BROKER_SOCKET:-/home/app/.dsh/git-broker/broker.sock}
+      # Fixed, because the broker's socket directory is: an override here without one there would
+      # mount the broker where dsh does not look. A deployment with its own broker drops the `gcb`
+      # service and changes this line.
+      - GIT_BROKER_SOCKET=/home/app/.dsh/git-broker/broker.sock
     # The broker's socket has to exist first: `entrypoint.sh` runs `gcb setup` when it does, and a
     # boot that beat it would come up without a credential helper.
     depends_on:
