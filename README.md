@@ -211,8 +211,9 @@ For development, the dev image carries the broker's **local** client build
 broker itself as the `gcb` service — `code-vaults/gcb-host:dev`, against the same socket directory
 (`.dsh/git-broker`), and `dsh` waits for its socket to be bound — the service's healthcheck is
 `test -S /run/git-broker/broker.sock`, and `depends_on` uses `service_healthy`. One broker serves the host, so it
-replaces a standalone deployment rather than being added next to one; drop the service when the
-broker is supervised elsewhere.
+replaces a standalone deployment rather than being added next to one; when the broker is supervised
+elsewhere, drop the service **and `dsh`'s `depends_on` entry** — compose refuses a dependency on a
+service that is not defined.
 
 ## Releasing
 

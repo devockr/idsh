@@ -141,8 +141,12 @@ const mounts = (service.volumes ?? []).filter(
 // default is true, and compose either writes it out or leaves it to the default depending on its
 // version — the 2.20.1 here writes `true`, Compose 5.5.0 omits it — so neither a missing field
 // nor `true` may be read as "compose will create it".
-const created = mounts.filter(mount => mount.bind?.create_host_path !== false)
-const strict = mounts.filter(mount => mount.bind?.create_host_path === false)
+// Only an explicit `true` promises the daemon creates a missing source. The default is true, but
+// compose omits it from the resolved config in some versions and writes it in others, so an absent
+// field is treated as "not promised" and checked — otherwise a `create_host_path: false` mount
+// would silently land in the warning pass on the versions that omit it.
+const created = mounts.filter(mount => mount.bind?.create_host_path === true)
+const strict = mounts.filter(mount => mount.bind?.create_host_path !== true)
 // --mount, not -v: -v creates a missing host path on a standard engine, so the check would pass
 // for the very mount it exists to catch, and would leave a root-owned directory behind even on
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
@@ -222,7 +226,7 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
     mount =>
       mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
   )
-  const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path === false)
+  const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path !== true)
   const otherGated = otherStrict.filter(mount => !needsQuoting(mount))
   if (otherStrict.length > 0 && !otherImage) {
     die(`service ${name}: its binds cannot be pre-flighted without an image; nothing was touched`)

@@ -33,8 +33,9 @@ services:
   # the same shape it renders. One broker serves the host, so this service replaces a standalone
   # one rather than joining it — two processes cannot bind the same socket path. The deployment
   # directory defaults to `~/.broker-host` because that is this overlay's own convention; override
-  # `GCB_DEPLOY_DIR` when the config and key live elsewhere, and drop this service entirely when
-  # the broker is supervised somewhere else.
+  # `GCB_DEPLOY_DIR` when the config and key live elsewhere, and drop this service **and `dsh`'s
+  # `depends_on` entry** when the broker is supervised somewhere else — compose refuses a dependency
+  # on a service that is not defined.
   gcb:
     image: code-vaults/gcb-host:dev
     pull_policy: never
@@ -71,8 +72,21 @@ services:
         esac
         exec gcb daemon --config /etc/git-cred-broker/broker.config.yml
     volumes:
-      - ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/broker.config.yml:/etc/git-cred-broker/broker.config.yml:ro
-      - ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/app.pem:/etc/git-cred-broker/app.pem:ro
+      # `create_host_path: false` is what makes a missing deployment directory fail the pre-flight
+      # instead of becoming an empty directory the daemon then refuses — compose creates a missing
+      # short-syntax bind source itself, and the symptom would be a healthcheck that never passes.
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/broker.config.yml
+        target: /etc/git-cred-broker/broker.config.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/app.pem
+        target: /etc/git-cred-broker/app.pem
+        read_only: true
+        bind:
+          create_host_path: false
       - ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/log:/var/log/git-cred-broker
       - ${GCB_SOCKET_DIR:-./.dsh/git-broker}:/run/git-broker
 

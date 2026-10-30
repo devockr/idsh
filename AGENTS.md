@@ -95,8 +95,8 @@ code-vaults/gcb-client:dev .` in the broker's checkout, and the overlay's `gcb` 
 broker image too — `docker build --target host -t code-vaults/gcb-host:dev .` — because
 `deploy:dev` now pre-flights every service the config names. Its companion service in
 `docker-compose.dev.yml` (`gcb`, image `code-vaults/gcb-host:dev`) is the broker itself: one
-process per socket, so it replaces a standalone deployment rather than joining it — drop the service
-when the broker is supervised elsewhere. The socket directory is the state directory's
+process per socket, so it replaces a standalone deployment rather than joining it — drop the service and `dsh`'s
+`depends_on` entry when the broker is supervised elsewhere. The socket directory is the state directory's
 `git-broker`; the deployment directory is `~/.broker-host` unless `GCB_DEPLOY_DIR` says otherwise.
 
 A cached layer once left a browser-dependency set inside `:latest` that the Dockerfile no longer
