@@ -10,6 +10,7 @@
 // the image ships and runs itself keep the `.mts` extension: /opt/dsh/tools has no package.json,
 // so a `.ts` there would be CommonJS.
 import { execFile } from 'node:child_process'
+import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -141,12 +142,26 @@ const mounts = (service.volumes ?? []).filter(
 // default is true, and compose either writes it out or leaves it to the default depending on its
 // version — the 2.20.1 here writes `true`, Compose 5.5.0 omits it — so neither a missing field
 // nor `true` may be read as "compose will create it".
-// Only an explicit `true` promises the daemon creates a missing source. The default is true, but
-// compose omits it from the resolved config in some versions and writes it in others, so an absent
-// field is treated as "not promised" and checked — otherwise a `create_host_path: false` mount
-// would silently land in the warning pass on the versions that omit it.
-const created = mounts.filter(mount => mount.bind?.create_host_path === true)
-const strict = mounts.filter(mount => mount.bind?.create_host_path !== true)
+const created = mounts.filter(mount => mount.bind?.create_host_path !== false)
+const strict = mounts.filter(mount => mount.bind?.create_host_path === false)
+
+// Compose creates a missing bind source as a *directory*, so a file that is supposed to be there
+// (a config, a key, a CA bundle) would become an empty directory and its reader would exit at
+// boot — long after `up` returned and, for the broker, after `dsh` was removed. Those sources are
+// checked here by name, because the resolved config cannot say which mounts are files: the
+// `create_host_path` field is written by some compose versions and omitted by others.
+const FILE_SOURCE = /\.(?:json|key|pem|ya?ml|conf|env|crt|log)$/iu
+const fileSources = (list: Mount[]): Mount[] =>
+  list.filter(mount => mount.source !== undefined && FILE_SOURCE.test(mount.source))
+for (const mount of fileSources(
+  Object.values(resolved.services ?? {}).flatMap(s => s.volumes ?? []),
+)) {
+  try {
+    statSync(mount.source ?? '')
+  } catch {
+    die(`bind source ${mount.source ?? ''} does not exist; nothing was touched`)
+  }
+}
 // --mount, not -v: -v creates a missing host path on a standard engine, so the check would pass
 // for the very mount it exists to catch, and would leave a root-owned directory behind even on
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
@@ -201,7 +216,9 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
   }
   const containerName = other.container_name
   if (containerName) {
-    let owner = ''
+    // `docker inspect` exits non-zero for a container that does not exist, which is the first
+    // deploy and the one after `docker compose down`: the name is free, not a conflict.
+    let owner: string | undefined
     try {
       owner = (
         await docker([
@@ -212,9 +229,9 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
         ])
       ).trim()
     } catch {
-      owner = ''
+      owner = undefined
     }
-    if (owner !== project) {
+    if (owner !== undefined && owner !== project) {
       die(
         `service ${name}: a container named ${containerName} already exists` +
           (owner === '' ? '' : ` (project ${owner})`) +
@@ -226,7 +243,7 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
     mount =>
       mount.type === 'bind' && mount.source && mount.target && (mount.source ?? '').startsWith('/'),
   )
-  const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path !== true)
+  const otherStrict = otherBinds.filter(mount => mount.bind?.create_host_path === false)
   const otherGated = otherStrict.filter(mount => !needsQuoting(mount))
   if (otherStrict.length > 0 && !otherImage) {
     die(`service ${name}: its binds cannot be pre-flighted without an image; nothing was touched`)
