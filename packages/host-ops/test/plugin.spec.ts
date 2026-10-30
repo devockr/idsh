@@ -161,7 +161,7 @@ void test('a bad entry rejects the whole table', async () => {
 
 void test('a bad config registers nothing and warns', async () => {
   const bad = context()
-  await apply(bad.ctx, JSON.parse('{"socketPath":{}}') as Config)
+  await apply(bad.ctx, { socketPath: {} } as Config)
   assert.deepEqual(bad.tools, [])
   assert.match(bad.warnings[0] ?? '', /socketPath must be a non-empty string/u)
 
