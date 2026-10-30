@@ -10,7 +10,8 @@
 // the image ships and runs itself keep the `.mts` extension: /opt/dsh/tools has no package.json,
 // so a `.ts` there would be CommonJS.
 import { execFile } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
+import type { Stats } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -180,6 +181,14 @@ for (const mount of fileSources(
 // for the very mount it exists to catch, and would leave a root-owned directory behind even on
 // --dry. Docker parses the value as CSV, so a field needing quoting goes to the warning pass
 // instead: this daemon refuses a quoted field outright (measured), a standard engine accepts it.
+/** `statSync`, or a stop that names the service and the source it could not read. */
+const statsOf = (source: string, serviceName: string): Stats => {
+  try {
+    return statSync(source)
+  } catch {
+    return die(`service ${serviceName}: bind source ${source} does not exist; nothing was touched`)
+  }
+}
 const needsQuoting = (mount: BindMount): boolean => /[",]/.test(mount.source + mount.target)
 const toArgs = (list: BindMount[]): string[] =>
   list.flatMap(mount => [
@@ -246,7 +255,11 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
       const [projectLabel = '', serviceLabel = ''] = labels.split(' ')
       owner = projectLabel
       heldBy = serviceLabel
-    } catch {
+    } catch (error) {
+      const message = stderrOf(error)
+      if (!/no such (?:object|container)/iu.test(message)) {
+        die(`service ${name}: could not inspect container ${containerName}:\n${message.trim()}`)
+      }
       owner = undefined
     }
     // The same project is fine only for the same service: another service of this stack holding
@@ -264,10 +277,25 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
   // Checked against the filesystem, not by starting the image: a strict bind source must exist,
   // and running a companion image just to prove that would fail on one without `true` (distroless).
   for (const mount of otherStrict) {
+    const stats = statsOf(mount.source, name)
+    // A file source that a directory took over is the case the file check exists for; a directory
+    // that a stray file took over fails the other way — the daemon cannot bind it, the healthcheck
+    // never passes, and `dsh` is already gone by then.
+    if (FILE_SOURCE.test(mount.source)) {
+      if (!stats.isFile()) {
+        die(`service ${name}: bind source ${mount.source} is not a file; nothing was touched`)
+      }
+      continue
+    }
+    if (!stats.isDirectory()) {
+      die(`service ${name}: bind source ${mount.source} is not a directory; nothing was touched`)
+    }
+    // Written as the same uid the container runs as, so a directory it cannot write is a failure
+    // the pre-flight is allowed to predict.
     try {
-      statSync(mount.source)
+      accessSync(mount.source, constants.W_OK)
     } catch {
-      die(`service ${name}: bind source ${mount.source} does not exist; nothing was touched`)
+      die(`service ${name}: bind source ${mount.source} is not writable; nothing was touched`)
     }
   }
   const otherWarned = otherBinds.filter(mount => needsQuoting(mount))
