@@ -246,8 +246,8 @@ Observe the running thing; do not reason from source.
   was skipped once. A private package publishes nothing, so the action's own `published` flag
   cannot be the image's trigger.
 - **Type coverage is its own CI step, after the build**: `pnpm typecov` runs
-  `tools/typecov.mts`, which measures every project (the root one and each package's, since
-  `type-coverage` handles one tsconfig per run) and refuses to run before `pnpm build` — a package
+  `tools/typecov.mts`, which measures every project (the root one, `docs/` and each package's,
+  since `type-coverage` handles one tsconfig per run) and refuses to run before `pnpm build` — a package
   types through its own `lib/*.d.ts`, so an unbuilt tree measures something else.
 - **The image job publishes `Dockerfile`'s final stage** — not `:base`, which is a stage — to
   `ghcr.io/devockr/idsh` and `docker.io/devockr/idsh` as `:latest`, `:sha-<commit>` and `:<version>`.

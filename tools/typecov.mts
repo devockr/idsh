@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
  * Type coverage over every TypeScript project in the workspace: the root one (tools and the tool
- * configs) and each package's own. `type-coverage` measures one project per run, and the packages
- * do not share one — their browser halves compile against different module settings — so the runs
- * are separate and the exit status is the worst of them.
+ * configs), the docs site, and each package's own. `type-coverage` measures one project per run,
+ * and the packages do not share one — their browser halves compile against different module
+ * settings — so the runs are separate and the exit status is the worst of them.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 const root = process.cwd()
-const projects = ['tsconfig.json']
+const projects = ['tsconfig.json', 'docs/tsconfig.json']
 for (const entry of readdirSync(path.join(root, 'packages'), { withFileTypes: true })) {
   const project = path.join('packages', entry.name, 'tsconfig.json')
   if (entry.isDirectory() && existsSync(path.join(root, project))) {
@@ -20,7 +20,7 @@ for (const entry of readdirSync(path.join(root, 'packages'), { withFileTypes: tr
 
 // The packages typecheck through their own declarations, so a missing build is a refusal, not a
 // lower number: type-coverage would resolve nothing and call the gap "any".
-for (const project of projects.slice(1)) {
+for (const project of projects.filter(entry => entry.startsWith('packages/'))) {
   const built = path.join(path.dirname(project), 'lib/index.d.ts')
   if (!existsSync(path.join(root, built))) {
     console.error(`typecov: ${built} is missing — run pnpm build first`)
