@@ -172,12 +172,6 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   if (gcbProbeRepo !== undefined && !/^[\w.-]+\/[\w.-]+$/u.test(gcbProbeRepo)) {
     throw new Error(`--gcb-probe-repo must be owner/name, got ${JSON.stringify(gcbProbeRepo)}`)
   }
-  if (checkout !== undefined) {
-    const stats = await stat(checkout).catch(() => null)
-    if (stats?.isDirectory() !== true) {
-      throw new Error(`--checkout must be an existing directory, got ${checkout}`)
-    }
-  }
   const rateLimitPerMinute = options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
   // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,
   // and a program started with a delay past Node's ceiling is killed at 1 ms.
