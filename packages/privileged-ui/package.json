@@ -1,6 +1,6 @@
 {
   "name": "@idsh/privileged-ui",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "description": "Re-enable the loopback-only privileged surface (settings page, durable settings persistence) for a dsh Web profile served to a non-loopback origin, for the authorities the deployment declares — the deliberate exception the self-hosted image used to carry as a build-time patch",
   "repository": {

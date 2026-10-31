@@ -1,6 +1,6 @@
 {
   "name": "@idsh/mobile",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "description": "The touch-device half of a dsh Web profile: coarse-pointer CSS, Enter inserting a line break instead of sending, and an iOS home-screen icon — the things the self-hosted image carried as build-time patches",
   "repository": {
