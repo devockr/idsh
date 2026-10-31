@@ -1,6 +1,6 @@
 {
   "name": "@idsh/image",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "description": "The published image's version and nothing else: private, so changesets bumps it and never publishes it, and release.yml tags both ghcr.io/devockr/idsh and devockr/idsh with it",
   "private": true
 }

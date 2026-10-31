@@ -1,5 +1,23 @@
 # @idsh/image
 
+## 0.1.0
+
+### Minor Changes
+
+- [#79](https://github.com/devockr/idsh/pull/79) [`96b81ec`](https://github.com/devockr/idsh/commit/96b81ecaa0ad07f9ecddb3671dce8129698fa97e) Thanks [@JounQin](https://github.com/JounQin)! - Bake `gcb-client` into the image and point git at the host's credential broker when its socket is
+  mounted: `entrypoint.sh` runs `gcb setup` as the deployment user before dsh, so a push asks the
+  host for a short-lived credential instead of the container holding one. Without the mount the setup
+  is skipped and nothing changes. `docker exec … gcb probe` answers the broker's decision.
+
+### Patch Changes
+
+- [#56](https://github.com/devockr/idsh/pull/56) [`4678335`](https://github.com/devockr/idsh/commit/4678335a2d6e7c1c61c888aff1ec649ea798600a) Thanks [@JounQin](https://github.com/JounQin)! - Publish type declarations for the two plugins' host halves. `declaration` is on, `exports` carries a
+  `types` condition (and the manifest a top-level `types`, for tooling that still reads it), and the
+  `.d.ts` is in `files` — the same shape the `@deepseek-ai/dsh-*` packages ship. The image rides along
+  because it pins these packages by version.
+
+- [#59](https://github.com/devockr/idsh/pull/59) [`4e46aaa`](https://github.com/devockr/idsh/commit/4e46aaa75600c32e80d5f494f8aff69ff0982202) Thanks [@renovate](https://github.com/apps/renovate)! - chore(deps): update dependency @deepseek-ai/dsh to v0.2.1-rc.3
+
 ## 0.0.5
 
 ### Patch Changes
