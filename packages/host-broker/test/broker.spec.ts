@@ -2815,3 +2815,16 @@ void test('gcb.update reports an exited broker with the steps that worked', asyn
     await rig.close()
   }
 })
+
+void test('gcb.update reports a broker container that ps does not list', async () => {
+  // Compose lists only running containers, so a broker that stopped before this query is absent.
+  const rig = await gcbRig({ ps: ':' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /not running after the recreate/u)
+    assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+  } finally {
+    await rig.close()
+  }
+})
