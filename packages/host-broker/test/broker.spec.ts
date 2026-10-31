@@ -2939,3 +2939,17 @@ void test('gcb.update refuses a service that runs two containers', async () => {
     await rig.close()
   }
 })
+
+void test('an empty compose list is refused at boot', async () => {
+  const host = await fakeHost()
+  await assert.rejects(
+    startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      logDir: host.logDir,
+      procDir: host.procDir,
+      gcbCompose: ' , ',
+    }),
+    /--gcb-compose needs at least one file/u,
+  )
+})

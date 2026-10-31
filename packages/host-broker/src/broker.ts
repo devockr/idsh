@@ -112,6 +112,34 @@ export interface RunningBroker {
   close(): Promise<void>
 }
 
+/**
+ * The compose files a flag names, resolved: `a.yml` or `base.yml,overlay.yml`.
+ *
+ * An empty value — an unset variable that expanded to nothing, a trailing comma — names no file at
+ * all, and compose would then resolve whatever sits in the checkout instead.
+ */
+async function composeFiles(value: string | undefined): Promise<string[] | undefined> {
+  if (value === undefined) {
+    return undefined
+  }
+  const entries = value
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(entry => entry !== '')
+  if (entries.length === 0) {
+    throw new Error('--gcb-compose needs at least one file')
+  }
+  const files: string[] = []
+  for (const entry of entries) {
+    const file = await optionalPath(entry, '--gcb-compose', 'file')
+    if (file === undefined) {
+      throw new Error('--gcb-compose needs at least one file')
+    }
+    files.push(file)
+  }
+  return files
+}
+
 /** An optional path from the command line, resolved and checked to be what its flag promises. */
 async function optionalPath(
   value: string | undefined,
@@ -169,22 +197,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
   const checkout = await optionalPath(options.checkout, '--checkout', 'directory')
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
-  const gcbComposeFiles =
-    options.gcbCompose === undefined
-      ? undefined
-      : await Promise.all(
-          options.gcbCompose
-            .split(',')
-            .map(entry => entry.trim())
-            .filter(entry => entry !== '')
-            .map(async entry => {
-              const file = await optionalPath(entry, '--gcb-compose', 'file')
-              if (file === undefined) {
-                throw new Error('--gcb-compose needs at least one file')
-              }
-              return file
-            }),
-        )
+  const gcbComposeFiles = await composeFiles(options.gcbCompose)
   const gcbService = options.gcbService ?? 'gcb'
   if (!/^\w[\w.-]*$/u.test(gcbService)) {
     throw new Error(
