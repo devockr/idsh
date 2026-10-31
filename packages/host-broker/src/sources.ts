@@ -43,6 +43,10 @@ export interface OpContext {
   readonly container: string
   readonly dockerPath: string
   readonly checkout?: string
+  /** The credential broker's checkout; `gcb.update` rebuilds from it. */
+  readonly gcbCheckout?: string
+  /** The compose file that runs the broker; `gcb.update` recreates only its service. */
+  readonly gcbCompose?: string
   /** The git client. Default `git`, resolved through the host's PATH. */
   readonly gitPath: string
   /** The `ip` client `net.status` runs. */
@@ -93,6 +97,8 @@ export interface OpDefinition {
   readonly timeoutMs?: number
   /** Runs under the deployment lock: no build, recreate or rollback overlaps it. */
   readonly serial?: boolean
+  /** Config the operation cannot work without: absent is not offered by `ops.describe`. */
+  readonly requires?: readonly (keyof OpContext)[]
   run(args: Record<string, unknown>, ctx: OpContext): Promise<Execution | string>
 }
 
@@ -772,6 +778,73 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 
 /* ------------------------------------------------------------------ the table */
 
+/* ---------------------------------------------------------------- gcb.update */
+
+/**
+ * Rebuild the credential broker from its own checkout and recreate only its container.
+ *
+ * Not named `deploy.*`: those mean this deployment, and their log and status would become ambiguous
+ * the moment a second deployment shares the namespace. Every step is the answer, so a failure says
+ * which one it was; the container's own state is the last word, because a build that cannot start
+ * is not a successful update.
+ */
+async function updateBroker(ctx: OpContext): Promise<string> {
+  const checkout = ctx.gcbCheckout
+  const compose = ctx.gcbCompose
+  if (checkout === undefined || compose === undefined) {
+    throw new BrokerFault('unavailable', 'the broker is not configured for gcb.update')
+  }
+  const pull = (await git(ctx, ['pull', '--ff-only'], {}, checkout)).trim()
+  const images = (
+    await docker(ctx, ['compose', '-f', compose, 'config', '--images'], 'head', { cwd: checkout })
+  )
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line !== '')
+  if (images.length !== 1) {
+    throw new BrokerFault(
+      'unavailable',
+      `the broker's compose names ${String(images.length)} images; gcb.update builds exactly one`,
+    )
+  }
+  const image = images[0]
+  await docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
+    cwd: checkout,
+    timeoutMs: BUILD_TIMEOUT_MS,
+  })
+  await docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps'], 'head', {
+    cwd: checkout,
+    timeoutMs: BUILD_TIMEOUT_MS,
+  })
+  // The container is the broker: ids first, so an empty list is its own answer, then the state
+  // and — when the unit declares one — the healthcheck.
+  const ids = (await docker(ctx, ['compose', '-f', compose, 'ps', '-q'], 'head', { cwd: checkout }))
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line !== '')
+  if (ids.length === 0) {
+    throw new BrokerFault('unavailable', 'the broker container is not running after the recreate')
+  }
+  const states = await Promise.all(
+    ids.map(id =>
+      docker(ctx, [
+        'inspect',
+        '--format',
+        '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
+        id,
+      ]),
+    ),
+  )
+  const unhealthy = states
+    .map(state => state.trim())
+    .filter(state => !/^running(?: healthy)?$/u.test(state))
+  if (unhealthy.length > 0) {
+    throw new BrokerFault('unavailable', `the broker container is ${unhealthy.join(', ')}`)
+  }
+  const headline = pull.split('\n')[0] ?? ''
+  return `pulled ${headline}; built ${image}; recreated ${String(ids.length)} broker container(s)`
+}
+
 export const OPS: readonly OpDefinition[] = [
   {
     name: 'log.tail',
@@ -972,6 +1045,20 @@ export const OPS: readonly OpDefinition[] = [
       })
     },
   },
+
+  {
+    name: 'gcb.update',
+    summary: 'Rebuild the credential broker from its checkout and recreate only its container.',
+    confirm: true,
+    serial: true,
+    timeoutMs: BUILD_TIMEOUT_MS,
+    requires: ['gcbCheckout', 'gcbCompose'],
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    run(args, ctx) {
+      rejectUnknown(args, [])
+      return updateBroker(ctx)
+    },
+  },
   {
     name: 'net.status',
     summary: "The host's addresses, routes and neighbours, read with ip.",
@@ -1087,14 +1174,23 @@ export const OPS: readonly OpDefinition[] = [
   },
 ]
 
-export function findOp(name: string): OpDefinition | undefined {
-  return OPS.find(op => op.name === name)
+/**
+ * The operations this broker can offer: a `requires` list that the context cannot satisfy hides
+ * one.
+ */
+const available = (context: OpContext | undefined): readonly OpDefinition[] =>
+  OPS.filter(
+    op => op.requires === undefined || op.requires.every(key => context?.[key] !== undefined),
+  )
+
+export function findOp(name: string, context?: OpContext): OpDefinition | undefined {
+  return available(context).find(op => op.name === name)
 }
 
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
-export function describeOps(): string {
+export function describeOps(context?: OpContext): string {
   return JSON.stringify(
-    OPS.map(({ name, summary, input, confirm, timeoutMs }) => ({
+    available(context).map(({ name, summary, input, confirm, timeoutMs }) => ({
       name,
       summary,
       input,

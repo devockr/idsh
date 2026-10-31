@@ -92,6 +92,10 @@ export interface BrokerOptions {
   readonly stop?: () => void
   /** The deployment checkout that holds `docker-compose.yml`; required by `deploy.recreate`. */
   readonly checkout?: string
+  /** The credential broker's own checkout; `gcb.update` rebuilds from it. */
+  readonly gcbCheckout?: string
+  /** The compose file that runs the broker; `gcb.update` recreates only its service. */
+  readonly gcbCompose?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -102,6 +106,24 @@ export interface BrokerOptions {
 
 export interface RunningBroker {
   close(): Promise<void>
+}
+
+/** An optional path from the command line, resolved and checked to be what its flag promises. */
+async function optionalPath(
+  value: string | undefined,
+  flag: string,
+  kind: 'directory' | 'file',
+): Promise<string | undefined> {
+  if (value === undefined) {
+    return undefined
+  }
+  const resolved = path.resolve(value)
+  const stats = await stat(resolved).catch(() => null)
+  const matches = stats !== null && (kind === 'directory' ? stats.isDirectory() : stats.isFile())
+  if (!matches) {
+    throw new Error(`${flag} must be an existing ${kind}, got ${resolved}`)
+  }
+  return resolved
 }
 
 /** First candidate that exists and is executable. */
@@ -142,6 +164,8 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const ipPath = options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? DEFAULT_IP
   const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
   const checkout = options.checkout === undefined ? undefined : path.resolve(options.checkout)
+  const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
+  const gcbCompose = await optionalPath(options.gcbCompose, '--gcb-compose', 'file')
   if (checkout !== undefined) {
     const stats = await stat(checkout).catch(() => null)
     if (stats?.isDirectory() !== true) {
@@ -193,6 +217,8 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     buildRoot,
     deployLock,
     ...(checkout === undefined ? {} : { checkout }),
+    ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
+    ...(gcbCompose === undefined ? {} : { gcbCompose }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
   const sockets = new Set<net.Socket>()
@@ -458,7 +484,7 @@ async function answer(
     op = request.op
     requestId = request.id
     args = request.args
-    const definition = findOp(request.op)
+    const definition = findOp(request.op, context)
     const budget = definition?.timeoutMs ?? context.execTimeoutMs
     const deployment = acquireDeployment(context, definition)
     if (deployment.fault !== undefined) {
@@ -530,7 +556,7 @@ async function execute(
 ): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
-  const definition = request.op === DESCRIBE_OP ? undefined : findOp(request.op)
+  const definition = request.op === DESCRIBE_OP ? undefined : findOp(request.op, context)
   const bucket = request.op === DESCRIBE_OP ? DESCRIBE_OP : (definition?.name ?? UNKNOWN_BUCKET)
   if (!limiter.take(bucket, started)) {
     throw new BrokerFault(
@@ -545,7 +571,7 @@ async function execute(
   }
   const raw =
     definition === undefined
-      ? describeOps()
+      ? describeOps(context)
       : await runOp(definition, request.args, context, deadline, controller)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =

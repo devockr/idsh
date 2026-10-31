@@ -2582,3 +2582,126 @@ void test('proc.list answers unavailable when /proc is not readable', async () =
     await broker.close()
   }
 })
+
+void test('gcb.update is offered only when both of its paths are configured', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    assert.equal(
+      ops.find(op => op.name === 'gcb.update'),
+      undefined,
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update pulls, builds the image its compose names and checks the container', async () => {
+  const host = await fakeHost()
+  const calls = path.join(host.root, 'calls.log')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> ${JSON.stringify(calls)}`,
+      'case "$*" in',
+      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
+      '  *"ps -q"*) echo "abc123" ;;',
+      '  *inspect*) echo "running healthy" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh\nprintf 'git %s\\n' "$*" >> ${JSON.stringify(calls)}\necho 'Already up to date.'\n`,
+    { mode: 0o755 },
+  )
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const update = ops.find(op => op.name === 'gcb.update')
+    assert.ok(update !== undefined)
+    assert.equal(update.confirm, true)
+    assert.equal(update.timeoutMs, BUILD_TIMEOUT_MS)
+
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    const recorded = await readFile(calls, 'utf8')
+    // The checkout is pulled, the image comes from the compose file, and only that container is
+    // recreated.
+    assert.match(recorded, new RegExp(`git -C ${gcbCheckout} pull --ff-only`, 'u'))
+    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} config --images`, 'u'))
+    assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
+    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} up -d --no-deps`, 'u'))
+    assert.match(recorded, /inspect --format .* abc123/u)
+    assert.match(answer.result ?? '', /built code-vaults\/gcb-host:dev/u)
+    assert.match(answer.result ?? '', /recreated 1 broker container/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update refuses a compose file that names two images', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    '#!/bin/sh\ncase "$*" in *"config --images"*) printf "one\\ntwo\\n" ;; esac\n',
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'unavailable')
+    assert.match(answer.error?.message ?? '', /names 2 images/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
