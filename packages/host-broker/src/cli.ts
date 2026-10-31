@@ -9,7 +9,7 @@
  */
 import { parseArgs } from 'node:util'
 
-import { startBroker } from './broker.ts'
+import { type BrokerOptions, startBroker } from './broker.ts'
 import { DEFAULT_EXEC_TIMEOUT_MS, MAX_TIMER_MS, TIMEOUT_SLACK_MS } from './constants.ts'
 
 const USAGE = `Usage: idsh-host --socket <path> --audit <path> [options]
@@ -33,6 +33,7 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --gcb-compose <file>   The compose file that runs the credential broker
   --gcb-probe-repo <repo>
                          Repository gcb.update probes after recreating (owner/name)
+  --gcb-service <name>   The compose service that runs the broker (default gcb)
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
@@ -61,6 +62,45 @@ function number(
   return parsed
 }
 
+/** The flags, as the broker's options; an absent flag stays absent rather than becoming empty. */
+function optionsFrom(
+  values: Record<string, string | boolean | undefined>,
+  handlers: { shutdown?: () => void },
+): BrokerOptions {
+  const text = (key: string): string | undefined => {
+    const value = values[key]
+    return typeof value === 'string' ? value : undefined
+  }
+  return {
+    socketPath: text('socket') ?? '',
+    auditPath: text('audit') ?? '',
+    ...(text('log-dir') === undefined ? {} : { logDir: text('log-dir') }),
+    ...(text('proc-dir') === undefined ? {} : { procDir: text('proc-dir') }),
+    ...(text('container') === undefined ? {} : { container: text('container') }),
+    ...(text('docker') === undefined ? {} : { dockerPath: text('docker') }),
+    ...(text('git') === undefined ? {} : { gitPath: text('git') }),
+    ...(text('ip') === undefined ? {} : { ipPath: text('ip') }),
+    ...(text('ss') === undefined ? {} : { ssPath: text('ss') }),
+    ...(text('pnpm') === undefined ? {} : { pnpmPath: text('pnpm') }),
+    ...(text('npm') === undefined ? {} : { npmPath: text('npm') }),
+    ...(text('checkout') === undefined ? {} : { checkout: text('checkout') }),
+    ...(text('gcb-checkout') === undefined ? {} : { gcbCheckout: text('gcb-checkout') }),
+    ...(text('gcb-compose') === undefined ? {} : { gcbCompose: text('gcb-compose') }),
+    ...(text('gcb-probe-repo') === undefined ? {} : { gcbProbeRepo: text('gcb-probe-repo') }),
+    ...(text('gcb-service') === undefined ? {} : { gcbService: text('gcb-service') }),
+    // The supervisor restarts the process once it has drained; that is the self-update hand-off.
+    stop: () => handlers.shutdown?.(),
+    rateLimitPerMinute: number(text('rate-limit'), 60, '--rate-limit'),
+    execTimeoutMs: number(
+      text('exec-timeout'),
+      DEFAULT_EXEC_TIMEOUT_MS,
+      '--exec-timeout',
+      // The wrapper schedules a timer this much later; past Node's ceiling it fires at 1 ms.
+      MAX_TIMER_MS - TIMEOUT_SLACK_MS,
+    ),
+  }
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
@@ -79,6 +119,7 @@ async function main(): Promise<void> {
       'gcb-checkout': { type: 'string' },
       'gcb-compose': { type: 'string' },
       'gcb-probe-repo': { type: 'string' },
+      'gcb-service': { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -96,33 +137,7 @@ async function main(): Promise<void> {
   }
 
   const handlers: { shutdown?: () => void } = {}
-  const broker = await startBroker({
-    socketPath: values.socket,
-    auditPath: values.audit,
-    ...(values['log-dir'] === undefined ? {} : { logDir: values['log-dir'] }),
-    ...(values['proc-dir'] === undefined ? {} : { procDir: values['proc-dir'] }),
-    ...(values.container === undefined ? {} : { container: values.container }),
-    ...(values.docker === undefined ? {} : { dockerPath: values.docker }),
-    ...(values.git === undefined ? {} : { gitPath: values.git }),
-    ...(values.ip === undefined ? {} : { ipPath: values.ip }),
-    ...(values.ss === undefined ? {} : { ssPath: values.ss }),
-    ...(values.pnpm === undefined ? {} : { pnpmPath: values.pnpm }),
-    ...(values.npm === undefined ? {} : { npmPath: values.npm }),
-    ...(values.checkout === undefined ? {} : { checkout: values.checkout }),
-    ...(values['gcb-checkout'] === undefined ? {} : { gcbCheckout: values['gcb-checkout'] }),
-    ...(values['gcb-compose'] === undefined ? {} : { gcbCompose: values['gcb-compose'] }),
-    ...(values['gcb-probe-repo'] === undefined ? {} : { gcbProbeRepo: values['gcb-probe-repo'] }),
-    // The supervisor restarts the process once it has drained; that is the self-update hand-off.
-    stop: () => handlers.shutdown?.(),
-    rateLimitPerMinute: number(values['rate-limit'], 60, '--rate-limit'),
-    execTimeoutMs: number(
-      values['exec-timeout'],
-      DEFAULT_EXEC_TIMEOUT_MS,
-      '--exec-timeout',
-      // The wrapper schedules a timer this much later; past Node's ceiling it fires at 1 ms.
-      MAX_TIMER_MS - TIMEOUT_SLACK_MS,
-    ),
-  })
+  const broker = await startBroker(optionsFrom(values, handlers))
 
   process.stderr.write(`idsh-host: listening on ${values.socket}\n`)
 

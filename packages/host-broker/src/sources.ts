@@ -49,6 +49,8 @@ export interface OpContext {
   readonly gcbCompose?: string
   /** The repository `gcb.update` probes for, `owner/name`. */
   readonly gcbProbeRepo?: string
+  /** The compose service that runs the broker. */
+  readonly gcbService: string
   /** The git client. Default `git`, resolved through the host's PATH. */
   readonly gitPath: string
   /** The `ip` client `net.status` runs. */
@@ -847,18 +849,27 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     }),
   )
   done.push('build: ok')
+  // The service, not the whole file: another service sharing that compose project must not be
+  // recreated by a broker update, and `ps` must not answer with its id either.
   await step('recreate', () =>
-    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait'], 'head', {
-      cwd: checkout,
-      timeoutMs: BUILD_TIMEOUT_MS,
-    }),
+    docker(
+      ctx,
+      ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait', ctx.gcbService],
+      'head',
+      {
+        cwd: checkout,
+        timeoutMs: BUILD_TIMEOUT_MS,
+      },
+    ),
   )
-  done.push('recreate: up -d --no-deps --wait')
+  done.push(`recreate: up -d --no-deps --wait ${ctx.gcbService}`)
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
   const ids = (
     await step('list the container', () =>
-      docker(ctx, ['compose', '-f', compose, 'ps', '-q'], 'head', { cwd: checkout }),
+      docker(ctx, ['compose', '-f', compose, 'ps', '-q', ctx.gcbService], 'head', {
+        cwd: checkout,
+      }),
     )
   )
     .split('\n')

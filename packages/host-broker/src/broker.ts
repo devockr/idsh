@@ -98,6 +98,8 @@ export interface BrokerOptions {
   readonly gcbCompose?: string
   /** The repository `gcb.update` probes for, `owner/name`; the broker's own check after a recreate. */
   readonly gcbProbeRepo?: string
+  /** The compose service that runs the broker. Default `gcb`. */
+  readonly gcbService?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -169,8 +171,20 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
   const gcbCompose = await optionalPath(options.gcbCompose, '--gcb-compose', 'file')
   const gcbProbeRepo = options.gcbProbeRepo
-  if (gcbProbeRepo !== undefined && !/^[\w.-]+\/[\w.-]+$/u.test(gcbProbeRepo)) {
+  // `owner/name`, and each side starts with a character a repository name can start with: `../repo`
+  // and `.` match a dot-only pattern, and the probe would refuse them after a rebuild instead of at
+  // boot.
+  if (
+    gcbProbeRepo !== undefined &&
+    !/^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/u.test(gcbProbeRepo)
+  ) {
     throw new Error(`--gcb-probe-repo must be owner/name, got ${JSON.stringify(gcbProbeRepo)}`)
+  }
+  const gcbService = options.gcbService ?? 'gcb'
+  if (!/^\w[\w.-]*$/u.test(gcbService)) {
+    throw new Error(
+      `--gcb-service must be a compose service name, got ${JSON.stringify(gcbService)}`,
+    )
   }
   const rateLimitPerMinute = options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
   // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,
@@ -220,6 +234,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
     ...(gcbCompose === undefined ? {} : { gcbCompose }),
     ...(gcbProbeRepo === undefined ? {} : { gcbProbeRepo }),
+    gcbService,
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
   const sockets = new Set<net.Socket>()

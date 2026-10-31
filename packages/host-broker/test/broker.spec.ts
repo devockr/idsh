@@ -2660,8 +2660,9 @@ void test('gcb.update pulls, builds the image its compose names and checks the c
     // recreated.
     assert.match(recorded, new RegExp(`git -C ${gcbCheckout} pull --ff-only`, 'u'))
     assert.match(recorded, new RegExp(`compose -f ${gcbCompose} config --images`, 'u'))
-    assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
-    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} up -d --no-deps --wait`, 'u'))
+    assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev ./u)
+    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} up -d --no-deps --wait gcb`, 'u'))
+    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} ps -q gcb`, 'u'))
     assert.match(recorded, /inspect --format .* abc123/u)
     // State is not reachability: the probe goes through the deployment's own client.
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
