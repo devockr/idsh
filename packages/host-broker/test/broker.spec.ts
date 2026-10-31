@@ -2858,3 +2858,94 @@ void test('gcb.update parses stdout, so compose warnings are not service names',
     await broker.close()
   }
 })
+
+void test('gcb.update keeps the reason a parsed query failed', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"config --services"*)',
+      '    echo "validating /tmp/gcb-compose.yml: services.gcb.image must be a string" >&2',
+      '    exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    // The parsed answer is empty, but the failure still carries what compose said.
+    assert.match(answer.error?.message ?? '', /services\.gcb\.image must be a string/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update does not read a ps warning as a second container', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"config --services"*) echo gcb ;;',
+      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
+      '  *"ps -q"*) echo "WARN[0000] PR82_UNSET is not set" >&2; echo abc123 ;;',
+      '  *inspect*) echo "running healthy" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    // One id was inspected, so one state is reported.
+    assert.match(answer.result ?? '', /state: running healthy; probe:/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})

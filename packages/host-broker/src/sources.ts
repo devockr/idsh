@@ -150,6 +150,9 @@ function runFixed(
       settled: false,
     }
     let buffer = Buffer.alloc(0)
+    // Kept apart from the answer: a caller that parses stdout still needs the reason a program
+    // failed, and that reason is usually on stderr.
+    let errors = Buffer.alloc(0)
 
     const settle = (failure?: Error): void => {
       if (state.settled) {
@@ -202,19 +205,20 @@ function runFixed(
     }
 
     child.stdout.on('data', collect)
-    // Warnings still reach the log, but not the answer when the caller parses it.
-    child.stderr.on(
-      'data',
-      options.stdoutOnly === true
-        ? (chunk: Buffer) => {
-            if (logPath !== undefined) {
-              logChain = logChain
-                .then(() => appendFile(logPath, chunk, { mode: FILE_MODE }))
-                .catch(() => null)
-            }
-          }
-        : collect,
-    )
+    // Warnings still reach the log, but not the parsed answer; the failure path reads `errors`.
+    child.stderr.on('data', (chunk: Buffer) => {
+      errors = Buffer.concat([errors, chunk])
+      if (errors.length > MAX_EXEC_BUFFER_BYTES) {
+        errors = errors.subarray(errors.length - MAX_EXEC_BUFFER_BYTES)
+      }
+      if (options.stdoutOnly !== true) {
+        collect(chunk)
+      } else if (logPath !== undefined) {
+        logChain = logChain
+          .then(() => appendFile(logPath, chunk, { mode: FILE_MODE }))
+          .catch(() => null)
+      }
+    })
     state.timer = setTimeout(() => {
       if (child.pid !== undefined) {
         try {
@@ -235,7 +239,7 @@ function runFixed(
       }
       // The program's own message is the useful part, and docker/df put the cause last: keep the
       // tail of the output, from a line boundary, rather than its opening lines.
-      const text = buffer.toString('utf8').trim()
+      const text = (buffer.length > 0 ? buffer : errors).toString('utf8').trim()
       // Only a cut needs a boundary repair: a short message is complete as it stands.
       const cut = text.length > MAX_ERROR_CHARS
       let tail = cut ? text.slice(-MAX_ERROR_CHARS) : text
@@ -910,6 +914,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     await step('list the container', () =>
       docker(ctx, ['compose', '-f', compose, 'ps', '-q', service], 'head', {
         cwd: checkout,
+        stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
     )
