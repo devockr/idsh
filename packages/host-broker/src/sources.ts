@@ -49,8 +49,6 @@ export interface OpContext {
   readonly gcbCompose?: string
   /** The repository `gcb.update` probes for, `owner/name`. */
   readonly gcbProbeRepo?: string
-  /** The compose service that runs the broker. */
-  readonly gcbService: string
   /** The git client. Default `git`, resolved through the host's PATH. */
   readonly gitPath: string
   /** The `ip` client `net.status` runs. */
@@ -826,9 +824,29 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       .trim()
       .split('\n')[0] ?? ''
   done.push(`pull: ${pull}`)
+  // The broker's compose runs the broker and nothing else — that is what `gcb compose` renders, and
+  // the deployment's own overlay is not the file this operates on. Discovering the one service here
+  // keeps that requirement explicit instead of offering a name flag that could disagree with it.
+  const services = (
+    await step('read the service', () =>
+      docker(ctx, ['compose', '-f', compose, 'config', '--services'], 'head', { cwd: checkout }),
+    )
+  )
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line !== '')
+  if (services.length !== 1) {
+    throw new BrokerFault(
+      'unavailable',
+      `the broker's compose must run exactly one service, got ${String(services.length)}: ${services.join(', ')}`,
+    )
+  }
+  const service = services[0]
   const images = (
     await step('read the image', () =>
-      docker(ctx, ['compose', '-f', compose, 'config', '--images'], 'head', { cwd: checkout }),
+      docker(ctx, ['compose', '-f', compose, 'config', '--images', service], 'head', {
+        cwd: checkout,
+      }),
     )
   )
     .split('\n')
@@ -837,7 +855,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   if (images.length !== 1) {
     throw new BrokerFault(
       'unavailable',
-      `the broker's compose names ${String(images.length)} images; gcb.update builds exactly one`,
+      `the broker's service names ${String(images.length)} images; gcb.update builds exactly one`,
     )
   }
   const image = images[0]
@@ -852,24 +870,17 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // The service, not the whole file: another service sharing that compose project must not be
   // recreated by a broker update, and `ps` must not answer with its id either.
   await step('recreate', () =>
-    docker(
-      ctx,
-      ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait', ctx.gcbService],
-      'head',
-      {
-        cwd: checkout,
-        timeoutMs: BUILD_TIMEOUT_MS,
-      },
-    ),
+    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait', service], 'head', {
+      cwd: checkout,
+      timeoutMs: BUILD_TIMEOUT_MS,
+    }),
   )
-  done.push(`recreate: up -d --no-deps --wait ${ctx.gcbService}`)
+  done.push(`recreate: up -d --no-deps --wait ${service}`)
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
   const ids = (
     await step('list the container', () =>
-      docker(ctx, ['compose', '-f', compose, 'ps', '-q', ctx.gcbService], 'head', {
-        cwd: checkout,
-      }),
+      docker(ctx, ['compose', '-f', compose, 'ps', '-q', service], 'head', { cwd: checkout }),
     )
   )
     .split('\n')

@@ -98,8 +98,6 @@ export interface BrokerOptions {
   readonly gcbCompose?: string
   /** The repository `gcb.update` probes for, `owner/name`; the broker's own check after a recreate. */
   readonly gcbProbeRepo?: string
-  /** The compose service that runs the broker. Default `gcb`. */
-  readonly gcbService?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -180,12 +178,6 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   ) {
     throw new Error(`--gcb-probe-repo must be owner/name, got ${JSON.stringify(gcbProbeRepo)}`)
   }
-  const gcbService = options.gcbService ?? 'gcb'
-  if (!/^\w[\w.-]*$/u.test(gcbService)) {
-    throw new Error(
-      `--gcb-service must be a compose service name, got ${JSON.stringify(gcbService)}`,
-    )
-  }
   const rateLimitPerMinute = options.rateLimitPerMinute ?? DEFAULTS.rateLimitPerMinute
   // Clamp where the context is built, not only in the wrapper: the same value reaches `spawn`,
   // and a program started with a delay past Node's ceiling is killed at 1 ms.
@@ -234,7 +226,6 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
     ...(gcbCompose === undefined ? {} : { gcbCompose }),
     ...(gcbProbeRepo === undefined ? {} : { gcbProbeRepo }),
-    gcbService,
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
   const sockets = new Set<net.Socket>()

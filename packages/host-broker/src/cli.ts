@@ -33,7 +33,6 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --gcb-compose <file>   The compose file that runs the credential broker
   --gcb-probe-repo <repo>
                          Repository gcb.update probes after recreating (owner/name)
-  --gcb-service <name>   The compose service that runs the broker (default gcb)
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
@@ -66,14 +65,16 @@ function number(
 function optionsFrom(
   values: Record<string, string | boolean | undefined>,
   handlers: { shutdown?: () => void },
+  socketPath: string,
+  auditPath: string,
 ): BrokerOptions {
   const text = (key: string): string | undefined => {
     const value = values[key]
     return typeof value === 'string' ? value : undefined
   }
   return {
-    socketPath: text('socket') ?? '',
-    auditPath: text('audit') ?? '',
+    socketPath,
+    auditPath,
     ...(text('log-dir') === undefined ? {} : { logDir: text('log-dir') }),
     ...(text('proc-dir') === undefined ? {} : { procDir: text('proc-dir') }),
     ...(text('container') === undefined ? {} : { container: text('container') }),
@@ -87,7 +88,6 @@ function optionsFrom(
     ...(text('gcb-checkout') === undefined ? {} : { gcbCheckout: text('gcb-checkout') }),
     ...(text('gcb-compose') === undefined ? {} : { gcbCompose: text('gcb-compose') }),
     ...(text('gcb-probe-repo') === undefined ? {} : { gcbProbeRepo: text('gcb-probe-repo') }),
-    ...(text('gcb-service') === undefined ? {} : { gcbService: text('gcb-service') }),
     // The supervisor restarts the process once it has drained; that is the self-update hand-off.
     stop: () => handlers.shutdown?.(),
     rateLimitPerMinute: number(text('rate-limit'), 60, '--rate-limit'),
@@ -119,7 +119,6 @@ async function main(): Promise<void> {
       'gcb-checkout': { type: 'string' },
       'gcb-compose': { type: 'string' },
       'gcb-probe-repo': { type: 'string' },
-      'gcb-service': { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -137,7 +136,7 @@ async function main(): Promise<void> {
   }
 
   const handlers: { shutdown?: () => void } = {}
-  const broker = await startBroker(optionsFrom(values, handlers))
+  const broker = await startBroker(optionsFrom(values, handlers, values.socket, values.audit))
 
   process.stderr.write(`idsh-host: listening on ${values.socket}\n`)
 
