@@ -31,7 +31,8 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
                           also the source broker.update rebuilds from when the CLI runs inside it
   --gcb-checkout <dir>   The credential broker's checkout; enables gcb.update
   --gcb-compose <file>   The compose file that runs the credential broker
-  --gcb-probe-repo <repo> Repository gcb.update probes after recreating (owner/name)
+  --gcb-probe-repo <repo>
+                         Repository gcb.update probes after recreating (owner/name)
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help

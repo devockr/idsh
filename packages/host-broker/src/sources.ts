@@ -782,6 +782,9 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 
 /* ---------------------------------------------------------------- gcb.update */
 
+/** How long the post-update probe may take; it answers over the network, unlike a local read. */
+const PROBE_TIMEOUT_MS = 60_000
+
 /**
  * Rebuild the credential broker from its own checkout and recreate only its container.
  *
@@ -884,9 +887,11 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // State is not the same as reachable: the socket check in the healthcheck passes for a process
   // that answers nothing. The probe asks the broker through the client the deployment uses, so
   // "updated" means "a push would be issued a credential".
+  // The probe mints a token through the broker, so it is a network step, not a socket round trip:
+  // on a slow link the ten-second default answers `timeout` after an update that worked.
   await step('probe', () =>
     docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
-      timeoutMs: ctx.execTimeoutMs,
+      timeoutMs: PROBE_TIMEOUT_MS,
     }),
   )
   done.push(`probe: ${repo} allowed`)

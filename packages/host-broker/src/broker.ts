@@ -165,7 +165,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const gitPath = options.gitPath ?? DEFAULTS.gitPath
   const ipPath = options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? DEFAULT_IP
   const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
-  const checkout = options.checkout === undefined ? undefined : path.resolve(options.checkout)
+  const checkout = await optionalPath(options.checkout, '--checkout', 'directory')
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
   const gcbCompose = await optionalPath(options.gcbCompose, '--gcb-compose', 'file')
   const gcbProbeRepo = options.gcbProbeRepo
