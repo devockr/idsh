@@ -96,6 +96,8 @@ export interface BrokerOptions {
   readonly gcbCheckout?: string
   /** The compose file that runs the broker; `gcb.update` recreates only its service. */
   readonly gcbCompose?: string
+  /** The repository `gcb.update` probes for, `owner/name`; the broker's own check after a recreate. */
+  readonly gcbProbeRepo?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -219,6 +221,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     ...(checkout === undefined ? {} : { checkout }),
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
     ...(gcbCompose === undefined ? {} : { gcbCompose }),
+    ...(options.gcbProbeRepo === undefined ? {} : { gcbProbeRepo: options.gcbProbeRepo }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
   const sockets = new Set<net.Socket>()

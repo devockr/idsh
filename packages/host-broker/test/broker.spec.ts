@@ -2642,6 +2642,7 @@ void test('gcb.update pulls, builds the image its compose names and checks the c
     gitPath,
     gcbCheckout,
     gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
   })
   const connection = client(host.socketPath)
   try {
@@ -2662,8 +2663,11 @@ void test('gcb.update pulls, builds the image its compose names and checks the c
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
     assert.match(recorded, new RegExp(`compose -f ${gcbCompose} up -d --no-deps`, 'u'))
     assert.match(recorded, /inspect --format .* abc123/u)
-    assert.match(answer.result ?? '', /built code-vaults\/gcb-host:dev/u)
-    assert.match(answer.result ?? '', /recreated 1 broker container/u)
+    // State is not reachability: the probe goes through the deployment's own client.
+    assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
+    assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
+    assert.match(answer.result ?? '', /state: running healthy/u)
+    assert.match(answer.result ?? '', /probe: devockr\/idsh allowed/u)
   } finally {
     connection.close()
     await broker.close()
@@ -2693,6 +2697,7 @@ void test('gcb.update refuses a compose file that names two images', async () =>
     gitPath,
     gcbCheckout,
     gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
   })
   const connection = client(host.socketPath)
   try {
@@ -2700,6 +2705,54 @@ void test('gcb.update refuses a compose file that names two images', async () =>
     assert.equal(answer.ok, false)
     assert.equal(answer.error?.code, 'unavailable')
     assert.match(answer.error?.message ?? '', /names 2 images/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update reports a probe that the broker refuses', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
+      '  *"ps -q"*) echo "abc123" ;;',
+      '  *inspect*) echo "running healthy" ;;',
+      '  *"gcb probe"*) echo "denied: repository not in allowlist" >&2; exit 1 ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'unavailable')
+    // The step names itself, so the audit answer says where it stopped.
+    assert.match(answer.error?.message ?? '', /gcb\.update: probe failed/u)
+    assert.match(answer.error?.message ?? '', /not in allowlist/u)
   } finally {
     connection.close()
     await broker.close()

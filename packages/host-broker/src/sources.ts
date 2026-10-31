@@ -47,6 +47,8 @@ export interface OpContext {
   readonly gcbCheckout?: string
   /** The compose file that runs the broker; `gcb.update` recreates only its service. */
   readonly gcbCompose?: string
+  /** The repository `gcb.update` probes for, `owner/name`. */
+  readonly gcbProbeRepo?: string
   /** The git client. Default `git`, resolved through the host's PATH. */
   readonly gitPath: string
   /** The `ip` client `net.status` runs. */
@@ -791,12 +793,28 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 async function updateBroker(ctx: OpContext): Promise<string> {
   const checkout = ctx.gcbCheckout
   const compose = ctx.gcbCompose
-  if (checkout === undefined || compose === undefined) {
+  const repo = ctx.gcbProbeRepo
+  if (checkout === undefined || compose === undefined || repo === undefined) {
     throw new BrokerFault('unavailable', 'the broker is not configured for gcb.update')
   }
-  const pull = (await git(ctx, ['pull', '--ff-only'], {}, checkout)).trim()
+  // Each step names itself, in the answer and in the failure: a pull that worked and a build that
+  // did not are different answers to whoever reads the audit log.
+  const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new BrokerFault('unavailable', `gcb.update: ${name} failed: ${message}`)
+    }
+  }
+  const pull =
+    (await step('pull', () => git(ctx, ['pull', '--ff-only'], {}, checkout)))
+      .trim()
+      .split('\n')[0] ?? ''
   const images = (
-    await docker(ctx, ['compose', '-f', compose, 'config', '--images'], 'head', { cwd: checkout })
+    await step('read the image', () =>
+      docker(ctx, ['compose', '-f', compose, 'config', '--images'], 'head', { cwd: checkout }),
+    )
   )
     .split('\n')
     .map(line => line.trim())
@@ -808,17 +826,25 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     )
   }
   const image = images[0]
-  await docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
-    cwd: checkout,
-    timeoutMs: BUILD_TIMEOUT_MS,
-  })
-  await docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps'], 'head', {
-    cwd: checkout,
-    timeoutMs: BUILD_TIMEOUT_MS,
-  })
+  await step('build', () =>
+    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
+      cwd: checkout,
+      timeoutMs: BUILD_TIMEOUT_MS,
+    }),
+  )
+  await step('recreate', () =>
+    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps'], 'head', {
+      cwd: checkout,
+      timeoutMs: BUILD_TIMEOUT_MS,
+    }),
+  )
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
-  const ids = (await docker(ctx, ['compose', '-f', compose, 'ps', '-q'], 'head', { cwd: checkout }))
+  const ids = (
+    await step('list the container', () =>
+      docker(ctx, ['compose', '-f', compose, 'ps', '-q'], 'head', { cwd: checkout }),
+    )
+  )
     .split('\n')
     .map(line => line.trim())
     .filter(line => line !== '')
@@ -841,8 +867,15 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   if (unhealthy.length > 0) {
     throw new BrokerFault('unavailable', `the broker container is ${unhealthy.join(', ')}`)
   }
-  const headline = pull.split('\n')[0] ?? ''
-  return `pulled ${headline}; built ${image}; recreated ${String(ids.length)} broker container(s)`
+  // State is not the same as reachable: the socket check in the healthcheck passes for a process
+  // that answers nothing. The probe asks the broker through the client the deployment uses, so
+  // "updated" means "a push would be issued a credential".
+  await step('probe', () =>
+    docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
+      timeoutMs: ctx.execTimeoutMs,
+    }),
+  )
+  return `pull: ${pull}; image: ${image}; recreate: up -d --no-deps; state: ${states.map(state => state.trim()).join(', ')}; probe: ${repo} allowed`
 }
 
 export const OPS: readonly OpDefinition[] = [
@@ -1052,7 +1085,7 @@ export const OPS: readonly OpDefinition[] = [
     confirm: true,
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
-    requires: ['gcbCheckout', 'gcbCompose'],
+    requires: ['gcbCheckout', 'gcbCompose', 'gcbProbeRepo'],
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {
       rejectUnknown(args, [])
