@@ -309,8 +309,8 @@ holds the broker's first slice — the read sources (`log.tail`, `proc.read`, `p
 operations (`deploy.status`, `deploy.log`, `deploy.build`,
 `deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `broker.status`/`broker.update`, so the
 broker can replace itself under its supervisor, and `gcb.update`, which rebuilds the credential
-broker from its own checkout, recreates only its container and probes it through the deployment's
-client — and `packages/host-ops` turns that
+broker from its own checkout, recreates only the named service (one or more compose files) and
+probes it through the deployment's client — and `packages/host-ops` turns that
 table into dsh tools, asking the person first for any operation the table marks `confirm`. A change that
 implements one updates that file, `README.md` and this one in the same pull request — the next
 session reads the repository, not the private notes the plan came from.

@@ -2606,6 +2606,8 @@ async function gcbRig(
     ps?: string
     inspect?: string
     probe?: string
+    /** How many compose files to configure; more than one exercises the base-plus-overlay form. */
+    files?: number
   } = {},
 ): Promise<GcbRig> {
   const host = await fakeHost()
@@ -2637,9 +2639,13 @@ async function gcbRig(
     mode: 0o755,
   })
   const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  const gcbComposeFiles = Array.from({ length: stub.files ?? 1 }, (_, index) =>
+    path.join(host.root, `gcb-compose-${String(index)}.yml`),
+  )
   await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
+  for (const file of gcbComposeFiles) {
+    await writeFile(file, 'services: {}\n')
+  }
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -2648,7 +2654,7 @@ async function gcbRig(
     dockerPath,
     gitPath,
     gcbCheckout,
-    gcbCompose,
+    gcbCompose: gcbComposeFiles.join(','),
     gcbProbeRepo: 'devockr/idsh',
   })
   const connection = client(host.socketPath)
@@ -2702,23 +2708,23 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.equal(answer.ok, true)
     const recorded = await rig.calls()
     assert.match(recorded, /git -C .*gcb pull --ff-only/u)
-    assert.match(recorded, /compose -f .*gcb-compose\.yml config --services/u)
-    assert.match(recorded, /compose -f .*gcb-compose\.yml config --images gcb/u)
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --services/u)
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --images gcb/u)
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
     assert.match(
       recorded,
-      /compose -f .*gcb-compose\.yml up -d --no-deps --no-build --pull never --wait gcb/u,
+      /compose -f .*gcb-compose-0\.yml up -d --no-deps --no-build --pull never --wait gcb/u,
     )
     assert.doesNotMatch(
       recorded,
-      /compose -f .*gcb-compose\.yml up(?! -d --no-deps --no-build --pull never --wait gcb$)/mu,
+      /compose -f .*gcb-compose-0\.yml up(?! -d --no-deps --no-build --pull never --wait gcb$)/mu,
     )
-    assert.match(recorded, /compose -f .*gcb-compose\.yml ps -q gcb/u)
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml ps -q gcb/u)
     assert.match(recorded, /inspect --format .* abc123/u)
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
     // The same pattern the replica test forbids does match a real build and recreate, so its
     // absence there means something.
-    assert.match(recorded, /(?:^build |compose -f .*gcb-compose\.yml up )/mu)
+    assert.match(recorded, /(?:^build |compose -f .*gcb-compose-0\.yml up )/mu)
     assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
     assert.match(answer.result ?? '', /state: running healthy; probe: devockr\/idsh allowed/u)
     assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
@@ -2739,13 +2745,30 @@ void test('gcb.update refuses a compose file that names two images', async () =>
   }
 })
 
-void test('gcb.update refuses a compose file with more than one service', async () => {
-  const rig = await gcbRig({ services: 'printf "gcb\\nother\\n"' })
+void test('gcb.update refuses a compose that has no such service', async () => {
+  const rig = await gcbRig({ services: 'printf "other\\nthird\\n"' })
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
-    assert.match(answer.error?.message ?? '', /must run exactly one service, got 2: gcb, other/u)
+    assert.match(answer.error?.message ?? '', /has no service "gcb"; it has other, third/u)
     assert.match(answer.error?.message ?? '', /completed: pull: /u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update names every compose file it was given', async () => {
+  // A deployment renders a base file plus an overlay: both must reach every compose call.
+  const rig = await gcbRig({ files: 2 })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    const recorded = await rig.calls()
+    assert.match(
+      recorded,
+      /compose -f .*gcb-compose-0\.yml -f .*gcb-compose-1\.yml config --services/u,
+    )
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml -f .*gcb-compose-1\.yml up -d/u)
   } finally {
     await rig.close()
   }
@@ -2872,7 +2895,7 @@ void test('gcb.update refuses a service that declares replicas', async () => {
     assert.doesNotMatch(answer.error?.message ?? '', /build: ok/u)
     // Refused before either side effect: no build, no recreate.
     const recorded = await rig.calls()
-    assert.doesNotMatch(recorded, /(?:^build |compose -f .*gcb-compose\.yml up )/mu)
+    assert.doesNotMatch(recorded, /(?:^build |compose -f .*gcb-compose-0\.yml up )/mu)
   } finally {
     await rig.close()
   }

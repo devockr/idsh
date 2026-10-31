@@ -30,7 +30,8 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml;
                           also the source broker.update rebuilds from when the CLI runs inside it
   --gcb-checkout <dir>   The credential broker's checkout; enables gcb.update
-  --gcb-compose <file>   The compose file that runs the credential broker
+  --gcb-compose <files>  The compose file(s) that run the credential broker, comma-separated
+  --gcb-service <name>   The service in those files that runs the broker (default gcb)
   --gcb-probe-repo <repo>
                          Repository gcb.update probes after recreating (owner/name)
   --rate-limit <n>       Requests per operation per minute (default 60)
@@ -87,6 +88,7 @@ function optionsFrom(
     ...(text('checkout') === undefined ? {} : { checkout: text('checkout') }),
     ...(text('gcb-checkout') === undefined ? {} : { gcbCheckout: text('gcb-checkout') }),
     ...(text('gcb-compose') === undefined ? {} : { gcbCompose: text('gcb-compose') }),
+    ...(text('gcb-service') === undefined ? {} : { gcbService: text('gcb-service') }),
     ...(text('gcb-probe-repo') === undefined ? {} : { gcbProbeRepo: text('gcb-probe-repo') }),
     // The supervisor restarts the process once it has drained; that is the self-update hand-off.
     stop: () => handlers.shutdown?.(),
@@ -118,6 +120,7 @@ async function main(): Promise<void> {
       checkout: { type: 'string' },
       'gcb-checkout': { type: 'string' },
       'gcb-compose': { type: 'string' },
+      'gcb-service': { type: 'string' },
       'gcb-probe-repo': { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },

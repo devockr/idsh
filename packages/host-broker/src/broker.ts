@@ -94,8 +94,10 @@ export interface BrokerOptions {
   readonly checkout?: string
   /** The credential broker's own checkout; `gcb.update` rebuilds from it. */
   readonly gcbCheckout?: string
-  /** The compose file that runs the broker; `gcb.update` recreates only its service. */
+  /** The compose file(s) that run the broker, comma-separated; `gcb.update` handles one service. */
   readonly gcbCompose?: string
+  /** The service in those files that runs the broker. Default `gcb`. */
+  readonly gcbService?: string
   /** The repository `gcb.update` probes for, `owner/name`; the broker's own check after a recreate. */
   readonly gcbProbeRepo?: string
   /** Requests per operation per minute. Default 60. */
@@ -167,7 +169,28 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
   const checkout = await optionalPath(options.checkout, '--checkout', 'directory')
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
-  const gcbCompose = await optionalPath(options.gcbCompose, '--gcb-compose', 'file')
+  const gcbComposeFiles =
+    options.gcbCompose === undefined
+      ? undefined
+      : await Promise.all(
+          options.gcbCompose
+            .split(',')
+            .map(entry => entry.trim())
+            .filter(entry => entry !== '')
+            .map(async entry => {
+              const file = await optionalPath(entry, '--gcb-compose', 'file')
+              if (file === undefined) {
+                throw new Error('--gcb-compose needs at least one file')
+              }
+              return file
+            }),
+        )
+  const gcbService = options.gcbService ?? 'gcb'
+  if (!/^\w[\w.-]*$/u.test(gcbService)) {
+    throw new Error(
+      `--gcb-service must be a compose service name, got ${JSON.stringify(gcbService)}`,
+    )
+  }
   const gcbProbeRepo = options.gcbProbeRepo
   // `owner/name`, and each side starts with a character a repository name can start with: `../repo`
   // and `.` match a dot-only pattern, and the probe would refuse them after a rebuild instead of at
@@ -224,7 +247,8 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     deployLock,
     ...(checkout === undefined ? {} : { checkout }),
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
-    ...(gcbCompose === undefined ? {} : { gcbCompose }),
+    ...(gcbComposeFiles === undefined ? {} : { gcbCompose: gcbComposeFiles }),
+    gcbService,
     ...(gcbProbeRepo === undefined ? {} : { gcbProbeRepo }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)

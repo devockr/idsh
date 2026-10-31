@@ -45,8 +45,10 @@ export interface OpContext {
   readonly checkout?: string
   /** The credential broker's checkout; `gcb.update` rebuilds from it. */
   readonly gcbCheckout?: string
-  /** The compose file that runs the broker; `gcb.update` recreates only its service. */
-  readonly gcbCompose?: string
+  /** The compose file(s) that run the broker. */
+  readonly gcbCompose?: readonly string[]
+  /** The service in those files that runs the broker. */
+  readonly gcbService: string
   /** The repository `gcb.update` probes for, `owner/name`. */
   readonly gcbProbeRepo?: string
   /** The git client. Default `git`, resolved through the host's PATH. */
@@ -812,9 +814,12 @@ const linesOf = (output: string): string[] =>
     .map(line => line.trim())
     .filter(line => line !== '')
 
+/** The "which steps already worked" suffix, as a string a message can append. */
+const suffix = (done: readonly string[]): string =>
+  done.length === 0 ? '' : `; completed: ${done.join('; ')}`
+
 /** A refusal that says which steps already worked, when any did. */
-const withCompleted = (message: string, done: readonly string[]): string =>
-  done.length === 0 ? message : `${message}; completed: ${done.join('; ')}`
+const withCompleted = (message: string, done: readonly string[]): string => message + suffix(done)
 
 /** How long the post-update probe may take; it answers over the network, unlike a local read. */
 const PROBE_TIMEOUT_MS = 60_000
@@ -837,9 +842,13 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   const checkout = ctx.gcbCheckout
   const compose = ctx.gcbCompose
   const repo = ctx.gcbProbeRepo
-  if (checkout === undefined || compose === undefined || repo === undefined) {
+  const service = ctx.gcbService
+  if (compose === undefined || checkout === undefined || repo === undefined) {
     throw new BrokerFault('unavailable', 'the broker is not configured for gcb.update')
   }
+  // One prefix for every `compose` call: a deployment that renders a base file plus an overlay is
+  // the same set of files everywhere here.
+  const composeArgs = ['compose', ...compose.flatMap(file => ['-f', file])]
   // Each step names itself, in the answer and in the failure: a pull that worked and a build that
   // did not are different answers to whoever reads the audit log.
   const done: string[] = []
@@ -848,11 +857,10 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       return await work()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      const suffix = done.length === 0 ? '' : `; completed: ${done.join('; ')}`
       if (error instanceof BrokerFault) {
-        throw new BrokerFault(error.code, `gcb.update: ${name} failed: ${message}${suffix}`)
+        throw new BrokerFault(error.code, `gcb.update: ${name} failed: ${message}${suffix(done)}`)
       }
-      throw new BrokerFault('unavailable', `gcb.update: ${name} failed: ${message}${suffix}`)
+      throw new BrokerFault('unavailable', `gcb.update: ${name} failed: ${message}${suffix(done)}`)
     }
   }
   const pull =
@@ -864,32 +872,31 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       .trim()
       .split('\n')[0] ?? ''
   done.push(`pull: ${pull}`)
-  // The broker's compose runs the broker and nothing else — that is what `gcb compose` renders, and
-  // the deployment's own overlay is not the file this operates on. Discovering the one service here
-  // keeps that requirement explicit instead of offering a name flag that could disagree with it.
+  // The named service, not the file: a deployment compose also runs dsh, and this operation must
+  // touch only the broker's container.
   const services = linesOf(
-    await step('read the service', () =>
-      docker(ctx, ['compose', '-f', compose, 'config', '--services'], 'head', {
+    await step('read the services', () =>
+      docker(ctx, [...composeArgs, 'config', '--services'], 'head', {
         cwd: checkout,
         stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
     ),
   )
-  if (services.length !== 1) {
+  if (!services.includes(service)) {
     throw new BrokerFault(
       'unavailable',
       withCompleted(
-        `the broker's compose must run exactly one service, got ${String(services.length)}` +
-          (services.length === 0 ? '' : `: ${services.join(', ')}`),
+        `the broker's compose has no service ${JSON.stringify(service)}; it has ${
+          services.length === 0 ? 'none' : services.join(', ')
+        }`,
         done,
       ),
     )
   }
-  const service = services[0]
   const images = linesOf(
     await step('read the image', () =>
-      docker(ctx, ['compose', '-f', compose, 'config', '--images', service], 'head', {
+      docker(ctx, [...composeArgs, 'config', '--images', service], 'head', {
         cwd: checkout,
         stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
@@ -910,16 +917,11 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // The broker is one container, so a service that asks for replicas is a configuration this cannot
   // verify: `ps -q` lists only running containers, and one stopped replica among two would pass.
   const replicas = await step('read the replica count', async () => {
-    const text = await docker(
-      ctx,
-      ['compose', '-f', compose, 'config', '--format', 'json'],
-      'head',
-      {
-        cwd: checkout,
-        stdoutOnly: true,
-        timeoutMs: GCB_QUERY_TIMEOUT_MS,
-      },
-    )
+    const text = await docker(ctx, [...composeArgs, 'config', '--format', 'json'], 'head', {
+      cwd: checkout,
+      stdoutOnly: true,
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
     const parsed: unknown = JSON.parse(text)
     const deploy = field(field(field(parsed, 'services'), service), 'deploy')
     const count = field(deploy, 'replicas')
@@ -941,24 +943,12 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     }),
   )
   done.push('build: ok')
-  // The service, not the whole file: another service sharing that compose project must not be
-  // recreated by a broker update, and `ps` must not answer with its id either.
+  // The image this operation just built is the one that runs: never build from a compose `build:`
+  // stanza, never reach for a registry.
   await step('recreate', () =>
     docker(
       ctx,
-      [
-        'compose',
-        '-f',
-        compose,
-        'up',
-        '-d',
-        '--no-deps',
-        '--no-build',
-        '--pull',
-        'never',
-        '--wait',
-        service,
-      ],
+      [...composeArgs, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service],
       'head',
       {
         cwd: checkout,
@@ -967,11 +957,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     ),
   )
   done.push(`recreate: up -d --no-deps --no-build --pull never --wait ${service}`)
-  // The container is the broker: ids first, so an empty list is its own answer, then the state
-  // and — when the unit declares one — the healthcheck.
   const ids = linesOf(
     await step('list the container', () =>
-      docker(ctx, ['compose', '-f', compose, 'ps', '-q', service], 'head', {
+      docker(ctx, [...composeArgs, 'ps', '-q', service], 'head', {
         cwd: checkout,
         stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
@@ -1011,18 +999,15 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     .map(entry => entry.trim())
     .filter(entry => !/^running(?: healthy)?$/u.test(entry))
   if (unhealthy.length > 0) {
-    // The state read itself worked, so the answer carries it along with the steps that did.
     throw new BrokerFault(
       'unavailable',
       withCompleted(`the broker container is ${unhealthy.join(', ')}; state: ${state}`, done),
     )
   }
   done.push(`state: ${state}`)
-  // State is not the same as reachable: the socket check in the healthcheck passes for a process
-  // that answers nothing. The probe asks the broker through the client the deployment uses, so
-  // "updated" means "a push would be issued a credential".
-  // The probe mints a token through the broker, so it is a network step, not a socket round trip:
-  // on a slow link the ten-second default answers `timeout` after an update that worked.
+  // State is not reachability: the probe asks the broker through the client the deployment uses, so
+  // "updated" means "a push would be issued a credential". It mints a token, so it gets its own
+  // budget rather than the ten-second default.
   await step('probe', () =>
     docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
       timeoutMs: PROBE_TIMEOUT_MS,
