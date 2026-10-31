@@ -239,7 +239,8 @@ function runFixed(
       }
       // The program's own message is the useful part, and docker/df put the cause last: keep the
       // tail of the output, from a line boundary, rather than its opening lines.
-      const text = (buffer.length > 0 ? buffer : errors).toString('utf8').trim()
+      const failure = options.stdoutOnly === true && errors.length > 0 ? errors : buffer
+      const text = (failure.length > 0 ? failure : errors).toString('utf8').trim()
       // Only a cut needs a boundary repair: a short message is complete as it stands.
       const cut = text.length > MAX_ERROR_CHARS
       let tail = cut ? text.slice(-MAX_ERROR_CHARS) : text
@@ -925,21 +926,24 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   if (ids.length === 0) {
     throw new BrokerFault('unavailable', 'the broker container is not running after the recreate')
   }
-  const states = await Promise.all(
-    ids.map(id =>
-      docker(
-        ctx,
-        [
-          'inspect',
-          '--format',
-          '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
-          id,
-        ],
-        'head',
-        { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+  const states = await step('inspect the container state', () =>
+    Promise.all(
+      ids.map(id =>
+        docker(
+          ctx,
+          [
+            'inspect',
+            '--format',
+            '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
+            id,
+          ],
+          'head',
+          { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+        ),
       ),
     ),
   )
+  done.push(`state: ${states.map(state => state.trim()).join(', ')}`)
   const unhealthy = states
     .map(state => state.trim())
     .filter(state => !/^running(?: healthy)?$/u.test(state))
