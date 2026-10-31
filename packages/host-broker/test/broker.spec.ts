@@ -2854,7 +2854,7 @@ void test('gcb.update refuses a service that declares replicas', async () => {
     assert.doesNotMatch(answer.error?.message ?? '', /build: ok/u)
     // Refused before either side effect: no build, no recreate.
     const recorded = await rig.calls()
-    assert.doesNotMatch(recorded, /build --target|gcb-compose\.yml up /u)
+    assert.doesNotMatch(recorded, /^(?:build |gcb-compose\.yml up )/mu)
   } finally {
     await rig.close()
   }
