@@ -41,7 +41,7 @@ const FLUSH_MS = 700
 /** The probe's bound, and the bound of each local query, as `gcb.update` declares them. */
 const GCB_PROBE_MS = 60_000
 const GCB_QUERY_MS = 10_000
-/** The queries gcb.update runs: services, images, ps and inspect. */
+/** The queries gcb.update runs: services, images, replicas, ps and inspect. */
 const GCB_QUERY_COUNT = 5
 /** How long the test gives the deploy lock to free before it gives up: patience, not a duration. */
 const LOCK_WAIT_MS = 5_000
