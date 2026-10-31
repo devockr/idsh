@@ -2710,6 +2710,9 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.match(recorded, /compose -f .*gcb-compose\.yml ps -q gcb/u)
     assert.match(recorded, /inspect --format .* abc123/u)
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
+    // The same pattern the replica test forbids does match a real build and recreate, so its
+    // absence there means something.
+    assert.match(recorded, /(?:^build |compose -f .*gcb-compose\.yml up )/mu)
     assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
     assert.match(answer.result ?? '', /state: running healthy; probe: devockr\/idsh allowed/u)
     assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
@@ -2854,7 +2857,7 @@ void test('gcb.update refuses a service that declares replicas', async () => {
     assert.doesNotMatch(answer.error?.message ?? '', /build: ok/u)
     // Refused before either side effect: no build, no recreate.
     const recorded = await rig.calls()
-    assert.doesNotMatch(recorded, /^(?:build |gcb-compose\.yml up )/mu)
+    assert.doesNotMatch(recorded, /(?:^build |compose -f .*gcb-compose\.yml up )/mu)
   } finally {
     await rig.close()
   }
