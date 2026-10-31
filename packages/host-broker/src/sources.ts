@@ -799,18 +799,24 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   }
   // Each step names itself, in the answer and in the failure: a pull that worked and a build that
   // did not are different answers to whoever reads the audit log.
+  const done: string[] = []
   const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
     try {
       return await work()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      throw new BrokerFault('unavailable', `gcb.update: ${name} failed: ${message}`)
+      const suffix = done.length === 0 ? '' : `; completed: ${done.join('; ')}`
+      if (error instanceof BrokerFault) {
+        throw new BrokerFault(error.code, `gcb.update: ${name} failed: ${message}${suffix}`)
+      }
+      throw new BrokerFault('unavailable', `gcb.update: ${name} failed: ${message}${suffix}`)
     }
   }
   const pull =
-    (await step('pull', () => git(ctx, ['pull', '--ff-only'], {}, checkout)))
+    (await step('pull', () => git(ctx, ['pull', '--ff-only'], { timeoutMs: BUILD_TIMEOUT_MS }, checkout)))
       .trim()
       .split('\n')[0] ?? ''
+  done.push(`pull: ${pull}`)
   const images = (
     await step('read the image', () =>
       docker(ctx, ['compose', '-f', compose, 'config', '--images'], 'head', { cwd: checkout }),
@@ -826,18 +832,21 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     )
   }
   const image = images[0]
+  done.push(`image: ${image}`)
   await step('build', () =>
     docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
       cwd: checkout,
       timeoutMs: BUILD_TIMEOUT_MS,
     }),
   )
+  done.push('build: ok')
   await step('recreate', () =>
-    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps'], 'head', {
+    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait'], 'head', {
       cwd: checkout,
       timeoutMs: BUILD_TIMEOUT_MS,
     }),
   )
+  done.push('recreate: up -d --no-deps --wait')
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
   const ids = (
@@ -867,6 +876,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   if (unhealthy.length > 0) {
     throw new BrokerFault('unavailable', `the broker container is ${unhealthy.join(', ')}`)
   }
+  done.push(`state: ${states.map(state => state.trim()).join(', ')}`)
   // State is not the same as reachable: the socket check in the healthcheck passes for a process
   // that answers nothing. The probe asks the broker through the client the deployment uses, so
   // "updated" means "a push would be issued a credential".
@@ -875,7 +885,8 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       timeoutMs: ctx.execTimeoutMs,
     }),
   )
-  return `pull: ${pull}; image: ${image}; recreate: up -d --no-deps; state: ${states.map(state => state.trim()).join(', ')}; probe: ${repo} allowed`
+  done.push(`probe: ${repo} allowed`)
+  return done.join('; ')
 }
 
 export const OPS: readonly OpDefinition[] = [

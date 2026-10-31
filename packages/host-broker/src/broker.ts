@@ -168,6 +168,10 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const checkout = options.checkout === undefined ? undefined : path.resolve(options.checkout)
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
   const gcbCompose = await optionalPath(options.gcbCompose, '--gcb-compose', 'file')
+  const gcbProbeRepo = options.gcbProbeRepo
+  if (gcbProbeRepo !== undefined && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(gcbProbeRepo)) {
+    throw new Error(`--gcb-probe-repo must be owner/name, got ${JSON.stringify(gcbProbeRepo)}`)
+  }
   if (checkout !== undefined) {
     const stats = await stat(checkout).catch(() => null)
     if (stats?.isDirectory() !== true) {
@@ -221,7 +225,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     ...(checkout === undefined ? {} : { checkout }),
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
     ...(gcbCompose === undefined ? {} : { gcbCompose }),
-    ...(options.gcbProbeRepo === undefined ? {} : { gcbProbeRepo: options.gcbProbeRepo }),
+    ...(gcbProbeRepo === undefined ? {} : { gcbProbeRepo }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
   const sockets = new Set<net.Socket>()

@@ -29,6 +29,9 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --npm <path>           The npm client broker.update runs (default npm)
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml;
                           also the source broker.update rebuilds from when the CLI runs inside it
+  --gcb-checkout <dir>   The credential broker's checkout; enables gcb.update
+  --gcb-compose <file>   The compose file that runs the credential broker
+  --gcb-probe-repo <repo> Repository gcb.update probes after recreating (owner/name)
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
@@ -72,6 +75,9 @@ async function main(): Promise<void> {
       pnpm: { type: 'string' },
       npm: { type: 'string' },
       checkout: { type: 'string' },
+      'gcb-checkout': { type: 'string' },
+      'gcb-compose': { type: 'string' },
+      'gcb-probe-repo': { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -102,6 +108,9 @@ async function main(): Promise<void> {
     ...(values.pnpm === undefined ? {} : { pnpmPath: values.pnpm }),
     ...(values.npm === undefined ? {} : { npmPath: values.npm }),
     ...(values.checkout === undefined ? {} : { checkout: values.checkout }),
+    ...(values['gcb-checkout'] === undefined ? {} : { gcbCheckout: values['gcb-checkout'] }),
+    ...(values['gcb-compose'] === undefined ? {} : { gcbCompose: values['gcb-compose'] }),
+    ...(values['gcb-probe-repo'] === undefined ? {} : { gcbProbeRepo: values['gcb-probe-repo'] }),
     // The supervisor restarts the process once it has drained; that is the self-update hand-off.
     stop: () => handlers.shutdown?.(),
     rateLimitPerMinute: number(values['rate-limit'], 60, '--rate-limit'),

@@ -14,6 +14,7 @@ with a small set of validated arguments.
 idsh-host --socket <path> --audit <path> [--log-dir <dir>] [--proc-dir <dir>]
          [--container <name>] [--docker <path>] [--git <path>]
          [--ip <path>] [--ss <path>] [--pnpm <path>] [--npm <path>] [--checkout <dir>]
+         [--gcb-checkout <dir>] [--gcb-compose <file>] [--gcb-probe-repo <owner/name>]
 ```
 
 Both paths belong **outside every bind mount**, and the host's scheduler is what keeps the process
@@ -104,7 +105,7 @@ request.
 | `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                                                                                                                                              |
 | `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                                                                                                      |
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                                                                                                                  |
-| `gcb.update`      | rebuilds the credential broker from `--gcb-checkout` (`git pull`, then `docker build --target host` with the image its `--gcb-compose` names) and recreates only that container; offered only when both paths are configured, confirmation required                  |
+| `gcb.update`      | rebuilds the credential broker from `--gcb-checkout` (`git pull`, then `docker build --target host` with the image its `--gcb-compose` names) and recreates only that container; offered only when both paths and the probe repository are configured, confirmation required                  |
 | `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                                                                                                                                       |
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
