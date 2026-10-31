@@ -820,8 +820,8 @@ const withCompleted = (message: string, done: readonly string[]): string =>
 const PROBE_TIMEOUT_MS = 60_000
 /** How long each local docker query in `gcb.update` may take; they run in milliseconds. */
 const GCB_QUERY_TIMEOUT_MS = 10_000
-/** The queries `gcb.update` runs before it can answer: services, images, ps and inspect. */
-const GCB_QUERIES = 4
+/** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
+const GCB_QUERIES = 5
 /** The steps that may take the build budget: pull, build and recreate. */
 const GCB_BUILD_STEPS = 3
 
@@ -944,12 +944,29 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // The service, not the whole file: another service sharing that compose project must not be
   // recreated by a broker update, and `ps` must not answer with its id either.
   await step('recreate', () =>
-    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait', service], 'head', {
-      cwd: checkout,
-      timeoutMs: BUILD_TIMEOUT_MS,
-    }),
+    docker(
+      ctx,
+      [
+        'compose',
+        '-f',
+        compose,
+        'up',
+        '-d',
+        '--no-deps',
+        '--no-build',
+        '--pull',
+        'never',
+        '--wait',
+        service,
+      ],
+      'head',
+      {
+        cwd: checkout,
+        timeoutMs: BUILD_TIMEOUT_MS,
+      },
+    ),
   )
-  done.push(`recreate: up -d --no-deps --wait ${service}`)
+  done.push(`recreate: up -d --no-deps --no-build --pull never --wait ${service}`)
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
   const ids = linesOf(
@@ -961,10 +978,15 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       }),
     ),
   )
-  if (ids.length === 0) {
+  if (ids.length !== 1) {
     throw new BrokerFault(
       'unavailable',
-      withCompleted('the broker container is not running after the recreate', done),
+      withCompleted(
+        ids.length === 0
+          ? 'the broker container is not running after the recreate'
+          : `the broker service runs ${String(ids.length)} containers; gcb.update expects one`,
+        done,
+      ),
     )
   }
   const states = await step('inspect the container state', () =>

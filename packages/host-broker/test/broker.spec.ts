@@ -42,7 +42,7 @@ const FLUSH_MS = 700
 const GCB_PROBE_MS = 60_000
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, ps and inspect. */
-const GCB_QUERY_COUNT = 4
+const GCB_QUERY_COUNT = 5
 /** How long the test gives the deploy lock to free before it gives up: patience, not a duration. */
 const LOCK_WAIT_MS = 5_000
 /** The interval between two attempts while waiting for the lock. */
@@ -2622,8 +2622,8 @@ async function gcbRig(
       arm('config --services', stub.services, 'echo gcb'),
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
       arm('config --format json', stub.config, `echo '{"services":{"gcb":{}}}'`),
-      arm('build', stub.build, 'exit 0'),
-      arm('up -d', stub.up, 'exit 0'),
+      arm('up -d --no-deps', stub.up, 'exit 0'),
+      arm('build --target', stub.build, 'exit 0'),
       arm('ps -q', stub.ps, 'echo abc123'),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect', stub.inspect, 'echo "running healthy"'),
@@ -2705,8 +2705,14 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.match(recorded, /compose -f .*gcb-compose\.yml config --services/u)
     assert.match(recorded, /compose -f .*gcb-compose\.yml config --images gcb/u)
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
-    assert.match(recorded, /compose -f .*gcb-compose\.yml up -d --no-deps --wait gcb/u)
-    assert.doesNotMatch(recorded, /compose -f .*gcb-compose\.yml up(?! -d --no-deps --wait gcb$)/mu)
+    assert.match(
+      recorded,
+      /compose -f .*gcb-compose\.yml up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
+    assert.doesNotMatch(
+      recorded,
+      /compose -f .*gcb-compose\.yml up(?! -d --no-deps --no-build --pull never --wait gcb$)/mu,
+    )
     assert.match(recorded, /compose -f .*gcb-compose\.yml ps -q gcb/u)
     assert.match(recorded, /inspect --format .* abc123/u)
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
@@ -2813,7 +2819,10 @@ void test('gcb.update names the state read when inspect fails', async () => {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /inspect the container state failed/u)
-    assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+    assert.match(
+      answer.error?.message ?? '',
+      /completed: .*recreate: up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
   } finally {
     await rig.close()
   }
@@ -2825,7 +2834,10 @@ void test('gcb.update reports an exited broker with the steps that worked', asyn
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /the broker container is exited; state: exited/u)
-    assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+    assert.match(
+      answer.error?.message ?? '',
+      /completed: .*recreate: up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
   } finally {
     await rig.close()
   }
@@ -2838,7 +2850,10 @@ void test('gcb.update reports a broker container that ps does not list', async (
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /not running after the recreate/u)
-    assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+    assert.match(
+      answer.error?.message ?? '',
+      /completed: .*recreate: up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
   } finally {
     await rig.close()
   }
@@ -2884,6 +2899,19 @@ void test('gcb.update stops at the step whose recreate failed', async () => {
     assert.match(answer.error?.message ?? '', /gcb\.update: recreate failed/u)
     assert.match(answer.error?.message ?? '', /port is already allocated/u)
     assert.match(answer.error?.message ?? '', /completed: .*build: ok/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a service that runs two containers', async () => {
+  // `--scale` on the command line never reaches deploy.replicas, so the listed containers decide.
+  const rig = await gcbRig({ ps: 'printf "abc123\\ndef456\\n"' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /runs 2 containers; gcb.update expects one/u)
+    assert.match(answer.error?.message ?? '', /completed: .*recreate: /u)
   } finally {
     await rig.close()
   }
