@@ -801,6 +801,17 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 
 /* ---------------------------------------------------------------- gcb.update */
 
+/** The non-empty lines of a program's answer, trimmed. */
+const linesOf = (output: string): string[] =>
+  output
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line !== '')
+
+/** A refusal that says which steps already worked, when any did. */
+const withCompleted = (message: string, done: readonly string[]): string =>
+  done.length === 0 ? message : `${message}; completed: ${done.join('; ')}`
+
 /** How long the post-update probe may take; it answers over the network, unlike a local read. */
 const PROBE_TIMEOUT_MS = 60_000
 /** How long each local docker query in `gcb.update` may take; they run in milliseconds. */
@@ -852,43 +863,42 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // The broker's compose runs the broker and nothing else — that is what `gcb compose` renders, and
   // the deployment's own overlay is not the file this operates on. Discovering the one service here
   // keeps that requirement explicit instead of offering a name flag that could disagree with it.
-  const services = (
+  const services = linesOf(
     await step('read the service', () =>
       docker(ctx, ['compose', '-f', compose, 'config', '--services'], 'head', {
         cwd: checkout,
         stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
-    )
+    ),
   )
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line !== '')
   if (services.length !== 1) {
     throw new BrokerFault(
       'unavailable',
-      `the broker's compose must run exactly one service, got ${String(services.length)}` +
-        (services.length === 0 ? '' : `: ${services.join(', ')}`) +
-        (done.length === 0 ? '' : `; completed: ${done.join('; ')}`),
+      withCompleted(
+        `the broker's compose must run exactly one service, got ${String(services.length)}` +
+          (services.length === 0 ? '' : `: ${services.join(', ')}`),
+        done,
+      ),
     )
   }
   const service = services[0]
-  const images = (
+  const images = linesOf(
     await step('read the image', () =>
       docker(ctx, ['compose', '-f', compose, 'config', '--images', service], 'head', {
         cwd: checkout,
         stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
-    )
+    ),
   )
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line !== '')
   if (images.length !== 1) {
     throw new BrokerFault(
       'unavailable',
-      `the broker's service names ${String(images.length)} images; gcb.update builds exactly one`,
+      withCompleted(
+        `the broker's service names ${String(images.length)} images; gcb.update builds exactly one`,
+        done,
+      ),
     )
   }
   const image = images[0]
@@ -911,20 +921,20 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   done.push(`recreate: up -d --no-deps --wait ${service}`)
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
-  const ids = (
+  const ids = linesOf(
     await step('list the container', () =>
       docker(ctx, ['compose', '-f', compose, 'ps', '-q', service], 'head', {
         cwd: checkout,
         stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
-    )
+    ),
   )
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line !== '')
   if (ids.length === 0) {
-    throw new BrokerFault('unavailable', 'the broker container is not running after the recreate')
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted('the broker container is not running after the recreate', done),
+    )
   }
   const states = await step('inspect the container state', () =>
     Promise.all(
@@ -951,8 +961,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     // The state read itself worked, so the answer carries it along with the steps that did.
     throw new BrokerFault(
       'unavailable',
-      `the broker container is ${unhealthy.join(', ')}; state: ${state}` +
-        (done.length === 0 ? '' : `; completed: ${done.join('; ')}`),
+      withCompleted(`the broker container is ${unhealthy.join(', ')}; state: ${state}`, done),
     )
   }
   done.push(`state: ${state}`)

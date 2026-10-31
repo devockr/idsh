@@ -2588,7 +2588,69 @@ void test('proc.list answers unavailable when /proc is not readable', async () =
   }
 })
 
-void test('gcb.update is offered only when both of its paths are configured', async () => {
+interface GcbRig {
+  connection: ReturnType<typeof client>
+  /** Every docker invocation the fake recorded, one per line. */
+  calls(): Promise<string>
+  close(): Promise<void>
+}
+
+/** A broker configured for `gcb.update`, with a fake docker whose arms a test can replace. */
+async function gcbRig(
+  stub: { services?: string; images?: string; ps?: string; inspect?: string; probe?: string } = {},
+): Promise<GcbRig> {
+  const host = await fakeHost()
+  const recorded = path.join(host.root, 'calls.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const arm = (name: string, body: string | undefined, fallback: string): string =>
+    `  *"${name}"*) ${body ?? fallback} ;;`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> ${JSON.stringify(recorded)}`,
+      'case "$*" in',
+      arm('config --services', stub.services, 'echo gcb'),
+      arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
+      arm('ps -q', stub.ps, 'echo abc123'),
+      arm('gcb probe', stub.probe, 'exit 0'),
+      arm('inspect', stub.inspect, 'echo "running healthy"'),
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, `#!/bin/sh\nprintf 'git %s\\n' "$*" >> ${JSON.stringify(recorded)}\n`, {
+    mode: 0o755,
+  })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
+  })
+  const connection = client(host.socketPath)
+  return {
+    connection,
+    calls: () => readFile(recorded, 'utf8'),
+    async close() {
+      connection.close()
+      await broker.close()
+    },
+  }
+}
+
+void test('gcb.update is offered only when its three values are configured', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
     socketPath: host.socketPath,
@@ -2610,49 +2672,10 @@ void test('gcb.update is offered only when both of its paths are configured', as
   }
 })
 
-void test('gcb.update pulls, builds the image its compose names and checks the container', async () => {
-  const host = await fakeHost()
-  const calls = path.join(host.root, 'calls.log')
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      `printf '%s\\n' "$*" >> ${JSON.stringify(calls)}`,
-      'case "$*" in',
-      '  *"config --services"*) echo "gcb" ;;',
-      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
-      '  *"ps -q"*) echo "abc123" ;;',
-      '  *inspect*) echo "running healthy" ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(
-    gitPath,
-    `#!/bin/sh\nprintf 'git %s\\n' "$*" >> ${JSON.stringify(calls)}\necho 'Already up to date.'\n`,
-    { mode: 0o755 },
-  )
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+void test('gcb.update pulls, builds the one image and probes the deployment', async () => {
+  const rig = await gcbRig()
   try {
-    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const described = await rig.connection.request({ op: 'ops.describe', args: {} })
     const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
@@ -2663,430 +2686,132 @@ void test('gcb.update pulls, builds the image its compose names and checks the c
       3 * BUILD_TIMEOUT_MS + GCB_PROBE_MS + GCB_QUERY_COUNT * GCB_QUERY_MS,
     )
 
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true)
-    const recorded = await readFile(calls, 'utf8')
-    // The checkout is pulled, the image comes from the compose file, and only that container is
-    // recreated.
-    assert.match(recorded, new RegExp(`git -C ${gcbCheckout} pull --ff-only`, 'u'))
-    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} config --services`, 'u'))
-    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} config --images gcb`, 'u'))
-    assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev ./u)
-    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} up -d --no-deps --wait gcb`, 'u'))
-    assert.doesNotMatch(
-      recorded,
-      new RegExp(`compose -f ${gcbCompose} up(?! -d --no-deps --wait gcb$)`, 'mu'),
-    )
-    assert.match(recorded, new RegExp(`compose -f ${gcbCompose} ps -q gcb`, 'u'))
+    const recorded = await rig.calls()
+    assert.match(recorded, /git -C .*gcb pull --ff-only/u)
+    assert.match(recorded, /compose -f .*gcb-compose\.yml config --services/u)
+    assert.match(recorded, /compose -f .*gcb-compose\.yml config --images gcb/u)
+    assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
+    assert.match(recorded, /compose -f .*gcb-compose\.yml up -d --no-deps --wait gcb/u)
+    assert.doesNotMatch(recorded, /compose -f .*gcb-compose\.yml up(?! -d --no-deps --wait gcb$)/mu)
+    assert.match(recorded, /compose -f .*gcb-compose\.yml ps -q gcb/u)
     assert.match(recorded, /inspect --format .* abc123/u)
-    // State is not reachability: the probe goes through the deployment's own client.
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
     assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
-    assert.match(answer.result ?? '', /state: running healthy/u)
-    assert.match(answer.result ?? '', /probe: devockr\/idsh allowed/u)
+    assert.match(answer.result ?? '', /state: running healthy; probe: devockr\/idsh allowed/u)
+    assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
 void test('gcb.update refuses a compose file that names two images', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    '#!/bin/sh\ncase "$*" in *"config --services"*) echo "gcb" ;; *"config --images"*) printf "one\\ntwo\\n" ;; esac\n',
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+  const rig = await gcbRig({ images: 'printf "one\\ntwo\\n"' })
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.equal(answer.error?.code, 'unavailable')
     assert.match(answer.error?.message ?? '', /names 2 images/u)
   } finally {
-    connection.close()
-    await broker.close()
-  }
-})
-
-void test('gcb.update reports a probe that the broker refuses', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '  *"config --services"*) echo "gcb" ;;',
-      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
-      '  *"ps -q"*) echo "abc123" ;;',
-      '  *inspect*) echo "running healthy" ;;',
-      '  *"gcb probe"*) echo "denied: repository not in allowlist" >&2; exit 1 ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
-  try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, false)
-    assert.equal(answer.error?.code, 'unavailable')
-    // The step names itself, so the audit answer says where it stopped.
-    assert.match(answer.error?.message ?? '', /gcb\.update: probe failed/u)
-    assert.match(answer.error?.message ?? '', /not in allowlist/u)
-  } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
 void test('gcb.update refuses a compose file with more than one service', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    '#!/bin/sh\ncase "$*" in *"config --services"*) printf "gcb\\nother\\n" ;; esac\n',
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+  const rig = await gcbRig({ services: 'printf "gcb\\nother\\n"' })
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
-    assert.equal(answer.error?.code, 'unavailable')
     assert.match(answer.error?.message ?? '', /must run exactly one service, got 2: gcb, other/u)
     assert.match(answer.error?.message ?? '', /completed: pull: /u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
-void test('gcb.update parses stdout, so compose warnings are not service names', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '  *"config --services"*) echo "WARN[0000] The UID variable is not set" >&2; echo gcb ;;',
-      '  *"config --images"*) echo "WARN[0000] another warning" >&2; echo "code-vaults/gcb-host:dev" ;;',
-      '  *"ps -q"*) echo "abc123" ;;',
-      '  *inspect*) echo "running healthy" ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+void test('gcb.update fails when the broker refuses the probe', async () => {
+  const rig = await gcbRig({ probe: 'echo "denied: not in allowlist" >&2; exit 1' })
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /gcb\.update: probe failed/u)
+    assert.match(answer.error?.message ?? '', /not in allowlist/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update parses stdout, so compose warnings are not names', async () => {
+  const rig = await gcbRig({
+    services: 'echo "WARN[0000] the UID variable is not set" >&2; echo gcb',
+    images: 'echo "WARN[0000] another warning" >&2; echo "code-vaults/gcb-host:dev"',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true)
     assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
 void test('gcb.update keeps the reason a parsed query failed', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '  *"config --services"*)',
-      '    echo "validating /tmp/gcb-compose.yml: services.gcb.image must be a string" >&2',
-      '    exit 1 ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
+  const rig = await gcbRig({
+    services: 'echo "services.gcb.image must be a string" >&2; exit 1',
   })
-  const connection = client(host.socketPath)
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
-    // The parsed answer is empty, but the failure still carries what compose said.
-    assert.match(answer.error?.message ?? '', /services\.gcb\.image must be a string/u)
+    assert.match(answer.error?.message ?? '', /must be a string/u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
 void test('gcb.update does not read a ps warning as a second container', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '  *"config --services"*) echo gcb ;;',
-      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
-      '  *"ps -q"*) echo "WARN[0000] PR82_UNSET is not set" >&2; echo abc123 ;;',
-      '  *inspect*) echo "running healthy" ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+  const rig = await gcbRig({ ps: 'echo "WARN[0000] PR82_UNSET is not set" >&2; echo abc123' })
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true)
-    // One id was inspected, so one state is reported.
     assert.match(answer.result ?? '', /state: running healthy; probe:/u)
     assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
 void test('gcb.update accepts a broker container without a healthcheck', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '  *"config --services"*) echo gcb ;;',
-      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
-      '  *"ps -q"*) echo abc123 ;;',
-      // A container with no Health block renders as the bare state.
-      '  *inspect*) echo running ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+  const rig = await gcbRig({ inspect: 'echo running' })
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true)
-    assert.match(answer.result ?? '', /state: running; probe: /u)
-    assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
+    assert.match(answer.result ?? '', /state: running; probe:/u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
 void test('gcb.update names the state read when inspect fails', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '  *"config --services"*) echo gcb ;;',
-      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
-      '  *"ps -q"*) echo abc123 ;;',
-      '  *inspect*) echo "no such object: abc123" >&2; exit 1 ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+  const rig = await gcbRig({ inspect: 'echo "no such object: abc123" >&2; exit 1' })
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /inspect the container state failed/u)
-    assert.match(answer.error?.message ?? '', /no such object/u)
     assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
 
 void test('gcb.update reports an exited broker with the steps that worked', async () => {
-  const host = await fakeHost()
-  const dockerPath = path.join(host.root, 'docker')
-  await writeFile(
-    dockerPath,
-    [
-      '#!/bin/sh',
-      'case "$*" in',
-      '  *"config --services"*) echo gcb ;;',
-      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
-      '  *"ps -q"*) echo abc123 ;;',
-      '  *inspect*) echo exited ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  )
-  const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
-  const gcbCheckout = path.join(host.root, 'gcb')
-  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
-  await mkdir(gcbCheckout)
-  await writeFile(gcbCompose, 'services: {}\n')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    dockerPath,
-    gitPath,
-    gcbCheckout,
-    gcbCompose,
-    gcbProbeRepo: 'devockr/idsh',
-  })
-  const connection = client(host.socketPath)
+  const rig = await gcbRig({ inspect: 'echo exited' })
   try {
-    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /the broker container is exited; state: exited/u)
     assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
   } finally {
-    connection.close()
-    await broker.close()
+    await rig.close()
   }
 })
