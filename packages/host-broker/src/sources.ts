@@ -813,7 +813,11 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     }
   }
   const pull =
-    (await step('pull', () => git(ctx, ['pull', '--ff-only'], { timeoutMs: BUILD_TIMEOUT_MS }, checkout)))
+    (
+      await step('pull', () =>
+        git(ctx, ['pull', '--ff-only'], { timeoutMs: BUILD_TIMEOUT_MS }, checkout),
+      )
+    )
       .trim()
       .split('\n')[0] ?? ''
   done.push(`pull: ${pull}`)

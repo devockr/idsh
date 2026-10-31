@@ -169,7 +169,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
   const gcbCompose = await optionalPath(options.gcbCompose, '--gcb-compose', 'file')
   const gcbProbeRepo = options.gcbProbeRepo
-  if (gcbProbeRepo !== undefined && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(gcbProbeRepo)) {
+  if (gcbProbeRepo !== undefined && !/^[\w.-]+\/[\w.-]+$/u.test(gcbProbeRepo)) {
     throw new Error(`--gcb-probe-repo must be owner/name, got ${JSON.stringify(gcbProbeRepo)}`)
   }
   if (checkout !== undefined) {
