@@ -943,14 +943,19 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       ),
     ),
   )
-  done.push(`state: ${states.map(state => state.trim()).join(', ')}`)
+  const state = states.map(entry => entry.trim()).join(', ')
   const unhealthy = states
-    .map(state => state.trim())
-    .filter(state => !/^running(?: healthy)?$/u.test(state))
+    .map(entry => entry.trim())
+    .filter(entry => !/^running(?: healthy)?$/u.test(entry))
   if (unhealthy.length > 0) {
-    throw new BrokerFault('unavailable', `the broker container is ${unhealthy.join(', ')}`)
+    // The state read itself worked, so the answer carries it along with the steps that did.
+    throw new BrokerFault(
+      'unavailable',
+      `the broker container is ${unhealthy.join(', ')}; state: ${state}` +
+        (done.length === 0 ? '' : `; completed: ${done.join('; ')}`),
+    )
   }
-  done.push(`state: ${states.map(state => state.trim()).join(', ')}`)
+  done.push(`state: ${state}`)
   // State is not the same as reachable: the socket check in the healthcheck passes for a process
   // that answers nothing. The probe asks the broker through the client the deployment uses, so
   // "updated" means "a push would be issued a credential".

@@ -2944,6 +2944,7 @@ void test('gcb.update does not read a ps warning as a second container', async (
     assert.equal(answer.ok, true)
     // One id was inspected, so one state is reported.
     assert.match(answer.result ?? '', /state: running healthy; probe:/u)
+    assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
   } finally {
     connection.close()
     await broker.close()
@@ -2990,6 +2991,7 @@ void test('gcb.update accepts a broker container without a healthcheck', async (
     const answer = await connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true)
     assert.match(answer.result ?? '', /state: running; probe: /u)
+    assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
   } finally {
     connection.close()
     await broker.close()
@@ -3036,6 +3038,52 @@ void test('gcb.update names the state read when inspect fails', async () => {
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /inspect the container state failed/u)
     assert.match(answer.error?.message ?? '', /no such object/u)
+    assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update reports an exited broker with the steps that worked', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"config --services"*) echo gcb ;;',
+      '  *"config --images"*) echo "code-vaults/gcb-host:dev" ;;',
+      '  *"ps -q"*) echo abc123 ;;',
+      '  *inspect*) echo exited ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /the broker container is exited; state: exited/u)
     assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
   } finally {
     connection.close()
