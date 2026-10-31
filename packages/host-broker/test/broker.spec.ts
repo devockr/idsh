@@ -38,6 +38,11 @@ import {
 const ALIGN = 32
 /** Long enough for the deferred work of one operation to land. */
 const FLUSH_MS = 700
+/** The probe's bound, and the bound of each local query, as `gcb.update` declares them. */
+const GCB_PROBE_MS = 60_000
+const GCB_QUERY_MS = 10_000
+/** The queries gcb.update runs: services, images, ps and inspect. */
+const GCB_QUERY_COUNT = 4
 /** How long the test gives the deploy lock to free before it gives up: patience, not a duration. */
 const LOCK_WAIT_MS = 5_000
 /** The interval between two attempts while waiting for the lock. */
@@ -2652,7 +2657,11 @@ void test('gcb.update pulls, builds the image its compose names and checks the c
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
-    assert.equal(update.timeoutMs, BUILD_TIMEOUT_MS)
+    // The operation outlasts every step it runs: three build-budget steps, the probe, four queries.
+    assert.equal(
+      update.timeoutMs,
+      3 * BUILD_TIMEOUT_MS + GCB_PROBE_MS + GCB_QUERY_COUNT * GCB_QUERY_MS,
+    )
 
     const answer = await connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true)
@@ -2664,6 +2673,10 @@ void test('gcb.update pulls, builds the image its compose names and checks the c
     assert.match(recorded, new RegExp(`compose -f ${gcbCompose} config --images gcb`, 'u'))
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev ./u)
     assert.match(recorded, new RegExp(`compose -f ${gcbCompose} up -d --no-deps --wait gcb`, 'u'))
+    assert.doesNotMatch(
+      recorded,
+      new RegExp(`compose -f ${gcbCompose} up(?! -d --no-deps --wait gcb$)`, 'mu'),
+    )
     assert.match(recorded, new RegExp(`compose -f ${gcbCompose} ps -q gcb`, 'u'))
     assert.match(recorded, /inspect --format .* abc123/u)
     // State is not reachability: the probe goes through the deployment's own client.

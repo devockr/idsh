@@ -798,6 +798,12 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 
 /** How long the post-update probe may take; it answers over the network, unlike a local read. */
 const PROBE_TIMEOUT_MS = 60_000
+/** How long each local docker query in `gcb.update` may take; they run in milliseconds. */
+const GCB_QUERY_TIMEOUT_MS = 10_000
+/** The queries `gcb.update` runs before it can answer: services, images, ps and inspect. */
+const GCB_QUERIES = 4
+/** The steps that may take the build budget: pull, build and recreate. */
+const GCB_BUILD_STEPS = 3
 
 /**
  * Rebuild the credential broker from its own checkout and recreate only its container.
@@ -846,6 +852,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       docker(ctx, ['compose', '-f', compose, 'config', '--services'], 'head', {
         cwd: checkout,
         stdoutOnly: true,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
     )
   )
@@ -866,6 +873,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       docker(ctx, ['compose', '-f', compose, 'config', '--images', service], 'head', {
         cwd: checkout,
         stdoutOnly: true,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
     )
   )
@@ -900,7 +908,10 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // and — when the unit declares one — the healthcheck.
   const ids = (
     await step('list the container', () =>
-      docker(ctx, ['compose', '-f', compose, 'ps', '-q', service], 'head', { cwd: checkout }),
+      docker(ctx, ['compose', '-f', compose, 'ps', '-q', service], 'head', {
+        cwd: checkout,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
+      }),
     )
   )
     .split('\n')
@@ -911,12 +922,17 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   }
   const states = await Promise.all(
     ids.map(id =>
-      docker(ctx, [
-        'inspect',
-        '--format',
-        '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
-        id,
-      ]),
+      docker(
+        ctx,
+        [
+          'inspect',
+          '--format',
+          '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
+          id,
+        ],
+        'head',
+        { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+      ),
     ),
   )
   const unhealthy = states
@@ -1146,7 +1162,11 @@ export const OPS: readonly OpDefinition[] = [
     summary: 'Rebuild the credential broker from its checkout and recreate only its container.',
     confirm: true,
     serial: true,
-    timeoutMs: BUILD_TIMEOUT_MS,
+    // The operation's own deadline has to outlast every step it runs: a pull, a build and a
+    // recreate at the build budget, the probe, and the four local queries, or a slow link turns a
+    // working update into a timeout halfway through it.
+    timeoutMs:
+      GCB_BUILD_STEPS * BUILD_TIMEOUT_MS + PROBE_TIMEOUT_MS + GCB_QUERIES * GCB_QUERY_TIMEOUT_MS,
     requires: ['gcbCheckout', 'gcbCompose', 'gcbProbeRepo'],
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {
