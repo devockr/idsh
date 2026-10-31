@@ -838,7 +838,8 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   if (services.length !== 1) {
     throw new BrokerFault(
       'unavailable',
-      `the broker's compose must run exactly one service, got ${String(services.length)}: ${services.join(', ')}`,
+      `the broker's compose must run exactly one service, got ${String(services.length)}` +
+        (services.length === 0 ? '' : `: ${services.join(', ')}`),
     )
   }
   const service = services[0]
