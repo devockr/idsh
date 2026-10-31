@@ -907,22 +907,6 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   }
   const image = images[0]
   done.push(`image: ${image}`)
-  await step('build', () =>
-    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
-      cwd: checkout,
-      timeoutMs: BUILD_TIMEOUT_MS,
-    }),
-  )
-  done.push('build: ok')
-  // The service, not the whole file: another service sharing that compose project must not be
-  // recreated by a broker update, and `ps` must not answer with its id either.
-  await step('recreate', () =>
-    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait', service], 'head', {
-      cwd: checkout,
-      timeoutMs: BUILD_TIMEOUT_MS,
-    }),
-  )
-  done.push(`recreate: up -d --no-deps --wait ${service}`)
   // The broker is one container, so a service that asks for replicas is a configuration this cannot
   // verify: `ps -q` lists only running containers, and one stopped replica among two would pass.
   const replicas = await step('read the replica count', async () => {
@@ -950,6 +934,22 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       ),
     )
   }
+  await step('build', () =>
+    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
+      cwd: checkout,
+      timeoutMs: BUILD_TIMEOUT_MS,
+    }),
+  )
+  done.push('build: ok')
+  // The service, not the whole file: another service sharing that compose project must not be
+  // recreated by a broker update, and `ps` must not answer with its id either.
+  await step('recreate', () =>
+    docker(ctx, ['compose', '-f', compose, 'up', '-d', '--no-deps', '--wait', service], 'head', {
+      cwd: checkout,
+      timeoutMs: BUILD_TIMEOUT_MS,
+    }),
+  )
+  done.push(`recreate: up -d --no-deps --wait ${service}`)
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
   const ids = linesOf(

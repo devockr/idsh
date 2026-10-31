@@ -2849,7 +2849,9 @@ void test('gcb.update refuses a service that declares replicas', async () => {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
-    assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+    // Refused before the build: the completed list ends at the image the compose names.
+    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.doesNotMatch(answer.error?.message ?? '', /build: ok/u)
   } finally {
     await rig.close()
   }
