@@ -122,6 +122,8 @@ interface RunOptions {
   readonly cwd?: string
   /** Extra environment, merged over the broker's own. */
   readonly env?: NodeJS.ProcessEnv
+  /** Answer with stdout only; a caller that parses the output must not see compose's warnings. */
+  readonly stdoutOnly?: boolean
 }
 
 function runFixed(
@@ -200,7 +202,19 @@ function runFixed(
     }
 
     child.stdout.on('data', collect)
-    child.stderr.on('data', collect)
+    // Warnings still reach the log, but not the answer when the caller parses it.
+    child.stderr.on(
+      'data',
+      options.stdoutOnly === true
+        ? (chunk: Buffer) => {
+            if (logPath !== undefined) {
+              logChain = logChain
+                .then(() => appendFile(logPath, chunk, { mode: FILE_MODE }))
+                .catch(() => null)
+            }
+          }
+        : collect,
+    )
     state.timer = setTimeout(() => {
       if (child.pid !== undefined) {
         try {
@@ -829,7 +843,10 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // keeps that requirement explicit instead of offering a name flag that could disagree with it.
   const services = (
     await step('read the service', () =>
-      docker(ctx, ['compose', '-f', compose, 'config', '--services'], 'head', { cwd: checkout }),
+      docker(ctx, ['compose', '-f', compose, 'config', '--services'], 'head', {
+        cwd: checkout,
+        stdoutOnly: true,
+      }),
     )
   )
     .split('\n')
@@ -839,7 +856,8 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     throw new BrokerFault(
       'unavailable',
       `the broker's compose must run exactly one service, got ${String(services.length)}` +
-        (services.length === 0 ? '' : `: ${services.join(', ')}`),
+        (services.length === 0 ? '' : `: ${services.join(', ')}`) +
+        (done.length === 0 ? '' : `; completed: ${done.join('; ')}`),
     )
   }
   const service = services[0]
@@ -847,6 +865,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     await step('read the image', () =>
       docker(ctx, ['compose', '-f', compose, 'config', '--images', service], 'head', {
         cwd: checkout,
+        stdoutOnly: true,
       }),
     )
   )

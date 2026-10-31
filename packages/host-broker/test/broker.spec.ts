@@ -2794,6 +2794,52 @@ void test('gcb.update refuses a compose file with more than one service', async 
     assert.equal(answer.ok, false)
     assert.equal(answer.error?.code, 'unavailable')
     assert.match(answer.error?.message ?? '', /must run exactly one service, got 2: gcb, other/u)
+    assert.match(answer.error?.message ?? '', /completed: pull: /u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update parses stdout, so compose warnings are not service names', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"config --services"*) echo "WARN[0000] The UID variable is not set" >&2; echo gcb ;;',
+      '  *"config --images"*) echo "WARN[0000] another warning" >&2; echo "code-vaults/gcb-host:dev" ;;',
+      '  *"ps -q"*) echo "abc123" ;;',
+      '  *inspect*) echo "running healthy" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, '#!/bin/sh\necho up to date\n', { mode: 0o755 })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbCompose = path.join(host.root, 'gcb-compose.yml')
+  await mkdir(gcbCheckout)
+  await writeFile(gcbCompose, 'services: {}\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose,
+    gcbProbeRepo: 'devockr/idsh',
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
   } finally {
     connection.close()
     await broker.close()
