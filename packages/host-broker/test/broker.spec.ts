@@ -38,6 +38,11 @@ import {
 const ALIGN = 32
 /** Long enough for the deferred work of one operation to land. */
 const FLUSH_MS = 700
+/** The probe's bound, and the bound of each local query, as `gcb.update` declares them. */
+const GCB_PROBE_MS = 60_000
+const GCB_QUERY_MS = 10_000
+/** The queries gcb.update runs: services, images, replicas, ps and inspect. */
+const GCB_QUERY_COUNT = 5
 /** How long the test gives the deploy lock to free before it gives up: patience, not a duration. */
 const LOCK_WAIT_MS = 5_000
 /** The interval between two attempts while waiting for the lock. */
@@ -2581,4 +2586,373 @@ void test('proc.list answers unavailable when /proc is not readable', async () =
     connection.close()
     await broker.close()
   }
+})
+
+interface GcbRig {
+  connection: ReturnType<typeof client>
+  /** Every docker invocation the fake recorded, one per line. */
+  calls(): Promise<string>
+  close(): Promise<void>
+}
+
+/** A broker configured for `gcb.update`, with a fake docker whose arms a test can replace. */
+async function gcbRig(
+  stub: {
+    services?: string
+    images?: string
+    config?: string
+    build?: string
+    up?: string
+    ps?: string
+    inspect?: string
+    probe?: string
+    /** How many compose files to configure; more than one exercises the base-plus-overlay form. */
+    files?: number
+  } = {},
+): Promise<GcbRig> {
+  const host = await fakeHost()
+  const recorded = path.join(host.root, 'calls.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const arm = (name: string, body: string | undefined, fallback: string): string =>
+    `  *"${name}"*) ${body ?? fallback} ;;`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> ${JSON.stringify(recorded)}`,
+      // Compose interpolates \${UID}/\${GID}; a compose call without them fails here, the way it
+      // fails for real when the broker's environment lacks them.
+      'case "$*" in compose*) [ -n "$UID" ] && [ -n "$GID" ] || { echo "required variable UID is missing a value" >&2; exit 1; } ;; esac',
+      'case "$*" in',
+      arm('config --services', stub.services, 'echo gcb'),
+      arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
+      arm('config --format json', stub.config, `echo '{"services":{"gcb":{}}}'`),
+      arm('up -d --no-deps', stub.up, 'exit 0'),
+      arm('build --target', stub.build, 'exit 0'),
+      arm('ps -q', stub.ps, 'echo abc123'),
+      arm('gcb probe', stub.probe, 'exit 0'),
+      arm('inspect', stub.inspect, 'echo "running healthy"'),
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(gitPath, `#!/bin/sh\nprintf 'git %s\\n' "$*" >> ${JSON.stringify(recorded)}\n`, {
+    mode: 0o755,
+  })
+  const gcbCheckout = path.join(host.root, 'gcb')
+  const gcbComposeFiles = Array.from({ length: stub.files ?? 1 }, (_, index) =>
+    path.join(host.root, `gcb-compose-${String(index)}.yml`),
+  )
+  await mkdir(gcbCheckout)
+  for (const file of gcbComposeFiles) {
+    await writeFile(file, 'services: {}\n')
+  }
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    gcbCheckout,
+    gcbCompose: gcbComposeFiles.join(','),
+    gcbProbeRepo: 'devockr/idsh',
+  })
+  const connection = client(host.socketPath)
+  return {
+    connection,
+    calls: () => readFile(recorded, 'utf8'),
+    async close() {
+      connection.close()
+      await broker.close()
+    },
+  }
+}
+
+void test('gcb.update is offered only when its three values are configured', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    assert.equal(
+      ops.find(op => op.name === 'gcb.update'),
+      undefined,
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update pulls, builds the one image and probes the deployment', async () => {
+  const rig = await gcbRig()
+  try {
+    const described = await rig.connection.request({ op: 'ops.describe', args: {} })
+    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const update = ops.find(op => op.name === 'gcb.update')
+    assert.ok(update !== undefined)
+    assert.equal(update.confirm, true)
+    // The operation outlasts every step it runs: three build-budget steps, the probe, four queries.
+    assert.equal(
+      update.timeoutMs,
+      3 * BUILD_TIMEOUT_MS + GCB_PROBE_MS + GCB_QUERY_COUNT * GCB_QUERY_MS,
+    )
+
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    const recorded = await rig.calls()
+    assert.match(recorded, /git -C .*gcb pull --ff-only/u)
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --services/u)
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --images gcb/u)
+    assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
+    assert.match(
+      recorded,
+      /compose -f .*gcb-compose-0\.yml up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
+    assert.doesNotMatch(
+      recorded,
+      /compose -f .*gcb-compose-0\.yml up(?! -d --no-deps --no-build --pull never --wait gcb$)/mu,
+    )
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml ps -q gcb/u)
+    assert.match(recorded, /inspect --format .* abc123/u)
+    assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
+    // The same pattern the replica test forbids does match a real build and recreate, so its
+    // absence there means something.
+    assert.match(recorded, /(?:^build |compose -f .*gcb-compose-0\.yml up )/mu)
+    assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
+    assert.match(answer.result ?? '', /state: running healthy; probe: devockr\/idsh allowed/u)
+    assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a compose file that names two images', async () => {
+  const rig = await gcbRig({ images: 'printf "one\\ntwo\\n"' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'unavailable')
+    assert.match(answer.error?.message ?? '', /names 2 images/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a compose that has no such service', async () => {
+  const rig = await gcbRig({ services: 'printf "other\\nthird\\n"' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /has no service "gcb"; it has other, third/u)
+    assert.match(answer.error?.message ?? '', /completed: pull: /u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update names every compose file it was given', async () => {
+  // A deployment renders a base file plus an overlay: both must reach every compose call.
+  const rig = await gcbRig({ files: 2 })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    const recorded = await rig.calls()
+    assert.match(
+      recorded,
+      /compose -f .*gcb-compose-0\.yml -f .*gcb-compose-1\.yml config --services/u,
+    )
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml -f .*gcb-compose-1\.yml up -d/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update fails when the broker refuses the probe', async () => {
+  const rig = await gcbRig({ probe: 'echo "denied: not in allowlist" >&2; exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /gcb\.update: probe failed/u)
+    assert.match(answer.error?.message ?? '', /not in allowlist/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update parses stdout, so compose warnings are not names', async () => {
+  const rig = await gcbRig({
+    services: 'echo "WARN[0000] the UID variable is not set" >&2; echo gcb',
+    images: 'echo "WARN[0000] another warning" >&2; echo "code-vaults/gcb-host:dev"',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /image: code-vaults\/gcb-host:dev/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update keeps the reason a parsed query failed', async () => {
+  const rig = await gcbRig({
+    services: 'echo "services.gcb.image must be a string" >&2; exit 1',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /must be a string/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update does not read a ps warning as a second container', async () => {
+  const rig = await gcbRig({ ps: 'echo "WARN[0000] PR82_UNSET is not set" >&2; echo abc123' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /state: running healthy; probe:/u)
+    assert.doesNotMatch(answer.result ?? '', /state: [^;]*; state: /u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update accepts a broker container without a healthcheck', async () => {
+  const rig = await gcbRig({ inspect: 'echo running' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /state: running; probe:/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update names the state read when inspect fails', async () => {
+  const rig = await gcbRig({ inspect: 'echo "no such object: abc123" >&2; exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /inspect the container state failed/u)
+    assert.match(
+      answer.error?.message ?? '',
+      /completed: .*recreate: up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update reports an exited broker with the steps that worked', async () => {
+  const rig = await gcbRig({ inspect: 'echo exited' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /the broker container is exited; state: exited/u)
+    assert.match(
+      answer.error?.message ?? '',
+      /completed: .*recreate: up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update reports a broker container that ps does not list', async () => {
+  // Compose lists only running containers, so a broker that stopped before this query is absent.
+  const rig = await gcbRig({ ps: ':' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /not running after the recreate/u)
+    assert.match(
+      answer.error?.message ?? '',
+      /completed: .*recreate: up -d --no-deps --no-build --pull never --wait gcb/u,
+    )
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a service that declares replicas', async () => {
+  const rig = await gcbRig({
+    config: `echo '{"services":{"gcb":{"deploy":{"replicas":2}}}}'`,
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
+    // Refused before the build: the completed list ends at the image the compose names.
+    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.doesNotMatch(answer.error?.message ?? '', /build: ok/u)
+    // Refused before either side effect: no build, no recreate.
+    const recorded = await rig.calls()
+    assert.doesNotMatch(recorded, /(?:^build |compose -f .*gcb-compose-0\.yml up )/mu)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update stops at the step whose build failed', async () => {
+  const rig = await gcbRig({ build: 'echo "no space left on device" >&2; exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /gcb\.update: build failed/u)
+    assert.match(answer.error?.message ?? '', /no space left on device/u)
+    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update stops at the step whose recreate failed', async () => {
+  const rig = await gcbRig({ up: 'echo "port is already allocated" >&2; exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /gcb\.update: recreate failed/u)
+    assert.match(answer.error?.message ?? '', /port is already allocated/u)
+    assert.match(answer.error?.message ?? '', /completed: .*build: ok/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a service that runs two containers', async () => {
+  // `--scale` on the command line never reaches deploy.replicas, so the listed containers decide.
+  const rig = await gcbRig({ ps: 'printf "abc123\\ndef456\\n"' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /runs 2 containers; gcb.update expects one/u)
+    assert.match(answer.error?.message ?? '', /completed: .*recreate: /u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('an empty compose list is refused at boot', async () => {
+  const host = await fakeHost()
+  await assert.rejects(
+    startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      logDir: host.logDir,
+      procDir: host.procDir,
+      gcbCompose: ' , ',
+    }),
+    /--gcb-compose needs at least one file/u,
+  )
 })

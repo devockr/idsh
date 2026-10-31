@@ -43,6 +43,14 @@ export interface OpContext {
   readonly container: string
   readonly dockerPath: string
   readonly checkout?: string
+  /** The credential broker's checkout; `gcb.update` rebuilds from it. */
+  readonly gcbCheckout?: string
+  /** The compose file(s) that run the broker. */
+  readonly gcbCompose?: readonly string[]
+  /** The service in those files that runs the broker. */
+  readonly gcbService: string
+  /** The repository `gcb.update` probes for, `owner/name`. */
+  readonly gcbProbeRepo?: string
   /** The git client. Default `git`, resolved through the host's PATH. */
   readonly gitPath: string
   /** The `ip` client `net.status` runs. */
@@ -93,6 +101,8 @@ export interface OpDefinition {
   readonly timeoutMs?: number
   /** Runs under the deployment lock: no build, recreate or rollback overlaps it. */
   readonly serial?: boolean
+  /** Config the operation cannot work without: absent is not offered by `ops.describe`. */
+  readonly requires?: readonly (keyof OpContext)[]
   run(args: Record<string, unknown>, ctx: OpContext): Promise<Execution | string>
 }
 
@@ -114,6 +124,8 @@ interface RunOptions {
   readonly cwd?: string
   /** Extra environment, merged over the broker's own. */
   readonly env?: NodeJS.ProcessEnv
+  /** Answer with stdout only; a caller that parses the output must not see compose's warnings. */
+  readonly stdoutOnly?: boolean
 }
 
 function runFixed(
@@ -140,6 +152,9 @@ function runFixed(
       settled: false,
     }
     let buffer = Buffer.alloc(0)
+    // Kept apart from the answer: a caller that parses stdout still needs the reason a program
+    // failed, and that reason is usually on stderr.
+    let errors = Buffer.alloc(0)
 
     const settle = (failure?: Error): void => {
       if (state.settled) {
@@ -192,7 +207,20 @@ function runFixed(
     }
 
     child.stdout.on('data', collect)
-    child.stderr.on('data', collect)
+    // Warnings still reach the log, but not the parsed answer; the failure path reads `errors`.
+    child.stderr.on('data', (chunk: Buffer) => {
+      errors = Buffer.concat([errors, chunk])
+      if (errors.length > MAX_EXEC_BUFFER_BYTES) {
+        errors = errors.subarray(errors.length - MAX_EXEC_BUFFER_BYTES)
+      }
+      if (options.stdoutOnly !== true) {
+        collect(chunk)
+      } else if (logPath !== undefined) {
+        logChain = logChain
+          .then(() => appendFile(logPath, chunk, { mode: FILE_MODE }))
+          .catch(() => null)
+      }
+    })
     state.timer = setTimeout(() => {
       if (child.pid !== undefined) {
         try {
@@ -213,7 +241,8 @@ function runFixed(
       }
       // The program's own message is the useful part, and docker/df put the cause last: keep the
       // tail of the output, from a line boundary, rather than its opening lines.
-      const text = buffer.toString('utf8').trim()
+      const failure = options.stdoutOnly === true && errors.length > 0 ? errors : buffer
+      const text = (failure.length > 0 ? failure : errors).toString('utf8').trim()
       // Only a cut needs a boundary repair: a short message is complete as it stands.
       const cut = text.length > MAX_ERROR_CHARS
       let tail = cut ? text.slice(-MAX_ERROR_CHARS) : text
@@ -772,6 +801,233 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 
 /* ------------------------------------------------------------------ the table */
 
+/* ---------------------------------------------------------------- gcb.update */
+
+/** One field of an object-shaped value from a program's JSON, or undefined. */
+const field = (value: unknown, key: string): unknown =>
+  value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined
+
+/** The non-empty lines of a program's answer, trimmed. */
+const linesOf = (output: string): string[] =>
+  output
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line !== '')
+
+/** The "which steps already worked" suffix, as a string a message can append. */
+const suffix = (done: readonly string[]): string =>
+  done.length === 0 ? '' : `; completed: ${done.join('; ')}`
+
+/** A refusal that says which steps already worked, when any did. */
+const withCompleted = (message: string, done: readonly string[]): string => message + suffix(done)
+
+/** How long the post-update probe may take; it answers over the network, unlike a local read. */
+const PROBE_TIMEOUT_MS = 60_000
+/** How long each local docker query in `gcb.update` may take; they run in milliseconds. */
+const GCB_QUERY_TIMEOUT_MS = 10_000
+/** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
+const GCB_QUERIES = 5
+/** The steps that may take the build budget: pull, build and recreate. */
+const GCB_BUILD_STEPS = 3
+
+/**
+ * Rebuild the credential broker from its own checkout and recreate only its container.
+ *
+ * Not named `deploy.*`: those mean this deployment, and their log and status would become ambiguous
+ * the moment a second deployment shares the namespace. Every step is the answer, so a failure says
+ * which one it was; the container's own state is the last word, because a build that cannot start
+ * is not a successful update.
+ */
+async function updateBroker(ctx: OpContext): Promise<string> {
+  const checkout = ctx.gcbCheckout
+  const compose = ctx.gcbCompose
+  const repo = ctx.gcbProbeRepo
+  const service = ctx.gcbService
+  if (compose === undefined || checkout === undefined || repo === undefined) {
+    throw new BrokerFault('unavailable', 'the broker is not configured for gcb.update')
+  }
+  // One prefix for every `compose` call: a deployment that renders a base file plus an overlay is
+  // the same set of files everywhere here.
+  const composeArgs = ['compose', ...compose.flatMap(file => ['-f', file])]
+  const uid = process.getuid?.()
+  const gid = process.getgid?.()
+  const composeEnv: NodeJS.ProcessEnv = {
+    ...(uid === undefined ? {} : { UID: String(uid) }),
+    ...(gid === undefined ? {} : { GID: String(gid) }),
+  }
+  // Each step names itself, in the answer and in the failure: a pull that worked and a build that
+  // did not are different answers to whoever reads the audit log.
+  const done: string[] = []
+  const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (error instanceof BrokerFault) {
+        throw new BrokerFault(error.code, `gcb.update: ${name} failed: ${message}${suffix(done)}`)
+      }
+      throw new BrokerFault('unavailable', `gcb.update: ${name} failed: ${message}${suffix(done)}`)
+    }
+  }
+  const pull =
+    (
+      await step('pull', () =>
+        git(ctx, ['pull', '--ff-only'], { timeoutMs: BUILD_TIMEOUT_MS }, checkout),
+      )
+    )
+      .trim()
+      .split('\n')[0] ?? ''
+  done.push(`pull: ${pull}`)
+  // The named service, not the file: a deployment compose also runs dsh, and this operation must
+  // touch only the broker's container.
+  const services = linesOf(
+    await step('read the services', () =>
+      docker(ctx, [...composeArgs, 'config', '--services'], 'head', {
+        cwd: checkout,
+        stdoutOnly: true,
+        env: composeEnv,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
+      }),
+    ),
+  )
+  if (!services.includes(service)) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(
+        `the broker's compose has no service ${JSON.stringify(service)}; it has ${
+          services.length === 0 ? 'none' : services.join(', ')
+        }`,
+        done,
+      ),
+    )
+  }
+  const images = linesOf(
+    await step('read the image', () =>
+      docker(ctx, [...composeArgs, 'config', '--images', service], 'head', {
+        cwd: checkout,
+        stdoutOnly: true,
+        env: composeEnv,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
+      }),
+    ),
+  )
+  if (images.length !== 1) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(
+        `the broker's service names ${String(images.length)} images; gcb.update builds exactly one`,
+        done,
+      ),
+    )
+  }
+  const image = images[0]
+  done.push(`image: ${image}`)
+  // The broker is one container, so a service that asks for replicas is a configuration this cannot
+  // verify: `ps -q` lists only running containers, and one stopped replica among two would pass.
+  const replicas = await step('read the replica count', async () => {
+    const text = await docker(ctx, [...composeArgs, 'config', '--format', 'json'], 'head', {
+      cwd: checkout,
+      stdoutOnly: true,
+      env: composeEnv,
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
+    const parsed: unknown = JSON.parse(text)
+    const deploy = field(field(field(parsed, 'services'), service), 'deploy')
+    const count = field(deploy, 'replicas')
+    return typeof count === 'number' ? count : undefined
+  })
+  if (replicas !== undefined && replicas !== 1) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(
+        `the broker's service declares ${String(replicas)} replicas; gcb.update expects one container`,
+        done,
+      ),
+    )
+  }
+  await step('build', () =>
+    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
+      cwd: checkout,
+      timeoutMs: BUILD_TIMEOUT_MS,
+    }),
+  )
+  done.push('build: ok')
+  // The image this operation just built is the one that runs: never build from a compose `build:`
+  // stanza, never reach for a registry.
+  await step('recreate', () =>
+    docker(
+      ctx,
+      [...composeArgs, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service],
+      'head',
+      {
+        cwd: checkout,
+        env: composeEnv,
+        timeoutMs: BUILD_TIMEOUT_MS,
+      },
+    ),
+  )
+  done.push(`recreate: up -d --no-deps --no-build --pull never --wait ${service}`)
+  const ids = linesOf(
+    await step('list the container', () =>
+      docker(ctx, [...composeArgs, 'ps', '-q', service], 'head', {
+        cwd: checkout,
+        stdoutOnly: true,
+        env: composeEnv,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
+      }),
+    ),
+  )
+  if (ids.length !== 1) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(
+        ids.length === 0
+          ? 'the broker container is not running after the recreate'
+          : `the broker service runs ${String(ids.length)} containers; gcb.update expects one`,
+        done,
+      ),
+    )
+  }
+  const states = await step('inspect the container state', () =>
+    Promise.all(
+      ids.map(id =>
+        docker(
+          ctx,
+          [
+            'inspect',
+            '--format',
+            '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
+            id,
+          ],
+          'head',
+          { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+        ),
+      ),
+    ),
+  )
+  const state = states.map(entry => entry.trim()).join(', ')
+  const unhealthy = states
+    .map(entry => entry.trim())
+    .filter(entry => !/^running(?: healthy)?$/u.test(entry))
+  if (unhealthy.length > 0) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(`the broker container is ${unhealthy.join(', ')}; state: ${state}`, done),
+    )
+  }
+  done.push(`state: ${state}`)
+  // State is not reachability: the probe asks the broker through the client the deployment uses, so
+  // "updated" means "a push would be issued a credential". It mints a token, so it gets its own
+  // budget rather than the ten-second default.
+  await step('probe', () =>
+    docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
+      timeoutMs: PROBE_TIMEOUT_MS,
+    }),
+  )
+  done.push(`probe: ${repo} allowed`)
+  return done.join('; ')
+}
+
 export const OPS: readonly OpDefinition[] = [
   {
     name: 'log.tail',
@@ -972,6 +1228,24 @@ export const OPS: readonly OpDefinition[] = [
       })
     },
   },
+
+  {
+    name: 'gcb.update',
+    summary: 'Rebuild the credential broker from its checkout and recreate only its container.',
+    confirm: true,
+    serial: true,
+    // The operation's own deadline has to outlast every step it runs: a pull, a build and a
+    // recreate at the build budget, the probe, and the four local queries, or a slow link turns a
+    // working update into a timeout halfway through it.
+    timeoutMs:
+      GCB_BUILD_STEPS * BUILD_TIMEOUT_MS + PROBE_TIMEOUT_MS + GCB_QUERIES * GCB_QUERY_TIMEOUT_MS,
+    requires: ['gcbCheckout', 'gcbCompose', 'gcbProbeRepo'],
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    run(args, ctx) {
+      rejectUnknown(args, [])
+      return updateBroker(ctx)
+    },
+  },
   {
     name: 'net.status',
     summary: "The host's addresses, routes and neighbours, read with ip.",
@@ -1087,14 +1361,23 @@ export const OPS: readonly OpDefinition[] = [
   },
 ]
 
-export function findOp(name: string): OpDefinition | undefined {
-  return OPS.find(op => op.name === name)
+/**
+ * The operations this broker can offer: a `requires` list that the context cannot satisfy hides
+ * one.
+ */
+const available = (context: OpContext | undefined): readonly OpDefinition[] =>
+  OPS.filter(
+    op => op.requires === undefined || op.requires.every(key => context?.[key] !== undefined),
+  )
+
+export function findOp(name: string, context?: OpContext): OpDefinition | undefined {
+  return available(context).find(op => op.name === name)
 }
 
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
-export function describeOps(): string {
+export function describeOps(context?: OpContext): string {
   return JSON.stringify(
-    OPS.map(({ name, summary, input, confirm, timeoutMs }) => ({
+    available(context).map(({ name, summary, input, confirm, timeoutMs }) => ({
       name,
       summary,
       input,
