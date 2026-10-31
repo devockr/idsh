@@ -29,7 +29,8 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --npm <path>           The npm client broker.update runs (default npm)
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml;
                           also the source broker.update rebuilds from when the CLI runs inside it
-  --gcb-checkout <dir>   The credential broker's checkout; with the next two, enables gcb.update
+  --gcb-checkout <dir>   The credential broker's checkout; needed with --gcb-compose
+                          and --gcb-probe-repo to enable gcb.update
   --gcb-compose <files>  The compose file(s) that run the credential broker, comma-separated
   --gcb-service <name>   The service in those files that runs the broker (default gcb)
   --gcb-probe-repo <repo>
