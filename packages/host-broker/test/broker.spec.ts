@@ -2620,6 +2620,9 @@ async function gcbRig(
     [
       '#!/bin/sh',
       `printf '%s\\n' "$*" >> ${JSON.stringify(recorded)}`,
+      // Compose interpolates \${UID}/\${GID}; a compose call without them fails here, the way it
+      // fails for real when the broker's environment lacks them.
+      'case "$*" in compose*) [ -n "$UID" ] && [ -n "$GID" ] || { echo "required variable UID is missing a value" >&2; exit 1; } ;; esac',
       'case "$*" in',
       arm('config --services', stub.services, 'echo gcb'),
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),

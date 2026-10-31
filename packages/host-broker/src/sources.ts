@@ -849,6 +849,12 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // One prefix for every `compose` call: a deployment that renders a base file plus an overlay is
   // the same set of files everywhere here.
   const composeArgs = ['compose', ...compose.flatMap(file => ['-f', file])]
+  const uid = process.getuid?.()
+  const gid = process.getgid?.()
+  const composeEnv: NodeJS.ProcessEnv = {
+    ...(uid === undefined ? {} : { UID: String(uid) }),
+    ...(gid === undefined ? {} : { GID: String(gid) }),
+  }
   // Each step names itself, in the answer and in the failure: a pull that worked and a build that
   // did not are different answers to whoever reads the audit log.
   const done: string[] = []
@@ -879,6 +885,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       docker(ctx, [...composeArgs, 'config', '--services'], 'head', {
         cwd: checkout,
         stdoutOnly: true,
+        env: composeEnv,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
     ),
@@ -899,6 +906,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       docker(ctx, [...composeArgs, 'config', '--images', service], 'head', {
         cwd: checkout,
         stdoutOnly: true,
+        env: composeEnv,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
     ),
@@ -920,6 +928,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     const text = await docker(ctx, [...composeArgs, 'config', '--format', 'json'], 'head', {
       cwd: checkout,
       stdoutOnly: true,
+      env: composeEnv,
       timeoutMs: GCB_QUERY_TIMEOUT_MS,
     })
     const parsed: unknown = JSON.parse(text)
@@ -952,6 +961,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       'head',
       {
         cwd: checkout,
+        env: composeEnv,
         timeoutMs: BUILD_TIMEOUT_MS,
       },
     ),
@@ -962,6 +972,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       docker(ctx, [...composeArgs, 'ps', '-q', service], 'head', {
         cwd: checkout,
         stdoutOnly: true,
+        env: composeEnv,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }),
     ),
