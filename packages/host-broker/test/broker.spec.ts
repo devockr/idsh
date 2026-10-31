@@ -2597,7 +2597,16 @@ interface GcbRig {
 
 /** A broker configured for `gcb.update`, with a fake docker whose arms a test can replace. */
 async function gcbRig(
-  stub: { services?: string; images?: string; ps?: string; inspect?: string; probe?: string } = {},
+  stub: {
+    services?: string
+    images?: string
+    config?: string
+    build?: string
+    up?: string
+    ps?: string
+    inspect?: string
+    probe?: string
+  } = {},
 ): Promise<GcbRig> {
   const host = await fakeHost()
   const recorded = path.join(host.root, 'calls.log')
@@ -2612,6 +2621,9 @@ async function gcbRig(
       'case "$*" in',
       arm('config --services', stub.services, 'echo gcb'),
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
+      arm('config --format json', stub.config, `echo '{"services":{"gcb":{}}}'`),
+      arm('build', stub.build, 'exit 0'),
+      arm('up -d', stub.up, 'exit 0'),
       arm('ps -q', stub.ps, 'echo abc123'),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect', stub.inspect, 'echo "running healthy"'),
@@ -2824,6 +2836,46 @@ void test('gcb.update reports a broker container that ps does not list', async (
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /not running after the recreate/u)
     assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a service that declares replicas', async () => {
+  const rig = await gcbRig({
+    config: `echo '{"services":{"gcb":{"deploy":{"replicas":2}}}}'`,
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
+    assert.match(answer.error?.message ?? '', /completed: .*recreate: up -d --no-deps --wait gcb/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update stops at the step whose build failed', async () => {
+  const rig = await gcbRig({ build: 'echo "no space left on device" >&2; exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /gcb\.update: build failed/u)
+    assert.match(answer.error?.message ?? '', /no space left on device/u)
+    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update stops at the step whose recreate failed', async () => {
+  const rig = await gcbRig({ up: 'echo "port is already allocated" >&2; exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /gcb\.update: recreate failed/u)
+    assert.match(answer.error?.message ?? '', /port is already allocated/u)
+    assert.match(answer.error?.message ?? '', /completed: .*build: ok/u)
   } finally {
     await rig.close()
   }

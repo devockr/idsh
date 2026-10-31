@@ -801,6 +801,10 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 
 /* ---------------------------------------------------------------- gcb.update */
 
+/** One field of an object-shaped value from a program's JSON, or undefined. */
+const field = (value: unknown, key: string): unknown =>
+  value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined
+
 /** The non-empty lines of a program's answer, trimmed. */
 const linesOf = (output: string): string[] =>
   output
@@ -919,6 +923,33 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     }),
   )
   done.push(`recreate: up -d --no-deps --wait ${service}`)
+  // The broker is one container, so a service that asks for replicas is a configuration this cannot
+  // verify: `ps -q` lists only running containers, and one stopped replica among two would pass.
+  const replicas = await step('read the replica count', async () => {
+    const text = await docker(
+      ctx,
+      ['compose', '-f', compose, 'config', '--format', 'json'],
+      'head',
+      {
+        cwd: checkout,
+        stdoutOnly: true,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
+      },
+    )
+    const parsed: unknown = JSON.parse(text)
+    const deploy = field(field(field(parsed, 'services'), service), 'deploy')
+    const count = field(deploy, 'replicas')
+    return typeof count === 'number' ? count : undefined
+  })
+  if (replicas !== undefined && replicas !== 1) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(
+        `the broker's service declares ${String(replicas)} replicas; gcb.update expects one container`,
+        done,
+      ),
+    )
+  }
   // The container is the broker: ids first, so an empty list is its own answer, then the state
   // and — when the unit declares one — the healthcheck.
   const ids = linesOf(
