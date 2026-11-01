@@ -28,6 +28,10 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
   every call — refusals included — leaves a line before the answer.
 - A broker that is down does not fail the profile: the plugin logs a warning and registers no tools,
   so the delegation still boots and the tools appear the next time the plugin loads.
+- An operation that names a `preview` (`deploy.build`/`deploy.main` → `deploy.source`) is resolved
+  first: the broker's read-only answer — the branch tip and the `main` sha — goes into the question,
+  so the person approves a commit rather than `{"pr": 82}`. A preview that fails is the error the
+  person sees; nothing is asked and the operation is never called.
 - A destructive operation (`confirm: true` in the broker's table) asks first, inside the tool call:
   the question service blocks and holds the answer, so a model cannot fabricate a yes. Only the
   "Run" option confirms it. A free-text answer is a reply, not an approval — the person may be

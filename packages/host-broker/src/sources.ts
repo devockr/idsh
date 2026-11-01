@@ -97,6 +97,11 @@ export interface OpDefinition {
   readonly keep?: Keep
   /** Destructive: the plugin must ask the person before it runs. */
   readonly confirm?: boolean
+  /**
+   * The read-only operation that resolves what this one would do, so the person is asked about
+   * that.
+   */
+  readonly preview?: string
   /** How long the operation may take; defaults to the broker's per-program deadline. */
   readonly timeoutMs?: number
   /** Runs under the deployment lock: no build, recreate or rollback overlaps it. */
@@ -1024,6 +1029,36 @@ async function updateBroker(ctx: OpContext): Promise<string> {
 
 export const OPS: readonly OpDefinition[] = [
   {
+    name: 'deploy.source',
+    summary:
+      'Resolve what deploy.build would build — the branch tip and main — or main alone, without building.',
+    input: {
+      type: 'object',
+      properties: {
+        pr: {
+          type: 'integer',
+          description: 'A same-repository PR number; its head must be on an origin branch.',
+        },
+        sha: {
+          type: 'string',
+          description: 'The tip of an origin branch.',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['pr', 'sha'])
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      // No argument is main: the same source `deploy.main` would build, resolved the same way.
+      if (args['pr'] === undefined && args['sha'] === undefined) {
+        const main = await resolveMainSource(ctx, deadline)
+        return `main at ${main.sha}`
+      }
+      const source = await resolveBuildSource(ctx, args, deadline)
+      return `${source.label} at ${source.sha}; main at ${source.mainSha}`
+    },
+  },
+  {
     name: 'log.tail',
     summary: 'The last lines of a host log, optionally only the lines containing a literal string.',
     keep: 'tail',
@@ -1118,6 +1153,7 @@ export const OPS: readonly OpDefinition[] = [
     summary:
       'Build the :dev image from a PR head or the tip of an origin branch; the root files stay at main.',
     confirm: true,
+    preview: 'deploy.source',
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
     input: {
@@ -1154,6 +1190,7 @@ export const OPS: readonly OpDefinition[] = [
     name: 'deploy.main',
     summary: 'Build the tip of main as :dev, then recreate the container from it.',
     confirm: true,
+    preview: 'deploy.source',
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
     input: {
@@ -1376,11 +1413,12 @@ export function findOp(name: string, context?: OpContext): OpDefinition | undefi
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
 export function describeOps(context?: OpContext): string {
   return JSON.stringify(
-    available(context).map(({ name, summary, input, confirm, timeoutMs }) => ({
+    available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
       name,
       summary,
       input,
       ...(confirm === true ? { confirm: true } : {}),
+      ...(preview === undefined ? {} : { preview }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     })),
     null,

@@ -799,3 +799,78 @@ void test('a broker without the log argument stays synchronous', async () => {
     await rm(host, { recursive: true, force: true })
   }
 })
+
+void test('an operation with a preview is asked about what it resolved', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      preview: 'deploy.source',
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(request => {
+    if (request.op === 'ops.describe') {
+      return describe
+    }
+    if (request.op === 'deploy.source') {
+      return `${JSON.stringify({ ok: true, result: 'pr 82 at aaaaaaa; main at bbbbbbb' })}\n`
+    }
+    return `${JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'never ran' } })}\n`
+  })
+  try {
+    const { ctx, tools, asks } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    await assert.rejects(
+      tools[0].execute({ pr: 82 }, { signal: new AbortController().signal }),
+      /never ran/u,
+    )
+    // Resolved first, then asked, then run.
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe', 'deploy.source', 'deploy.build'],
+    )
+    assert.equal(asks.length, 1)
+    const asked = asks[0]?.['questions'] as Array<{ question: string }> | undefined
+    const question = asked?.[0]?.question ?? ''
+    assert.match(question, /pr 82 at aaaaaaa; main at bbbbbbb/u)
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('an unresolvable preview is an error, not a question', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      preview: 'deploy.source',
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? describe
+      : `${JSON.stringify({ ok: false, error: { code: 'bad-argument', message: 'no such PR' } })}\n`,
+  )
+  try {
+    const { ctx, tools, asks } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    await assert.rejects(
+      tools[0].execute({ pr: 82 }, { signal: new AbortController().signal }),
+      /no such PR/u,
+    )
+    // Nothing was asked, and the operation itself was never called.
+    assert.equal(asks.length, 0)
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe', 'deploy.source'],
+    )
+  } finally {
+    await broker.close()
+  }
+})

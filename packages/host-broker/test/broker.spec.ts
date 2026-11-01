@@ -260,6 +260,7 @@ interface DescribedOp {
   name: string
   input: { required?: string[] }
   confirm?: boolean
+  preview?: string
   timeoutMs?: number
 }
 
@@ -307,6 +308,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     assert.deepEqual(
       ops.map(op => op.name),
       [
+        'deploy.source',
         'log.tail',
         'proc.read',
         'deploy.status',
@@ -323,7 +325,13 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'disk.usage',
       ],
     )
-    assert.equal(ops[0].input.required?.[0], 'file')
+    const describedTail = ops.find(op => op.name === 'log.tail')
+    assert.equal(describedTail?.input.required?.[0], 'file')
+    // The build operations name the read-only one that resolves them, so the person is asked about
+    // the source rather than the request.
+    for (const name of ['deploy.build', 'deploy.main']) {
+      assert.equal(ops.find(op => op.name === name)?.preview, 'deploy.source')
+    }
 
     const unknown = await connection.request({
       id: 'b',
@@ -3166,6 +3174,48 @@ esac
     )
     const docker = await readFile(dockerLog, 'utf8')
     assert.doesNotMatch(docker, /image rm/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.source resolves the request without building', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(dockerPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/pull/82/head"*) echo 'bbbbbbb2222222222222222222222222222222222 refs/pull/82/head' ;;
+  *"refs/heads/*"*) printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\nbbbbbbb2222222222222222222222222222222222 refs/heads/feat\\n' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answered = await connection.request({ op: 'deploy.source', args: { pr: 82 } })
+    assert.equal(answered.ok, true, JSON.stringify(answered.error))
+    assert.match(answered.result ?? '', /PR #82 at bbbbbbb22/u)
+    assert.match(answered.result ?? '', /main at aaaaaaaa1/u)
+    // No argument is main, the same source deploy.main would build.
+    const main = await connection.request({ op: 'deploy.source', args: {} })
+    assert.equal(main.ok, true, JSON.stringify(main.error))
+    assert.equal(main.result, 'main at aaaaaaaa11111111111111111111111111111111')
   } finally {
     connection.close()
     await broker.close()

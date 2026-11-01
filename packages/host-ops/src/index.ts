@@ -108,6 +108,8 @@ interface DescribedOp {
   readonly input: Record<string, unknown>
   /** Destructive: ask the person before the broker is called. */
   readonly confirm?: boolean
+  /** The read-only operation that resolves what this one would do. */
+  readonly preview?: string
   /** How long the broker may take; a build is minutes, not the client's default. */
   readonly timeoutMs?: number
 }
@@ -291,7 +293,13 @@ function toolFor(
       }
       const input = isRecord(args) ? args : {}
       const confirmation: Confirmation =
-        op.confirm === true ? await confirmed(ctx, op, args, exec) : { ok: true }
+        op.confirm === true
+          ? await confirmed(ctx, op, input, exec, () =>
+              op.preview === undefined
+                ? Promise.resolve(undefined)
+                : call(endpoint, op.preview, input, exec.signal).then(answer => answer.text),
+            )
+          : { ok: true }
       if (confirmation.ok === false) {
         throw new Error(
           `host-ops: ${op.name} was not confirmed; the host was not touched` +
@@ -321,7 +329,7 @@ function asOp(value: unknown): DescribedOp {
   if (!isRecord(value)) {
     throw new Error('the broker described an operation that is not an object')
   }
-  const { name, summary, input, confirm, timeoutMs } = value
+  const { name, summary, input, confirm, preview, timeoutMs } = value
   if (typeof name !== 'string' || typeof summary !== 'string' || !isRecord(input)) {
     throw new Error('the broker described an operation without a name, summary or object input')
   }
@@ -330,6 +338,7 @@ function asOp(value: unknown): DescribedOp {
     summary,
     input,
     ...(confirm === true ? { confirm: true } : {}),
+    ...(typeof preview === 'string' && preview !== '' ? { preview } : {}),
     // The broker's per-operation budget travels with the operation; dropping it silently is how
     // a long build ends up waiting the default 15 seconds again.
     ...(typeof timeoutMs === 'number' && Number.isInteger(timeoutMs) && timeoutMs > 0
@@ -353,13 +362,19 @@ async function confirmed(
   op: DescribedOp,
   args: unknown,
   exec: ToolExecution,
+  resolve: () => Promise<string | undefined>,
 ): Promise<Confirmation> {
+  // Resolve before asking: a question about "PR 82" is not a question about a commit, and a source
+  // that cannot be resolved is an error the person should see instead of a prompt.
+  const resolved = await resolve()
+  const detail =
+    resolved === undefined ? `${JSON.stringify(args)}\n` : `${JSON.stringify(args)}\n${resolved}\n`
   const answer = await ctx.userQuestions.ask({
     questions: [
       {
         id: 'confirm',
         header: 'Host operation',
-        question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}\n\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
+        question: `Run ${op.name} on the host?\n\n${detail}\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
         options: [{ label: CONFIRM_OPTION, description: op.summary }, { label: 'Cancel' }],
       },
     ],
