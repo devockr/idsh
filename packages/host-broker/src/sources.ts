@@ -126,6 +126,8 @@ interface RunOptions {
   readonly env?: NodeJS.ProcessEnv
   /** Answer with stdout only; a caller that parses the output must not see compose's warnings. */
   readonly stdoutOnly?: boolean
+  /** Called when the program wrote more than the retained window, so the answer is a prefix. */
+  readonly onTruncated?: () => void
 }
 
 function runFixed(
@@ -188,6 +190,7 @@ function runFixed(
     }
     ctx.signal?.addEventListener('abort', onAbort, { once: true })
     const logPath = options.logPath
+    let announcedCut = false
     const collect = (chunk: Buffer): void => {
       if (logPath !== undefined) {
         // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
@@ -197,6 +200,10 @@ function runFixed(
       }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
+        if (!announcedCut) {
+          announcedCut = true
+          options.onTruncated?.()
+        }
         // The retained window's start never reaches a client: the answer cap keeps the last
         // 64 KiB of it, and that boundary is repaired by `decodeTail`.
         buffer =
@@ -609,6 +616,9 @@ const BUILD_COMMAND = 'pnpm install --frozen-lockfile && pnpm build'
 /** The image that carries node and pnpm for the build step. */
 const BUILD_CONTAINER = 'devockr/idsh:base'
 
+/** The label every image this broker builds carries, so a prune keeps it and the sweep finds it. */
+const KEEP_LABEL = 'idsh.keep=1'
+
 const BUILD_IMAGE = 'devockr/idsh:dev'
 
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
@@ -621,6 +631,11 @@ function noteFailure(logPath: string, error: Error): void {
   void appendFile(logPath, `spawn failed: ${error.message}\n`, {
     mode: FILE_MODE,
   }).catch(() => null)
+}
+
+/** What an unknown value says when it is turned into a message. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** What is left of one operation's budget. */
@@ -871,7 +886,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     try {
       return await work()
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = messageOf(error)
       const failure = withCompleted(`gcb.update: ${name} failed: ${message}`, done)
       throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
     }
@@ -1128,8 +1143,11 @@ export const OPS: readonly OpDefinition[] = [
       const log = optionalLog(args)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveBuildSource(ctx, args, deadline)
-      const previous = await buildInto(ctx, source, deadline, log)
-      return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
+      const { previous, failed } = await buildInto(ctx, source, deadline, log)
+      return (
+        `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}` +
+        reapNote(failed)
+      )
     },
   },
   {
@@ -1154,9 +1172,11 @@ export const OPS: readonly OpDefinition[] = [
       const checkout = requireCheckout(ctx)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveMainSource(ctx, deadline)
-      const previous = await buildInto(ctx, source, deadline, log)
+      const { previous, failed } = await buildInto(ctx, source, deadline, log)
       return {
-        text: `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}`,
+        text:
+          `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}` +
+          reapNote(failed),
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
       }
     },
@@ -1179,7 +1199,7 @@ export const OPS: readonly OpDefinition[] = [
           try {
             await docker(ctx, ['tag', target, BUILD_IMAGE])
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = messageOf(error)
             await appendFile(
               path.join(ctx.stateDir, 'compose.log'),
               `rollback tag failed: ${message}\n`,
@@ -1469,19 +1489,24 @@ async function resolveMainSource(ctx: OpContext, deadline: number): Promise<Buil
   return { sha: main, mainSha: main, label: 'main' }
 }
 
-/** Prepare, build and clean up; returns the image the container ran before. */
+/** Prepare, build and clean up; returns the previous image and what the sweep could not remove. */
 async function buildInto(
   ctx: OpContext,
   source: BuildSource,
   deadline: number,
   logId: string | undefined,
-): Promise<string> {
+): Promise<{ previous: string; failed: readonly string[] }> {
   const dir = await prepareBuildSource(ctx, source, deadline)
   try {
     // Recorded before the build, so the tag moving is what makes this the rollback target.
     const previous = await recordRollback(ctx)
     await buildImage(ctx, dir, deadline, logId)
-    return previous
+    // Best effort: an image that cannot be removed is left for the next build, not an error, but the
+    // answer says so — a silent failure would look like the bound held.
+    const failed = await reapImages(ctx, previous, deadline).catch((error: unknown) => [
+      messageOf(error),
+    ])
+    return { previous, failed }
   } finally {
     // Best effort: a cleanup failure must not turn a tagged image into an error.
     await rm(dir, { recursive: true, force: true }).catch(() => null)
@@ -1567,6 +1592,98 @@ async function recordRollback(ctx: OpContext): Promise<string> {
   await chmod(file, FILE_MODE).catch(() => null)
   return previous
 }
+/**
+ * Retire the builds this one makes unnecessary.
+ *
+ * The build labels every image it produces `idsh.keep=1`, which is how the host's prune keeps them
+ * and how this finds them again. A label means "built here, kept until superseded", not "this is
+ * the rollback target", so the label alone is unbounded: after a build, every labelled image that
+ * is neither the one the build produced nor the recorded target is retired. A successful removal is
+ * what makes "at most two" true; anything it could not remove is reported, and the next build tries
+ * again.
+ *
+ * @returns What could not be removed, empty when the sweep finished.
+ */
+async function reapImages(
+  ctx: OpContext,
+  previous: string,
+  deadline: number,
+): Promise<readonly string[]> {
+  const timeoutMs = (): number => remaining(deadline)
+  let cut = false
+  const ids = linesOf(
+    await docker(
+      ctx,
+      ['image', 'ls', '--quiet', '--no-trunc', '--filter', `label=${KEEP_LABEL}`],
+      'head',
+      {
+        stdoutOnly: true,
+        timeoutMs: timeoutMs(),
+        onTruncated: () => {
+          cut = true
+        },
+      },
+    ),
+  )
+  if (cut) {
+    // The ids behind the cut were never seen, so removing the ones in front of it would report a
+    // finished sweep that did not finish.
+    return ['more images carried the label than one listing could answer for; nothing was removed']
+  }
+  if (ids.length === 0) {
+    return []
+  }
+  const keep = new Set<string>()
+  // The image this build produced must survive: losing it loses the `:dev` tag the recreate uses.
+  // When it cannot be resolved, nothing is removed at all rather than guessed at.
+  const built = await imageId(ctx, BUILD_IMAGE, timeoutMs())
+  if (built === '') {
+    return ['the image this build produced could not be resolved, so nothing was removed']
+  }
+  keep.add(built)
+  // The recorded target is an id when the image was built here, and a digest when it was pulled: a
+  // digest is not on this daemon, and docker refuses to remove an image a running container uses,
+  // so a failed lookup is a form this keeps as-is rather than a reason to remove it.
+  keep.add(
+    /^sha256:[0-9a-f]+$/u.test(previous)
+      ? previous
+      : (await imageId(ctx, previous, timeoutMs())) || previous,
+  )
+
+  const failed: string[] = []
+  for (const id of ids) {
+    if (keep.has(id)) {
+      continue
+    }
+    // The build's budget is the operation's budget: a sweep that kept spawning 1 ms calls after the
+    // deadline would turn a build that finished into a timeout, and the recreate would never run.
+    if (Date.now() >= deadline) {
+      failed.push('the sweep reached its deadline; later images were not considered')
+      break
+    }
+    try {
+      await docker(ctx, ['image', 'rm', id], 'tail', { timeoutMs: timeoutMs() })
+    } catch (error) {
+      failed.push(`${id}: ${messageOf(error)}`)
+    }
+  }
+  return failed
+}
+
+/** The id a reference resolves to on this daemon, or nothing when it does not resolve here. */
+async function imageId(ctx: OpContext, ref: string, timeoutMs: number): Promise<string> {
+  const text = await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', ref], 'head', {
+    stdoutOnly: true,
+    timeoutMs,
+  }).catch(() => '')
+  return text.trim()
+}
+
+/** What the answer says about a sweep that could not finish. */
+function reapNote(failed: readonly string[]): string {
+  return failed.length === 0 ? '' : `; the image sweep did not finish: ${failed.join('; ')}`
+}
+
 /** The optional log id a caller picks, so its job can follow exactly this build. */
 function optionalLog(args: Record<string, unknown>): string | undefined {
   const log = args['log']
@@ -1645,7 +1762,7 @@ async function buildImage(
       BUILD_IMAGE,
       // Retention: the previous :dev image becomes untagged, and a prune keeps this one.
       '--label',
-      'idsh.keep=1',
+      KEEP_LABEL,
       '--file',
       path.join(dir, 'Dockerfile.dev'),
       dir,

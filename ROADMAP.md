@@ -8,14 +8,20 @@ Phase 1 has started: `packages/host-broker` carries the socket, six read sources
 the audit log, `deploy.status`/`deploy.log` inspect the deployment container, `deploy.recreate`
 restarts it, `deploy.build` builds it from an origin-only source, `deploy.main` builds and ships
 main in one call and `deploy.rollback` returns to the image recorded before that build — all
-behind an in-tool confirmation — and `packages/host-ops` turns that table into dsh tools. The
-confirmation currently shows the request (`pr`/`sha`); the resolved source and `main` shas are
-resolved after the answer, so resolve-then-ask is still open; build, main, recreate and rollback
-are serialized by one deployment lock, and `broker.update` lets the broker replace itself under a
-supervisor instead of a shell, while `gcb.update` does the same for the credential broker — its
-checkout, the image its compose names, and only its container. Labelled images accumulate until the reaper that drops
-`idsh.keep=1` images lands. Everything else below is still the plan, and this file is the contract
-the implementation is judged against.
+behind an in-tool confirmation — and `packages/host-ops` turns that table into dsh tools.
+The confirmation shows the request (`pr`/`sha`), not the source it resolves to yet; build,
+main, recreate and rollback are serialized by one deployment lock; and `broker.update` lets
+the broker replace itself under a supervisor instead of a shell, while `gcb.update` does the
+same for the credential broker — its checkout, the image its compose names, and only its
+container. A build retires the labelled images it makes unnecessary — every `idsh.keep=1`
+image that is neither the one it produced nor the recorded target — so after a build at most
+two of them stay on disk. A sweep that could not finish says so in the build answer — a
+removal that failed, a listing cut at the broker's output window, an image this build
+produced that does not resolve, or a sweep that ran out of the build's time — and the next
+build tries again. `resolve-then-ask` is the next item in this slice, and the rest of the
+phase list (including `run` and its allowlist, and a deployment that rolls itself back when
+it will not come up) is still the plan. This file is the contract the implementation is
+judged against.
 
 ## The problem
 
