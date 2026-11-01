@@ -3224,6 +3224,13 @@ esac
     assert.equal(main.result, 'main at aaaaaaaa11111111111111111111111111111111')
     // A preview resolves refs and nothing else: docker was never called.
     assert.equal(await readFile(dockerLog, 'utf8').catch(() => ''), '')
+    // A request that names a source is not a request for main, however it is labelled.
+    const mixed = await connection.request({
+      op: 'deploy.source',
+      args: { for: 'deploy.main', pr: 82 },
+    })
+    assert.equal(mixed.ok, false)
+    assert.match(mixed.error?.message ?? '', /give pr or sha to deploy\.build instead/u)
     // `deploy.build` with neither is refused here, before anyone is asked about it.
     const empty = await connection.request({ op: 'deploy.source', args: {} })
     assert.equal(empty.ok, false)

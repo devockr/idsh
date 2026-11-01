@@ -388,14 +388,18 @@ function previewArgs(
 ): Record<string, unknown> {
   const preview = ops.find(candidate => candidate.name === op.preview)
   const properties = readField(preview?.input, 'properties')
-  const accepted = isRecord(properties)
-    ? new Set([...Object.keys(properties), 'for'])
-    : new Set(['for'])
-  const args: Record<string, unknown> = { for: op.name }
+  if (!isRecord(properties)) {
+    return {}
+  }
+  const args: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(input)) {
-    if (accepted.has(key)) {
+    // `for` says which operation this answers for; a caller does not get to choose that.
+    if (key !== 'for' && properties[key] !== undefined) {
       args[key] = value
     }
+  }
+  if (properties['for'] !== undefined) {
+    args['for'] = op.name
   }
   return args
 }

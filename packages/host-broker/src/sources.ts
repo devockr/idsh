@@ -1147,6 +1147,12 @@ export const OPS: readonly OpDefinition[] = [
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
       if (args['for'] === 'deploy.main') {
+        if (args['pr'] !== undefined || args['sha'] !== undefined) {
+          throw new BrokerFault(
+            'bad-argument',
+            'deploy.main resolves main; give pr or sha to deploy.build instead',
+          )
+        }
         const main = await resolveMainSource(ctx, deadline)
         return `main at ${main.sha}`
       }

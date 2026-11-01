@@ -818,7 +818,7 @@ void test('an operation with a preview is asked about what it resolved', async (
       summary: 'Resolve the source.',
       input: {
         type: 'object',
-        properties: { pr: { type: 'integer' }, sha: { type: 'string' } },
+        properties: { pr: { type: 'integer' }, sha: { type: 'string' }, for: { type: 'string' } },
         additionalProperties: false,
       },
       timeoutMs: OP_TIMEOUT_MS,
@@ -914,7 +914,7 @@ void test('the preview does not see arguments its operation does not accept', as
       summary: 'Resolve the source.',
       input: {
         type: 'object',
-        properties: { pr: { type: 'integer' }, sha: { type: 'string' } },
+        properties: { pr: { type: 'integer' }, sha: { type: 'string' }, for: { type: 'string' } },
         additionalProperties: false,
       },
       timeoutMs: OP_TIMEOUT_MS,
@@ -976,5 +976,60 @@ void test('a missing or destructive preview is refused at registration', async (
     } finally {
       await broker.close()
     }
+  }
+})
+
+void test('the preview is called with its own budget, not the default', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      preview: 'deploy.source',
+      timeoutMs: OP_TIMEOUT_MS,
+    },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' }, for: { type: 'string' } },
+        additionalProperties: false,
+      },
+      timeoutMs: SHORT_OP_TIMEOUT_MS,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(() => describe)
+  const budgets: Array<{ op: string; timeoutMs?: number }> = []
+  const call = (
+    endpoint: { timeoutMs?: number },
+    op: string,
+  ): Promise<{ text: string; truncated: boolean }> => {
+    if (op === 'ops.describe') {
+      return Promise.resolve({ text: JSON.stringify(table), truncated: false })
+    }
+    budgets.push({
+      op,
+      ...(endpoint.timeoutMs === undefined ? {} : { timeoutMs: endpoint.timeoutMs }),
+    })
+    return Promise.resolve({ text: '', truncated: false })
+  }
+  try {
+    const { ctx, tools } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath }, call)
+    await tools
+      .find(tool => tool.name === 'idsh_deploy_build')
+      ?.execute({ pr: 82 }, { signal: new AbortController().signal })
+    // The preview's budget plus the plugin's slack, not the build's.
+    const preview = budgets.find(entry => entry.op === 'deploy.source')
+    assert.equal(preview?.timeoutMs, SHORT_OP_TIMEOUT_MS + SLACK_MS)
+  } finally {
+    await broker.close()
   }
 })
