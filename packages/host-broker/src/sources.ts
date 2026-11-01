@@ -126,6 +126,8 @@ interface RunOptions {
   readonly env?: NodeJS.ProcessEnv
   /** Answer with stdout only; a caller that parses the output must not see compose's warnings. */
   readonly stdoutOnly?: boolean
+  /** Called when the program wrote more than the retained window, so the answer is a prefix. */
+  readonly onTruncated?: () => void
 }
 
 function runFixed(
@@ -197,6 +199,7 @@ function runFixed(
       }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
+        options.onTruncated?.()
         // The retained window's start never reaches a client: the answer cap keeps the last
         // 64 KiB of it, and that boundary is repaired by `decodeTail`.
         buffer =
@@ -1603,14 +1606,26 @@ async function reapImages(
   deadline: number,
 ): Promise<readonly string[]> {
   const timeoutMs = (): number => remaining(deadline)
+  let cut = false
   const ids = linesOf(
     await docker(
       ctx,
       ['image', 'ls', '--quiet', '--no-trunc', '--filter', `label=${KEEP_LABEL}`],
       'head',
-      { stdoutOnly: true, timeoutMs: timeoutMs() },
+      {
+        stdoutOnly: true,
+        timeoutMs: timeoutMs(),
+        onTruncated: () => {
+          cut = true
+        },
+      },
     ),
   )
+  if (cut) {
+    // The ids behind the cut were never seen, so removing the ones in front of it would report a
+    // finished sweep that did not finish.
+    return ['more images carried the label than one listing could answer for; nothing was removed']
+  }
   if (ids.length === 0) {
     return []
   }

@@ -1829,7 +1829,8 @@ case "$1" in
       inspect)
         case "$5" in
           '${ROLLBACK_TARGET}') echo "sha256:target" ;;
-          *) echo "sha256:new" ;;
+          devockr/idsh:dev) echo "sha256:new" ;;
+          *) echo "sha256:unrelated" ;;
         esac ;;
       rm) echo "removed $3" ;;
     esac ;;
@@ -3102,6 +3103,67 @@ esac
     assert.match(
       answer.result ?? '',
       /the image sweep did not finish: the image this build produced/u,
+    )
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.doesNotMatch(docker, /image rm/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.main removes nothing when the image listing was cut', async () => {
+  // More ids than one retained window: the ones behind the cut were never seen, so the sweep must
+  // not report that it finished.
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$1" in
+  image)
+    case "$2" in
+      ls) awk 'BEGIN { for (i = 0; i < 30000; i += 1) printf "sha256:%060d\\n", i }' ;;
+      inspect) echo "sha256:new" ;;
+      rm) echo "removed $3" ;;
+    esac ;;
+  inspect) echo '${ROLLBACK_TARGET}' ;;
+  compose) echo "$*" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.main', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(
+      answer.result ?? '',
+      /the image sweep did not finish: more images carried the label/u,
     )
     const docker = await readFile(dockerLog, 'utf8')
     assert.doesNotMatch(docker, /image rm/u)
