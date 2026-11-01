@@ -1655,6 +1655,12 @@ async function reapImages(
     if (keep.has(id)) {
       continue
     }
+    // The build's budget is the operation's budget: a sweep that kept spawning 1 ms calls after the
+    // deadline would turn a build that finished into a timeout, and the recreate would never run.
+    if (Date.now() >= deadline) {
+      failed.push('the sweep reached its deadline; later images were not considered')
+      break
+    }
     try {
       await docker(ctx, ['image', 'rm', id], 'tail', { timeoutMs: timeoutMs() })
     } catch (error) {
