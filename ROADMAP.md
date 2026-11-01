@@ -15,11 +15,12 @@ the broker replace itself under a supervisor instead of a shell, while `gcb.upda
 same for the credential broker — its checkout, the image its compose names, and only its
 container. A build retires the labelled images it makes unnecessary — every `idsh.keep=1`
 image that is neither the one it produced nor the recorded target — so after a build at most
-two of them stay on disk, unless a removal fails, or the listing was cut at the broker's
-output window: either way the build answer says so, and the next build tries again.
-`resolve-then-ask` is the next item in this slice, and the rest of the phase list (including
-`run` and its allowlist, and a deployment that rolls itself back when it will not come up)
-is still the plan. This file is the contract the implementation is judged against.
+two of them stay on disk. A sweep that could not finish says so in the build answer — a
+removal that failed, a listing cut at the broker's output window, or an image this build
+produced that does not resolve — and the next build tries again. `resolve-then-ask` is the
+next item in this slice, and the rest of the phase list (including `run` and its allowlist,
+and a deployment that rolls itself back when it will not come up) is still the plan. This
+file is the contract the implementation is judged against.
 
 ## The problem
 

@@ -8,5 +8,7 @@ rollback target. The label still keeps a locally built target through the host's
 prune -a --filter 'label!=idsh.keep=1'`; what changes is that the exemption is bounded by the broker
 instead of relying on an operator. After a build at most two such images stay on disk; one whose
 `docker image rm` fails stays until a later build retries it, and a listing longer than the broker's
-output window removes nothing rather than sweeping the part it can see. The build answer says which
-of the two happened, so a sweep that finished short is visible instead of looking complete.
+output window removes nothing rather than sweeping the part it can see — as does an image this build
+produced that does not resolve, since removing it would take the tag the recreate is about to use.
+The build answer names whichever happened, so a sweep that finished short is visible instead of
+looking complete.
