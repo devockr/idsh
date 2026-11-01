@@ -7,4 +7,6 @@ removes every image labelled `idsh.keep=1` that is neither the one it just produ
 rollback target. The label still keeps a locally built target through the host's `docker image
 prune -a --filter 'label!=idsh.keep=1'`; what changes is that the exemption is bounded by the broker
 instead of relying on an operator. After a build at most two such images stay on disk; one whose
-`docker image rm` fails stays until a later build retries it, and the build answer says so.
+`docker image rm` fails stays until a later build retries it, and a listing longer than the broker's
+output window removes nothing rather than sweeping the part it can see. The build answer says which
+of the two happened, so a sweep that finished short is visible instead of looking complete.
