@@ -9,7 +9,7 @@
  */
 import { parseArgs } from 'node:util'
 
-import { startBroker } from './broker.ts'
+import { type BrokerOptions, startBroker } from './broker.ts'
 import { DEFAULT_EXEC_TIMEOUT_MS, MAX_TIMER_MS, TIMEOUT_SLACK_MS } from './constants.ts'
 
 const USAGE = `Usage: idsh-host --socket <path> --audit <path> [options]
@@ -29,6 +29,12 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --npm <path>           The npm client broker.update runs (default npm)
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml;
                           also the source broker.update rebuilds from when the CLI runs inside it
+  --gcb-checkout <dir>   The credential broker's checkout; needed with --gcb-compose
+                          and --gcb-probe-repo to enable gcb.update
+  --gcb-compose <files>  The compose file(s) that run the credential broker, comma-separated
+  --gcb-service <name>   The service in those files that runs the broker (default gcb)
+  --gcb-probe-repo <repo>
+                         Repository gcb.update probes after recreating (owner/name)
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
@@ -57,6 +63,47 @@ function number(
   return parsed
 }
 
+/** The flags, as the broker's options; an absent flag stays absent rather than becoming empty. */
+function optionsFrom(
+  values: Record<string, string | boolean | undefined>,
+  handlers: { shutdown?: () => void },
+  socketPath: string,
+  auditPath: string,
+): BrokerOptions {
+  const text = (key: string): string | undefined => {
+    const value = values[key]
+    return typeof value === 'string' ? value : undefined
+  }
+  return {
+    socketPath,
+    auditPath,
+    ...(text('log-dir') === undefined ? {} : { logDir: text('log-dir') }),
+    ...(text('proc-dir') === undefined ? {} : { procDir: text('proc-dir') }),
+    ...(text('container') === undefined ? {} : { container: text('container') }),
+    ...(text('docker') === undefined ? {} : { dockerPath: text('docker') }),
+    ...(text('git') === undefined ? {} : { gitPath: text('git') }),
+    ...(text('ip') === undefined ? {} : { ipPath: text('ip') }),
+    ...(text('ss') === undefined ? {} : { ssPath: text('ss') }),
+    ...(text('pnpm') === undefined ? {} : { pnpmPath: text('pnpm') }),
+    ...(text('npm') === undefined ? {} : { npmPath: text('npm') }),
+    ...(text('checkout') === undefined ? {} : { checkout: text('checkout') }),
+    ...(text('gcb-checkout') === undefined ? {} : { gcbCheckout: text('gcb-checkout') }),
+    ...(text('gcb-compose') === undefined ? {} : { gcbCompose: text('gcb-compose') }),
+    ...(text('gcb-service') === undefined ? {} : { gcbService: text('gcb-service') }),
+    ...(text('gcb-probe-repo') === undefined ? {} : { gcbProbeRepo: text('gcb-probe-repo') }),
+    // The supervisor restarts the process once it has drained; that is the self-update hand-off.
+    stop: () => handlers.shutdown?.(),
+    rateLimitPerMinute: number(text('rate-limit'), 60, '--rate-limit'),
+    execTimeoutMs: number(
+      text('exec-timeout'),
+      DEFAULT_EXEC_TIMEOUT_MS,
+      '--exec-timeout',
+      // The wrapper schedules a timer this much later; past Node's ceiling it fires at 1 ms.
+      MAX_TIMER_MS - TIMEOUT_SLACK_MS,
+    ),
+  }
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
@@ -72,6 +119,10 @@ async function main(): Promise<void> {
       pnpm: { type: 'string' },
       npm: { type: 'string' },
       checkout: { type: 'string' },
+      'gcb-checkout': { type: 'string' },
+      'gcb-compose': { type: 'string' },
+      'gcb-service': { type: 'string' },
+      'gcb-probe-repo': { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -89,30 +140,7 @@ async function main(): Promise<void> {
   }
 
   const handlers: { shutdown?: () => void } = {}
-  const broker = await startBroker({
-    socketPath: values.socket,
-    auditPath: values.audit,
-    ...(values['log-dir'] === undefined ? {} : { logDir: values['log-dir'] }),
-    ...(values['proc-dir'] === undefined ? {} : { procDir: values['proc-dir'] }),
-    ...(values.container === undefined ? {} : { container: values.container }),
-    ...(values.docker === undefined ? {} : { dockerPath: values.docker }),
-    ...(values.git === undefined ? {} : { gitPath: values.git }),
-    ...(values.ip === undefined ? {} : { ipPath: values.ip }),
-    ...(values.ss === undefined ? {} : { ssPath: values.ss }),
-    ...(values.pnpm === undefined ? {} : { pnpmPath: values.pnpm }),
-    ...(values.npm === undefined ? {} : { npmPath: values.npm }),
-    ...(values.checkout === undefined ? {} : { checkout: values.checkout }),
-    // The supervisor restarts the process once it has drained; that is the self-update hand-off.
-    stop: () => handlers.shutdown?.(),
-    rateLimitPerMinute: number(values['rate-limit'], 60, '--rate-limit'),
-    execTimeoutMs: number(
-      values['exec-timeout'],
-      DEFAULT_EXEC_TIMEOUT_MS,
-      '--exec-timeout',
-      // The wrapper schedules a timer this much later; past Node's ceiling it fires at 1 ms.
-      MAX_TIMER_MS - TIMEOUT_SLACK_MS,
-    ),
-  })
+  const broker = await startBroker(optionsFrom(values, handlers, values.socket, values.audit))
 
   process.stderr.write(`idsh-host: listening on ${values.socket}\n`)
 
