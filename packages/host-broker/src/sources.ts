@@ -807,6 +807,9 @@ async function rollbackTarget(ctx: OpContext): Promise<string> {
 const field = (value: unknown, key: string): unknown =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined
 
+/** A path through object-shaped JSON, one field at a time. */
+const fieldOf = (value: unknown, ...keys: string[]): unknown => keys.reduce(field, value)
+
 /** The non-empty lines of a program's answer, trimmed. */
 const linesOf = (output: string): string[] =>
   output
@@ -840,21 +843,30 @@ const GCB_BUILD_STEPS = 3
  */
 async function updateBroker(ctx: OpContext): Promise<string> {
   const checkout = ctx.gcbCheckout
-  const compose = ctx.gcbCompose
+  const composeFiles = ctx.gcbCompose
   const repo = ctx.gcbProbeRepo
   const service = ctx.gcbService
-  if (compose === undefined || checkout === undefined || repo === undefined) {
+  if (composeFiles === undefined || checkout === undefined || repo === undefined) {
     throw new BrokerFault('unavailable', 'the broker is not configured for gcb.update')
   }
   // One prefix for every `compose` call: a deployment that renders a base file plus an overlay is
-  // the same set of files everywhere here.
-  const composeArgs = ['compose', ...compose.flatMap(file => ['-f', file])]
+  // the same set of files everywhere here. Compose interpolates UID and GID, and the broker's own
+  // environment may not carry them.
+  const composeArgs = ['compose', ...composeFiles.flatMap(file => ['-f', file])]
   const uid = process.getuid?.()
   const gid = process.getgid?.()
   const composeEnv: NodeJS.ProcessEnv = {
     ...(uid === undefined ? {} : { UID: String(uid) }),
     ...(gid === undefined ? {} : { GID: String(gid) }),
   }
+  const queryOptions = {
+    cwd: checkout,
+    stdoutOnly: true,
+    env: composeEnv,
+    timeoutMs: GCB_QUERY_TIMEOUT_MS,
+  }
+  const compose = (args: string[], options: RunOptions = queryOptions): Promise<string> =>
+    docker(ctx, [...composeArgs, ...args], 'head', options)
   // Each step names itself, in the answer and in the failure: a pull that worked and a build that
   // did not are different answers to whoever reads the audit log.
   const done: string[] = []
@@ -870,26 +882,15 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     }
   }
   const pull =
-    (
+    linesOf(
       await step('pull', () =>
         git(ctx, ['pull', '--ff-only'], { timeoutMs: BUILD_TIMEOUT_MS }, checkout),
-      )
-    )
-      .trim()
-      .split('\n')[0] ?? ''
+      ),
+    )[0] ?? ''
   done.push(`pull: ${pull}`)
   // The named service, not the file: a deployment compose also runs dsh, and this operation must
   // touch only the broker's container.
-  const services = linesOf(
-    await step('read the services', () =>
-      docker(ctx, [...composeArgs, 'config', '--services'], 'head', {
-        cwd: checkout,
-        stdoutOnly: true,
-        env: composeEnv,
-        timeoutMs: GCB_QUERY_TIMEOUT_MS,
-      }),
-    ),
-  )
+  const services = linesOf(await step('read the services', () => compose(['config', '--services'])))
   if (!services.includes(service)) {
     throw new BrokerFault(
       'unavailable',
@@ -902,14 +903,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     )
   }
   const images = linesOf(
-    await step('read the image', () =>
-      docker(ctx, [...composeArgs, 'config', '--images', service], 'head', {
-        cwd: checkout,
-        stdoutOnly: true,
-        env: composeEnv,
-        timeoutMs: GCB_QUERY_TIMEOUT_MS,
-      }),
-    ),
+    await step('read the image', () => compose(['config', '--images', service])),
   )
   if (images.length !== 1) {
     throw new BrokerFault(
@@ -925,15 +919,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // The broker is one container, so a service that asks for replicas is a configuration this cannot
   // verify: `ps -q` lists only running containers, and one stopped replica among two would pass.
   const replicas = await step('read the replica count', async () => {
-    const text = await docker(ctx, [...composeArgs, 'config', '--format', 'json'], 'head', {
-      cwd: checkout,
-      stdoutOnly: true,
-      env: composeEnv,
-      timeoutMs: GCB_QUERY_TIMEOUT_MS,
-    })
+    const text = await compose(['config', '--format', 'json'])
     const parsed: unknown = JSON.parse(text)
-    const deploy = field(field(field(parsed, 'services'), service), 'deploy')
-    const count = field(deploy, 'replicas')
+    const count = fieldOf(parsed, 'services', service, 'deploy', 'replicas')
     return typeof count === 'number' ? count : undefined
   })
   if (replicas !== undefined && replicas !== 1) {
@@ -955,28 +943,14 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // The image this operation just built is the one that runs: never build from a compose `build:`
   // stanza, never reach for a registry.
   await step('recreate', () =>
-    docker(
-      ctx,
-      [...composeArgs, 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service],
-      'head',
-      {
-        cwd: checkout,
-        env: composeEnv,
-        timeoutMs: BUILD_TIMEOUT_MS,
-      },
-    ),
+    compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service], {
+      cwd: checkout,
+      env: composeEnv,
+      timeoutMs: BUILD_TIMEOUT_MS,
+    }),
   )
   done.push(`recreate: up -d --no-deps --no-build --pull never --wait ${service}`)
-  const ids = linesOf(
-    await step('list the container', () =>
-      docker(ctx, [...composeArgs, 'ps', '-q', service], 'head', {
-        cwd: checkout,
-        stdoutOnly: true,
-        env: composeEnv,
-        timeoutMs: GCB_QUERY_TIMEOUT_MS,
-      }),
-    ),
-  )
+  const ids = linesOf(await step('list the container', () => compose(['ps', '-q', service])))
   if (ids.length !== 1) {
     throw new BrokerFault(
       'unavailable',
