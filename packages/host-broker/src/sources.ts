@@ -879,7 +879,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     try {
       return await work()
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = messageOf(error)
       const failure = withCompleted(`gcb.update: ${name} failed: ${message}`, done)
       throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
     }
@@ -1192,7 +1192,7 @@ export const OPS: readonly OpDefinition[] = [
           try {
             await docker(ctx, ['tag', target, BUILD_IMAGE])
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = messageOf(error)
             await appendFile(
               path.join(ctx.stateDir, 'compose.log'),
               `rollback tag failed: ${message}\n`,
@@ -1482,7 +1482,7 @@ async function resolveMainSource(ctx: OpContext, deadline: number): Promise<Buil
   return { sha: main, mainSha: main, label: 'main' }
 }
 
-/** Prepare, build and clean up; returns the image the container ran before. */
+/** Prepare, build and clean up; returns the previous image and what the sweep could not remove. */
 async function buildInto(
   ctx: OpContext,
   source: BuildSource,
@@ -1655,7 +1655,7 @@ async function reapImages(
 
 /** What the answer says about a sweep that could not finish. */
 function reapNote(failed: readonly string[]): string {
-  return failed.length === 0 ? '' : `; images left behind: ${failed.join('; ')}`
+  return failed.length === 0 ? '' : `; the image sweep did not finish: ${failed.join('; ')}`
 }
 
 /** The optional log id a caller picks, so its job can follow exactly this build. */
@@ -1736,7 +1736,7 @@ async function buildImage(
       BUILD_IMAGE,
       // Retention: the previous :dev image becomes untagged, and a prune keeps this one.
       '--label',
-      'idsh.keep=1',
+      KEEP_LABEL,
       '--file',
       path.join(dir, 'Dockerfile.dev'),
       dir,

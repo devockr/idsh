@@ -3099,7 +3099,10 @@ esac
     const answer = await connection.request({ op: 'deploy.main', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     // The build stays successful and says the sweep did not finish.
-    assert.match(answer.result ?? '', /images left behind: the image this build produced/u)
+    assert.match(
+      answer.result ?? '',
+      /the image sweep did not finish: the image this build produced/u,
+    )
     const docker = await readFile(dockerLog, 'utf8')
     assert.doesNotMatch(docker, /image rm/u)
   } finally {
