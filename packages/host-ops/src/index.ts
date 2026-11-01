@@ -155,7 +155,8 @@ export async function registerTools(
   }
   const ops: unknown[] = parsed
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call, statePath))
+  const catalogue = ops.map(value => asOp(value))
+  const tools = catalogue.map(op => toolFor(ctx, endpoint, op, catalogue, call, statePath))
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -252,11 +253,18 @@ function toolFor(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   op: DescribedOp,
+  ops: readonly DescribedOp[],
   call: BrokerCaller,
   statePath: string,
 ): HostTool {
   // A long operation says so; the tool call and the socket wait inherit it together.
   const timeoutMs = op.timeoutMs === undefined ? undefined : op.timeoutMs + OP_TIMEOUT_SLACK_MS
+  // The preview is its own operation with its own budget: resolving refs is not a build's wait.
+  const previewOp = ops.find(candidate => candidate.name === op.preview)
+  const previewEndpoint =
+    previewOp?.timeoutMs === undefined
+      ? endpoint
+      : { ...endpoint, timeoutMs: previewOp.timeoutMs + OP_TIMEOUT_SLACK_MS }
   return {
     name: toolName(op.name),
     description: op.summary,
@@ -297,7 +305,9 @@ function toolFor(
           ? await confirmed(ctx, op, input, exec, () =>
               op.preview === undefined
                 ? Promise.resolve(undefined)
-                : call(endpoint, op.preview, input, exec.signal).then(answer => answer.text),
+                : call(previewEndpoint, op.preview, previewArgs(op, ops, input), exec.signal).then(
+                    answer => answer.text,
+                  ),
             )
           : { ok: true }
       if (confirmation.ok === false) {
@@ -345,6 +355,31 @@ function asOp(value: unknown): DescribedOp {
       ? { timeoutMs }
       : {}),
   }
+}
+
+/**
+ * The arguments a preview gets: the ones it declares, and which operation it resolves for.
+ *
+ * A build's own `log` is not a source argument, and handing it over would make the preview refuse a
+ * request the build itself accepts.
+ */
+function previewArgs(
+  op: DescribedOp,
+  ops: readonly DescribedOp[],
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const preview = ops.find(candidate => candidate.name === op.preview)
+  const properties = readField(preview?.input, 'properties')
+  const accepted = isRecord(properties)
+    ? new Set([...Object.keys(properties), 'for'])
+    : new Set(['for'])
+  const args: Record<string, unknown> = { for: op.name }
+  for (const [key, value] of Object.entries(input)) {
+    if (accepted.has(key)) {
+      args[key] = value
+    }
+  }
+  return args
 }
 
 /** The person's answer: Run, or the reply they typed instead of choosing. */

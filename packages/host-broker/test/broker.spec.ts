@@ -3182,9 +3182,12 @@ esac
 
 void test('deploy.source resolves the request without building', async () => {
   const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
   const dockerPath = path.join(host.root, 'docker')
   const gitPath = path.join(host.root, 'git')
-  await writeFile(dockerPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  await writeFile(dockerPath, `#!/bin/sh\necho "$*" >> '${dockerLog}'\nexit 0\n`, {
+    mode: 0o755,
+  })
   await writeFile(
     gitPath,
     `#!/bin/sh
@@ -3212,10 +3215,19 @@ esac
     assert.equal(answered.ok, true, JSON.stringify(answered.error))
     assert.match(answered.result ?? '', /PR #82 at bbbbbbb22/u)
     assert.match(answered.result ?? '', /main at aaaaaaaa1/u)
-    // No argument is main, the same source deploy.main would build.
-    const main = await connection.request({ op: 'deploy.source', args: {} })
+    // `deploy.main` builds main, and its preview answers with main alone.
+    const main = await connection.request({
+      op: 'deploy.source',
+      args: { for: 'deploy.main' },
+    })
     assert.equal(main.ok, true, JSON.stringify(main.error))
     assert.equal(main.result, 'main at aaaaaaaa11111111111111111111111111111111')
+    // A preview resolves refs and nothing else: docker was never called.
+    assert.equal(await readFile(dockerLog, 'utf8').catch(() => ''), '')
+    // `deploy.build` with neither is refused here, before anyone is asked about it.
+    const empty = await connection.request({ op: 'deploy.source', args: {} })
+    assert.equal(empty.ok, false)
+    assert.match(empty.error?.message ?? '', /give exactly one of pr or sha/u)
   } finally {
     connection.close()
     await broker.close()

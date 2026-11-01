@@ -1043,17 +1043,25 @@ export const OPS: readonly OpDefinition[] = [
           type: 'string',
           description: 'The tip of an origin branch.',
         },
+        for: {
+          type: 'string',
+          description: 'The operation this resolves, so the check matches what that one accepts.',
+        },
       },
       additionalProperties: false,
     },
+    // git resolves refs in a second or two, but a slow origin is a build's problem, not a read's.
+    timeoutMs: BUILD_TIMEOUT_MS,
     async run(args, ctx) {
-      rejectUnknown(args, ['pr', 'sha'])
+      rejectUnknown(args, ['pr', 'sha', 'for'])
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      // No argument is main: the same source `deploy.main` would build, resolved the same way.
-      if (args['pr'] === undefined && args['sha'] === undefined) {
+      // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
+      if (args['for'] === 'deploy.main') {
         const main = await resolveMainSource(ctx, deadline)
         return `main at ${main.sha}`
       }
+      // Anything else is `deploy.build`, which refuses a request without one of the two — the
+      // preview refuses it too, so the person is never asked about a build that cannot start.
       const source = await resolveBuildSource(ctx, args, deadline)
       return `${source.label} at ${source.sha}; main at ${source.mainSha}`
     },
