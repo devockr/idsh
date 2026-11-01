@@ -884,7 +884,12 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   const pull =
     linesOf(
       await step('pull', () =>
-        git(ctx, ['pull', '--ff-only'], { timeoutMs: BUILD_TIMEOUT_MS }, checkout),
+        git(
+          ctx,
+          ['pull', '--ff-only'],
+          { stdoutOnly: true, timeoutMs: BUILD_TIMEOUT_MS },
+          checkout,
+        ),
       ),
     )[0] ?? ''
   done.push(`pull: ${pull}`)
@@ -921,8 +926,16 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   const replicas = await step('read the replica count', async () => {
     const text = await compose(['config', '--format', 'json'])
     const parsed: unknown = JSON.parse(text)
-    const count = fieldOf(parsed, 'services', service, 'deploy', 'replicas')
-    return typeof count === 'number' ? count : undefined
+    const entry = fieldOf(parsed, 'services', service)
+    // `scale` at the service's top level is the short form of `deploy.replicas`; either one asks
+    // for more than the single container this operation can verify.
+    for (const key of ['scaled' as const, 'replicas' as const]) {
+      const value = key === 'scaled' ? field(entry, 'scale') : fieldOf(entry, 'deploy', 'replicas')
+      if (typeof value === 'number' && value !== 1) {
+        return value
+      }
+    }
+    return undefined
   })
   if (replicas !== undefined && replicas !== 1) {
     throw new BrokerFault(

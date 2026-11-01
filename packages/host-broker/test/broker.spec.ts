@@ -2636,6 +2636,7 @@ async function gcbRig(
 ): Promise<GcbRig> {
   const host = await fakeHost()
   const recorded = path.join(host.root, 'calls.log')
+  const replaced = path.join(host.root, 'replaced')
   const dockerPath = path.join(host.root, 'docker')
   const arm = (name: string, body: string | undefined, fallback: string): string =>
     `  *"${name}"*) ${body ?? fallback} ;;`
@@ -2653,9 +2654,13 @@ async function gcbRig(
       arm('config --services', stub.services, 'echo gcb'),
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
       arm('config --format json', stub.config, `echo '{"services":{"gcb":{}}}'`),
-      arm('up -d --no-deps', stub.up, 'exit 0'),
+      arm('up -d --no-deps', stub.up, `touch ${JSON.stringify(replaced)}; exit 0`),
       arm('build --target', stub.build, 'exit 0'),
-      arm('ps -q', stub.ps, 'echo abc123'),
+      arm(
+        'ps -q',
+        stub.ps,
+        `if [ -e ${JSON.stringify(replaced)} ]; then echo def456; else echo abc123; fi`,
+      ),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect', stub.inspect, 'echo "running healthy"'),
       'esac',
@@ -2753,7 +2758,10 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
       /compose -f .*gcb-compose-0\.yml up(?! -d --no-deps --no-build --pull never --wait gcb$)/mu,
     )
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml ps -q gcb/u)
-    assert.match(recorded, /inspect --format .* abc123/u)
+    // The recreate replaces the container: the state read must be the new one, not the one that
+    // was running before it.
+    assert.match(recorded, /inspect --format .* def456/u)
+    assert.doesNotMatch(recorded, /inspect --format .* abc123/u)
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
     // The identity is the process's, not a hard-coded value a compose call happens to carry.
     const identities = recorded.split('\n').filter(line => line.startsWith('identity '))
@@ -2931,6 +2939,19 @@ void test('gcb.update reports a broker container that ps does not list', async (
       answer.error?.message ?? '',
       /completed: .*recreate: up -d --no-deps --no-build --pull never --wait gcb/u,
     )
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a service that declares a scale', async () => {
+  // The short form: `scale` at the service's top level, without `deploy.replicas`.
+  const rig = await gcbRig({ config: `echo '{"services":{"gcb":{"scale":2}}}'` })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
+    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
   } finally {
     await rig.close()
   }
