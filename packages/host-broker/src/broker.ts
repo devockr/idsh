@@ -129,26 +129,15 @@ async function composeFiles(value: string | undefined): Promise<string[] | undef
   if (entries.length === 0) {
     throw new Error('--gcb-compose needs at least one file')
   }
-  const files: string[] = []
-  for (const entry of entries) {
-    const file = await optionalPath(entry, '--gcb-compose', 'file')
-    if (file === undefined) {
-      throw new Error('--gcb-compose needs at least one file')
-    }
-    files.push(file)
-  }
-  return files
+  return Promise.all(entries.map(async entry => resolvePath(entry, '--gcb-compose', 'file')))
 }
 
 /** An optional path from the command line, resolved and checked to be what its flag promises. */
-async function optionalPath(
-  value: string | undefined,
+async function resolvePath(
+  value: string,
   flag: string,
   kind: 'directory' | 'file',
-): Promise<string | undefined> {
-  if (value === undefined) {
-    return undefined
-  }
+): Promise<string> {
   const resolved = path.resolve(value)
   const stats = await stat(resolved).catch(() => null)
   const matches = stats !== null && (kind === 'directory' ? stats.isDirectory() : stats.isFile())
@@ -156,6 +145,15 @@ async function optionalPath(
     throw new Error(`${flag} must be an existing ${kind}, got ${resolved}`)
   }
   return resolved
+}
+
+/** The same check, for a flag that may be absent: absent resolves to undefined, not a fault. */
+async function optionalPath(
+  value: string | undefined,
+  flag: string,
+  kind: 'directory' | 'file',
+): Promise<string | undefined> {
+  return value === undefined ? undefined : resolvePath(value, flag, kind)
 }
 
 /** First candidate that exists and is executable. */

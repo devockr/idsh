@@ -817,12 +817,9 @@ const linesOf = (output: string): string[] =>
     .map(line => line.trim())
     .filter(line => line !== '')
 
-/** The "which steps already worked" suffix, as a string a message can append. */
-const suffix = (done: readonly string[]): string =>
-  done.length === 0 ? '' : `; completed: ${done.join('; ')}`
-
-/** A refusal that says which steps already worked, when any did. */
-const withCompleted = (message: string, done: readonly string[]): string => message + suffix(done)
+/** A message that says which steps already worked, when any did. */
+const withCompleted = (message: string, done: readonly string[]): string =>
+  done.length === 0 ? message : `${message}; completed: ${done.join('; ')}`
 
 /** How long the post-update probe may take; it answers over the network, unlike a local read. */
 const PROBE_TIMEOUT_MS = 60_000
@@ -875,10 +872,8 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       return await work()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (error instanceof BrokerFault) {
-        throw new BrokerFault(error.code, `gcb.update: ${name} failed: ${message}${suffix(done)}`)
-      }
-      throw new BrokerFault('unavailable', `gcb.update: ${name} failed: ${message}${suffix(done)}`)
+      const failure = withCompleted(`gcb.update: ${name} failed: ${message}`, done)
+      throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
     }
   }
   const pull =
