@@ -933,7 +933,8 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       (value): value is number => typeof value === 'number' && value !== 1,
     )
   })
-  if (replicas !== undefined && replicas !== 1) {
+  // `find` only returns a count that is not one, so its presence is the refusal.
+  if (replicas !== undefined) {
     throw new BrokerFault(
       'unavailable',
       withCompleted(
