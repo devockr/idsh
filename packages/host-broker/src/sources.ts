@@ -929,13 +929,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     const entry = fieldOf(parsed, 'services', service)
     // `scale` at the service's top level is the short form of `deploy.replicas`; either one asks
     // for more than the single container this operation can verify.
-    for (const key of ['scaled' as const, 'replicas' as const]) {
-      const value = key === 'scaled' ? field(entry, 'scale') : fieldOf(entry, 'deploy', 'replicas')
-      if (typeof value === 'number' && value !== 1) {
-        return value
-      }
-    }
-    return undefined
+    return [field(entry, 'scale'), fieldOf(entry, 'deploy', 'replicas')].find(
+      (value): value is number => typeof value === 'number' && value !== 1,
+    )
   })
   if (replicas !== undefined && replicas !== 1) {
     throw new BrokerFault(
