@@ -9,6 +9,7 @@ prune -a --filter 'label!=idsh.keep=1'`; what changes is that the exemption is b
 instead of relying on an operator. After a build at most two such images stay on disk; one whose
 `docker image rm` fails stays until a later build retries it, and a listing longer than the broker's
 output window removes nothing rather than sweeping the part it can see — as does an image this build
-produced that does not resolve, since removing it would take the tag the recreate is about to use.
+produced that does not resolve, since removing it would take the tag the recreate is about to use,
+nor one that ran out of the build's time and stopped where it stood.
 The build answer names whichever happened, so a sweep that finished short is visible instead of
 looking complete.

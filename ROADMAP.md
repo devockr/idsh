@@ -16,11 +16,12 @@ same for the credential broker — its checkout, the image its compose names, an
 container. A build retires the labelled images it makes unnecessary — every `idsh.keep=1`
 image that is neither the one it produced nor the recorded target — so after a build at most
 two of them stay on disk. A sweep that could not finish says so in the build answer — a
-removal that failed, a listing cut at the broker's output window, or an image this build
-produced that does not resolve — and the next build tries again. `resolve-then-ask` is the
-next item in this slice, and the rest of the phase list (including `run` and its allowlist,
-and a deployment that rolls itself back when it will not come up) is still the plan. This
-file is the contract the implementation is judged against.
+removal that failed, a listing cut at the broker's output window, an image this build
+produced that does not resolve, or a sweep that ran out of the build's time — and the next
+build tries again. `resolve-then-ask` is the next item in this slice, and the rest of the
+phase list (including `run` and its allowlist, and a deployment that rolls itself back when
+it will not come up) is still the plan. This file is the contract the implementation is
+judged against.
 
 ## The problem
 
