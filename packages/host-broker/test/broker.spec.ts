@@ -2646,7 +2646,9 @@ async function gcbRig(
       `printf '%s\\n' "$*" >> ${JSON.stringify(recorded)}`,
       // Compose interpolates \${UID}/\${GID}; a compose call without them fails here, the way it
       // fails for real when the broker's environment lacks them.
-      'case "$*" in compose*) if [ -z "$UID" ] || [ -z "$GID" ] || [ "$UID" = ambient-uid ] || [ "$GID" = ambient-gid ]; then echo "required variable UID is missing a value" >&2; exit 1; fi ;; esac',
+      'case "$*" in compose*) if [ -z "$UID" ] || [ -z "$GID" ] || [ "$UID" = ambient-uid ] || [ "$GID" = ambient-gid ]; then echo "required variable UID is missing a value" >&2; exit 1; fi; printf \'identity uid=%s gid=%s\\n\' "$UID" "$GID" >> ' +
+        JSON.stringify(recorded) +
+        ' ;; esac',
       'case "$*" in',
       arm('config --services', stub.services, 'echo gcb'),
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
@@ -2753,6 +2755,13 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml ps -q gcb/u)
     assert.match(recorded, /inspect --format .* abc123/u)
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
+    // The identity is the process's, not a hard-coded value a compose call happens to carry.
+    const identities = recorded.split('\n').filter(line => line.startsWith('identity '))
+    assert.ok(identities.length > 0)
+    const expected = `identity uid=${String(process.getuid?.())} gid=${String(process.getgid?.())}`
+    for (const line of identities) {
+      assert.equal(line, expected)
+    }
     // The same pattern the replica test forbids does match a real build and recreate, so its
     // absence there means something.
     assert.match(recorded, /(?:^build |compose -f .*gcb-compose-0\.yml up )/mu)
