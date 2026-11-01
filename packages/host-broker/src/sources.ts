@@ -1481,6 +1481,8 @@ async function buildInto(
     // Recorded before the build, so the tag moving is what makes this the rollback target.
     const previous = await recordRollback(ctx)
     await buildImage(ctx, dir, deadline, logId)
+    // Best effort: an image that cannot be removed is left for the next build, not an error.
+    await reapImages(ctx, previous).catch(() => null)
     return previous
   } finally {
     // Best effort: a cleanup failure must not turn a tagged image into an error.
@@ -1567,6 +1569,50 @@ async function recordRollback(ctx: OpContext): Promise<string> {
   await chmod(file, FILE_MODE).catch(() => null)
   return previous
 }
+/**
+ * Retire the builds this one makes unnecessary.
+ *
+ * The build labels every image it produces `idsh.keep=1`, which is how the host's prune keeps them
+ * and how this finds them again. A label means "built here, kept until superseded", not "this is
+ * the rollback target", so the label alone is unbounded: after a build, every labelled image that
+ * is neither the one the build produced nor the recorded target is retired, which leaves at most
+ * two. The running container is the recorded target at this point — the recreate has not happened
+ * yet — and both are kept.
+ */
+async function reapImages(ctx: OpContext, previous: string): Promise<void> {
+  const ids = linesOf(
+    await docker(
+      ctx,
+      ['image', 'ls', '--quiet', '--no-trunc', '--filter', 'label=idsh.keep=1'],
+      'head',
+      {
+        stdoutOnly: true,
+      },
+    ),
+  )
+  if (ids.length === 0) {
+    return
+  }
+  const keep = new Set<string>()
+  for (const ref of [previous, BUILD_IMAGE]) {
+    // A digest recorded for a pulled image, or a tag that is gone, resolves to nothing here: it is
+    // not on disk under this daemon, so it is not a reason to keep an id.
+    const id = await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', ref], 'head', {
+      stdoutOnly: true,
+    }).catch(() => '')
+    const resolved = id.trim()
+    if (resolved !== '') {
+      keep.add(resolved)
+    }
+  }
+  for (const id of ids) {
+    if (keep.has(id)) {
+      continue
+    }
+    await docker(ctx, ['image', 'rm', id]).catch(() => null)
+  }
+}
+
 /** The optional log id a caller picks, so its job can follow exactly this build. */
 function optionalLog(args: Record<string, unknown>): string | undefined {
   const log = args['log']

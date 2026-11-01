@@ -1823,6 +1823,12 @@ esac
     `#!/bin/sh
 echo "$*" >> '${dockerLog}'
 case "$1" in
+  image)
+    case "$2" in
+      ls) printf 'sha256:old1\\nsha256:old2\\nsha256:new\\n' ;;
+      inspect) echo "sha256:new" ;;
+      rm) echo "removed $3" ;;
+    esac ;;
   inspect) echo '${ROLLBACK_TARGET}' ;;
   compose) echo "$*" ;;
 esac
@@ -1865,6 +1871,12 @@ esac
     )
     const docker = await readFile(dockerLog, 'utf8')
     assert.match(docker, /build --tag devockr\/idsh:dev --label idsh\.keep=1/u)
+    // The build retires the labelled images it made unnecessary: neither the new image nor the
+    // recorded target is removed.
+    assert.match(docker, /image ls --quiet --no-trunc --filter label=idsh\.keep=1/u)
+    assert.match(docker, /image rm sha256:old1/u)
+    assert.match(docker, /image rm sha256:old2/u)
+    assert.doesNotMatch(docker, /image rm sha256:new/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     assert.equal(rollback, ROLLBACK_TARGET + '\n')
   } finally {
