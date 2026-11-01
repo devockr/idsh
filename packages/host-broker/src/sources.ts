@@ -1000,7 +1000,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
             id,
           ],
           'head',
-          { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+          { stdoutOnly: true, timeoutMs: GCB_QUERY_TIMEOUT_MS },
         ),
       ),
     ),

@@ -2865,6 +2865,20 @@ void test('gcb.update does not read a ps warning as a second container', async (
   }
 })
 
+void test('gcb.update ignores a warning an inspect emits', async () => {
+  // A warning on stderr must not become part of the state string and fail the check.
+  const rig = await gcbRig({
+    inspect: 'echo "WARN[0000] something to say" >&2; echo "running healthy"',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true)
+    assert.match(answer.result ?? '', /state: running healthy; probe:/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update accepts a broker container without a healthcheck', async () => {
   const rig = await gcbRig({ inspect: 'echo running' })
   try {
