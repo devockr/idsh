@@ -190,6 +190,7 @@ function runFixed(
     }
     ctx.signal?.addEventListener('abort', onAbort, { once: true })
     const logPath = options.logPath
+    let announcedCut = false
     const collect = (chunk: Buffer): void => {
       if (logPath !== undefined) {
         // Chunks arrive in order but the writes are async: chain them, so the file is ordered.
@@ -199,7 +200,10 @@ function runFixed(
       }
       buffer = Buffer.concat([buffer, chunk])
       if (buffer.length > MAX_EXEC_BUFFER_BYTES) {
-        options.onTruncated?.()
+        if (!announcedCut) {
+          announcedCut = true
+          options.onTruncated?.()
+        }
         // The retained window's start never reaches a client: the answer cap keeps the last
         // 64 KiB of it, and that boundary is repaired by `decodeTail`.
         buffer =
@@ -1648,11 +1652,20 @@ async function reapImages(
   // The recorded target is an id when the image was built here, and a digest when it was pulled: a
   // digest is not on this daemon, and docker refuses to remove an image a running container uses,
   // so a failed lookup is a form this keeps as-is rather than a reason to remove it.
-  const target = await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', previous], 'head', {
-    stdoutOnly: true,
-    timeoutMs: timeoutMs(),
-  }).catch(() => '')
-  keep.add(target.trim() === '' ? previous : target.trim())
+  if (/^sha256:[0-9a-f]+$/u.test(previous)) {
+    keep.add(previous)
+  } else {
+    const target = await docker(
+      ctx,
+      ['image', 'inspect', '--format', '{{.Id}}', previous],
+      'head',
+      {
+        stdoutOnly: true,
+        timeoutMs: timeoutMs(),
+      },
+    ).catch(() => '')
+    keep.add(target.trim() === '' ? previous : target.trim())
+  }
 
   const failed: string[] = []
   for (const id of ids) {

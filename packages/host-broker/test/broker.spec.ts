@@ -1825,10 +1825,9 @@ echo "$*" >> '${dockerLog}'
 case "$1" in
   image)
     case "$2" in
-      ls) printf 'sha256:old1\\nsha256:old2\\nsha256:target\\nsha256:new\\n' ;;
+      ls) printf 'sha256:old1\\nsha256:old2\\n${ROLLBACK_TARGET}\\nsha256:new\\n' ;;
       inspect)
         case "$5" in
-          '${ROLLBACK_TARGET}') echo "sha256:target" ;;
           devockr/idsh:dev) echo "sha256:new" ;;
           *) echo "sha256:unrelated" ;;
         esac ;;
@@ -1882,7 +1881,7 @@ esac
     assert.match(docker, /image rm sha256:old1/u)
     assert.match(docker, /image rm sha256:old2/u)
     // The recorded target is kept even though it carries the label, and so is the new image.
-    assert.doesNotMatch(docker, /image rm sha256:target/u)
+    assert.doesNotMatch(docker, new RegExp(`image rm ${ROLLBACK_TARGET}`, 'u'))
     assert.doesNotMatch(docker, /image rm sha256:new/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     assert.equal(rollback, ROLLBACK_TARGET + '\n')
