@@ -609,6 +609,9 @@ const BUILD_COMMAND = 'pnpm install --frozen-lockfile && pnpm build'
 /** The image that carries node and pnpm for the build step. */
 const BUILD_CONTAINER = 'devockr/idsh:base'
 
+/** The label every image this broker builds carries, so a prune keeps it and the sweep finds it. */
+const KEEP_LABEL = 'idsh.keep=1'
+
 const BUILD_IMAGE = 'devockr/idsh:dev'
 
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
@@ -621,6 +624,11 @@ function noteFailure(logPath: string, error: Error): void {
   void appendFile(logPath, `spawn failed: ${error.message}\n`, {
     mode: FILE_MODE,
   }).catch(() => null)
+}
+
+/** What an unknown value says when it is turned into a message. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** What is left of one operation's budget. */
@@ -1128,8 +1136,11 @@ export const OPS: readonly OpDefinition[] = [
       const log = optionalLog(args)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveBuildSource(ctx, args, deadline)
-      const previous = await buildInto(ctx, source, deadline, log)
-      return `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}`
+      const { previous, failed } = await buildInto(ctx, source, deadline, log)
+      return (
+        `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}` +
+        reapNote(failed)
+      )
     },
   },
   {
@@ -1154,9 +1165,11 @@ export const OPS: readonly OpDefinition[] = [
       const checkout = requireCheckout(ctx)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveMainSource(ctx, deadline)
-      const previous = await buildInto(ctx, source, deadline, log)
+      const { previous, failed } = await buildInto(ctx, source, deadline, log)
       return {
-        text: `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}`,
+        text:
+          `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}` +
+          reapNote(failed),
         after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
       }
     },
@@ -1475,15 +1488,18 @@ async function buildInto(
   source: BuildSource,
   deadline: number,
   logId: string | undefined,
-): Promise<string> {
+): Promise<{ previous: string; failed: readonly string[] }> {
   const dir = await prepareBuildSource(ctx, source, deadline)
   try {
     // Recorded before the build, so the tag moving is what makes this the rollback target.
     const previous = await recordRollback(ctx)
     await buildImage(ctx, dir, deadline, logId)
-    // Best effort: an image that cannot be removed is left for the next build, not an error.
-    await reapImages(ctx, previous).catch(() => null)
-    return previous
+    // Best effort: an image that cannot be removed is left for the next build, not an error, but the
+    // answer says so — a silent failure would look like the bound held.
+    const failed = await reapImages(ctx, previous, deadline).catch((error: unknown) => [
+      messageOf(error),
+    ])
+    return { previous, failed }
   } finally {
     // Best effort: a cleanup failure must not turn a tagged image into an error.
     await rm(dir, { recursive: true, force: true }).catch(() => null)
@@ -1575,42 +1591,71 @@ async function recordRollback(ctx: OpContext): Promise<string> {
  * The build labels every image it produces `idsh.keep=1`, which is how the host's prune keeps them
  * and how this finds them again. A label means "built here, kept until superseded", not "this is
  * the rollback target", so the label alone is unbounded: after a build, every labelled image that
- * is neither the one the build produced nor the recorded target is retired, which leaves at most
- * two. The running container is the recorded target at this point — the recreate has not happened
- * yet — and both are kept.
+ * is neither the one the build produced nor the recorded target is retired. A successful removal is
+ * what makes "at most two" true; anything it could not remove is reported, and the next build tries
+ * again.
+ *
+ * @returns What could not be removed, empty when the sweep finished.
  */
-async function reapImages(ctx: OpContext, previous: string): Promise<void> {
+async function reapImages(
+  ctx: OpContext,
+  previous: string,
+  deadline: number,
+): Promise<readonly string[]> {
+  const timeoutMs = (): number => remaining(deadline)
   const ids = linesOf(
     await docker(
       ctx,
-      ['image', 'ls', '--quiet', '--no-trunc', '--filter', 'label=idsh.keep=1'],
+      ['image', 'ls', '--quiet', '--no-trunc', '--filter', `label=${KEEP_LABEL}`],
       'head',
-      {
-        stdoutOnly: true,
-      },
+      { stdoutOnly: true, timeoutMs: timeoutMs() },
     ),
   )
   if (ids.length === 0) {
-    return
+    return []
   }
   const keep = new Set<string>()
-  for (const ref of [previous, BUILD_IMAGE]) {
-    // A digest recorded for a pulled image, or a tag that is gone, resolves to nothing here: it is
-    // not on disk under this daemon, so it is not a reason to keep an id.
-    const id = await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', ref], 'head', {
+  // The image this build produced must survive: losing it loses the `:dev` tag the recreate uses.
+  // When it cannot be resolved, nothing is removed at all rather than guessed at.
+  const built = await docker(
+    ctx,
+    ['image', 'inspect', '--format', '{{.Id}}', BUILD_IMAGE],
+    'head',
+    {
       stdoutOnly: true,
-    }).catch(() => '')
-    const resolved = id.trim()
-    if (resolved !== '') {
-      keep.add(resolved)
-    }
+      timeoutMs: timeoutMs(),
+    },
+  ).catch(() => '')
+  if (built.trim() === '') {
+    return ['the image this build produced could not be resolved, so nothing was removed']
   }
+  keep.add(built.trim())
+  // The recorded target is an id when the image was built here, and a digest when it was pulled: a
+  // digest is not on this daemon, and docker refuses to remove an image a running container uses,
+  // so a failed lookup is a form this keeps as-is rather than a reason to remove it.
+  const target = await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', previous], 'head', {
+    stdoutOnly: true,
+    timeoutMs: timeoutMs(),
+  }).catch(() => '')
+  keep.add(target.trim() === '' ? previous : target.trim())
+
+  const failed: string[] = []
   for (const id of ids) {
     if (keep.has(id)) {
       continue
     }
-    await docker(ctx, ['image', 'rm', id]).catch(() => null)
+    try {
+      await docker(ctx, ['image', 'rm', id], 'tail', { timeoutMs: timeoutMs() })
+    } catch (error) {
+      failed.push(`${id}: ${messageOf(error)}`)
+    }
   }
+  return failed
+}
+
+/** What the answer says about a sweep that could not finish. */
+function reapNote(failed: readonly string[]): string {
+  return failed.length === 0 ? '' : `; images left behind: ${failed.join('; ')}`
 }
 
 /** The optional log id a caller picks, so its job can follow exactly this build. */

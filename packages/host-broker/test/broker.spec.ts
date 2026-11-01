@@ -1825,8 +1825,12 @@ echo "$*" >> '${dockerLog}'
 case "$1" in
   image)
     case "$2" in
-      ls) printf 'sha256:old1\\nsha256:old2\\nsha256:new\\n' ;;
-      inspect) echo "sha256:new" ;;
+      ls) printf 'sha256:old1\\nsha256:old2\\nsha256:target\\nsha256:new\\n' ;;
+      inspect)
+        case "$5" in
+          '${ROLLBACK_TARGET}') echo "sha256:target" ;;
+          *) echo "sha256:new" ;;
+        esac ;;
       rm) echo "removed $3" ;;
     esac ;;
   inspect) echo '${ROLLBACK_TARGET}' ;;
@@ -1876,6 +1880,8 @@ esac
     assert.match(docker, /image ls --quiet --no-trunc --filter label=idsh\.keep=1/u)
     assert.match(docker, /image rm sha256:old1/u)
     assert.match(docker, /image rm sha256:old2/u)
+    // The recorded target is kept even though it carries the label, and so is the new image.
+    assert.doesNotMatch(docker, /image rm sha256:target/u)
     assert.doesNotMatch(docker, /image rm sha256:new/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     assert.equal(rollback, ROLLBACK_TARGET + '\n')
@@ -3042,4 +3048,62 @@ void test('an empty compose list is refused at boot', async () => {
     }),
     /--gcb-compose needs at least one file/u,
   )
+})
+
+void test('deploy.main removes nothing when it cannot resolve the image it built', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$1" in
+  image)
+    case "$2" in
+      ls) printf 'sha256:old1\\nsha256:old2\\n' ;;
+      # The image this build produced cannot be resolved: nothing may be removed on a guess.
+      inspect) exit 1 ;;
+      rm) echo "removed $3" ;;
+    esac ;;
+  inspect) echo '${ROLLBACK_TARGET}' ;;
+  compose) echo "$*" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.main', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    // The build stays successful and says the sweep did not finish.
+    assert.match(answer.result ?? '', /images left behind: the image this build produced/u)
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.doesNotMatch(docker, /image rm/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
 })
