@@ -2588,6 +2588,30 @@ void test('proc.list answers unavailable when /proc is not readable', async () =
   }
 })
 
+/**
+ * Runs `work` with a sentinel UID/GID in the environment, so an inherited value cannot pass for
+ * one.
+ */
+async function withAmbientUid<T>(work: () => Promise<T>): Promise<T> {
+  const previous = { uid: process.env['UID'], gid: process.env['GID'] }
+  process.env['UID'] = 'ambient-uid'
+  process.env['GID'] = 'ambient-gid'
+  try {
+    return await work()
+  } finally {
+    for (const [name, value] of [
+      ['UID', previous.uid],
+      ['GID', previous.gid],
+    ] as const) {
+      if (value === undefined) {
+        delete process.env[name]
+      } else {
+        process.env[name] = value
+      }
+    }
+  }
+}
+
 interface GcbRig {
   connection: ReturnType<typeof client>
   /** Every docker invocation the fake recorded, one per line. */
@@ -2622,7 +2646,7 @@ async function gcbRig(
       `printf '%s\\n' "$*" >> ${JSON.stringify(recorded)}`,
       // Compose interpolates \${UID}/\${GID}; a compose call without them fails here, the way it
       // fails for real when the broker's environment lacks them.
-      'case "$*" in compose*) [ -n "$UID" ] && [ -n "$GID" ] || { echo "required variable UID is missing a value" >&2; exit 1; } ;; esac',
+      'case "$*" in compose*) if [ -z "$UID" ] || [ -z "$GID" ] || [ "$UID" = ambient-uid ] || [ "$GID" = ambient-gid ]; then echo "required variable UID is missing a value" >&2; exit 1; fi ;; esac',
       'case "$*" in',
       arm('config --services', stub.services, 'echo gcb'),
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
@@ -2707,7 +2731,11 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
       3 * BUILD_TIMEOUT_MS + GCB_PROBE_MS + GCB_QUERY_COUNT * GCB_QUERY_MS,
     )
 
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    // The runner may export UID/GID of its own; the sentinel proves the compose calls got `composeEnv`
+    // rather than whatever the process happened to inherit.
+    const answer = await withAmbientUid(() =>
+      rig.connection.request({ op: 'gcb.update', args: {} }),
+    )
     assert.equal(answer.ok, true)
     const recorded = await rig.calls()
     assert.match(recorded, /git -C .*gcb pull --ff-only/u)
