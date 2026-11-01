@@ -156,6 +156,24 @@ export async function registerTools(
   const ops: unknown[] = parsed
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
   const catalogue = ops.map(value => asOp(value))
+  // The preview is called before the confirmation gate, so an unknown name would fail the deploy
+  // with an operation fault and a destructive one would run unasked.
+  for (const op of catalogue) {
+    if (op.preview === undefined) {
+      continue
+    }
+    const preview = catalogue.find(candidate => candidate.name === op.preview)
+    if (preview === undefined) {
+      throw new Error(
+        `host-ops: ${op.name} previews ${op.preview}, which the broker does not offer`,
+      )
+    }
+    if (preview.confirm === true) {
+      throw new Error(
+        `host-ops: ${op.name} previews ${op.preview}, which itself needs confirmation`,
+      )
+    }
+  }
   const tools = catalogue.map(op => toolFor(ctx, endpoint, op, catalogue, call, statePath))
   const names = new Set<string>()
   for (const tool of tools) {

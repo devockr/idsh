@@ -866,6 +866,11 @@ void test('an unresolvable preview is an error, not a question', async () => {
       confirm: true,
       preview: 'deploy.source',
     },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+    },
   ]
   const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
   const broker = await fakeBroker(request =>
@@ -937,5 +942,39 @@ void test('the preview does not see arguments its operation does not accept', as
     assert.deepEqual(build?.args, { pr: 82, log: 'call-1' })
   } finally {
     await broker.close()
+  }
+})
+
+void test('a missing or destructive preview is refused at registration', async () => {
+  const missing = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      preview: 'deploy.source',
+    },
+  ]
+  const destructive = [
+    ...missing,
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+    },
+  ]
+  for (const [table, message] of [
+    [missing, /previews deploy\.source, which the broker does not offer/u],
+    [destructive, /previews deploy\.source, which itself needs confirmation/u],
+  ] as const) {
+    const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+    const broker = await fakeBroker(() => describe)
+    try {
+      const { ctx } = context()
+      await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }), message)
+    } finally {
+      await broker.close()
+    }
   }
 })

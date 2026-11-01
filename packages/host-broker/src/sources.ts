@@ -1029,44 +1029,6 @@ async function updateBroker(ctx: OpContext): Promise<string> {
 
 export const OPS: readonly OpDefinition[] = [
   {
-    name: 'deploy.source',
-    summary:
-      'Resolve what deploy.build would build — the branch tip and main — or main alone, without building.',
-    input: {
-      type: 'object',
-      properties: {
-        pr: {
-          type: 'integer',
-          description: 'A same-repository PR number; its head must be on an origin branch.',
-        },
-        sha: {
-          type: 'string',
-          description: 'The tip of an origin branch.',
-        },
-        for: {
-          type: 'string',
-          description: 'The operation this resolves, so the check matches what that one accepts.',
-        },
-      },
-      additionalProperties: false,
-    },
-    // git resolves refs in a second or two, but a slow origin is a build's problem, not a read's.
-    timeoutMs: BUILD_TIMEOUT_MS,
-    async run(args, ctx) {
-      rejectUnknown(args, ['pr', 'sha', 'for'])
-      const deadline = Date.now() + BUILD_TIMEOUT_MS
-      // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
-      if (args['for'] === 'deploy.main') {
-        const main = await resolveMainSource(ctx, deadline)
-        return `main at ${main.sha}`
-      }
-      // Anything else is `deploy.build`, which refuses a request without one of the two — the
-      // preview refuses it too, so the person is never asked about a build that cannot start.
-      const source = await resolveBuildSource(ctx, args, deadline)
-      return `${source.label} at ${source.sha}; main at ${source.mainSha}`
-    },
-  },
-  {
     name: 'log.tail',
     summary: 'The last lines of a host log, optionally only the lines containing a literal string.',
     keep: 'tail',
@@ -1154,6 +1116,44 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['lines'])
       const lines = integer(args, 'lines', 1, MAX_LOG_LINES, DEFAULT_LOG_LINES)
       return docker(ctx, ['logs', '--tail', String(lines), ctx.container], 'tail')
+    },
+  },
+  {
+    name: 'deploy.source',
+    summary:
+      'Resolve what deploy.build would build — the branch tip and main — or main alone, without building.',
+    input: {
+      type: 'object',
+      properties: {
+        pr: {
+          type: 'integer',
+          description: 'A same-repository PR number; its head must be on an origin branch.',
+        },
+        sha: {
+          type: 'string',
+          description: 'The tip of an origin branch.',
+        },
+        for: {
+          type: 'string',
+          description: 'The operation this resolves, so the check matches what that one accepts.',
+        },
+      },
+      additionalProperties: false,
+    },
+    // git resolves refs in a second or two, but a slow origin is a build's problem, not a read's.
+    timeoutMs: BUILD_TIMEOUT_MS,
+    async run(args, ctx) {
+      rejectUnknown(args, ['pr', 'sha', 'for'])
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
+      if (args['for'] === 'deploy.main') {
+        const main = await resolveMainSource(ctx, deadline)
+        return `main at ${main.sha}`
+      }
+      // Anything else is `deploy.build`, which refuses a request without one of the two — the
+      // preview refuses it too, so the person is never asked about a build that cannot start.
+      const source = await resolveBuildSource(ctx, args, deadline)
+      return `${source.label} at ${source.sha}; main at ${source.mainSha}`
     },
   },
   {

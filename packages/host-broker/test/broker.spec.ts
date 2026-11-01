@@ -308,11 +308,11 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     assert.deepEqual(
       ops.map(op => op.name),
       [
-        'deploy.source',
         'log.tail',
         'proc.read',
         'deploy.status',
         'deploy.log',
+        'deploy.source',
         'deploy.build',
         'deploy.main',
         'deploy.rollback',
