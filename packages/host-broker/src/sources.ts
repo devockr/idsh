@@ -1636,36 +1636,19 @@ async function reapImages(
   const keep = new Set<string>()
   // The image this build produced must survive: losing it loses the `:dev` tag the recreate uses.
   // When it cannot be resolved, nothing is removed at all rather than guessed at.
-  const built = await docker(
-    ctx,
-    ['image', 'inspect', '--format', '{{.Id}}', BUILD_IMAGE],
-    'head',
-    {
-      stdoutOnly: true,
-      timeoutMs: timeoutMs(),
-    },
-  ).catch(() => '')
-  if (built.trim() === '') {
+  const built = await imageId(ctx, BUILD_IMAGE, timeoutMs())
+  if (built === '') {
     return ['the image this build produced could not be resolved, so nothing was removed']
   }
-  keep.add(built.trim())
+  keep.add(built)
   // The recorded target is an id when the image was built here, and a digest when it was pulled: a
   // digest is not on this daemon, and docker refuses to remove an image a running container uses,
   // so a failed lookup is a form this keeps as-is rather than a reason to remove it.
-  if (/^sha256:[0-9a-f]+$/u.test(previous)) {
-    keep.add(previous)
-  } else {
-    const target = await docker(
-      ctx,
-      ['image', 'inspect', '--format', '{{.Id}}', previous],
-      'head',
-      {
-        stdoutOnly: true,
-        timeoutMs: timeoutMs(),
-      },
-    ).catch(() => '')
-    keep.add(target.trim() === '' ? previous : target.trim())
-  }
+  keep.add(
+    /^sha256:[0-9a-f]+$/u.test(previous)
+      ? previous
+      : (await imageId(ctx, previous, timeoutMs())) || previous,
+  )
 
   const failed: string[] = []
   for (const id of ids) {
@@ -1679,6 +1662,15 @@ async function reapImages(
     }
   }
   return failed
+}
+
+/** The id a reference resolves to on this daemon, or nothing when it does not resolve here. */
+async function imageId(ctx: OpContext, ref: string, timeoutMs: number): Promise<string> {
+  const text = await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', ref], 'head', {
+    stdoutOnly: true,
+    timeoutMs,
+  }).catch(() => '')
+  return text.trim()
 }
 
 /** What the answer says about a sweep that could not finish. */
