@@ -2952,6 +2952,9 @@ void test('gcb.update refuses a service that declares a scale', async () => {
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
     assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    // Refused before either side effect, like the `deploy.replicas` form.
+    const recorded = await rig.calls()
+    assert.doesNotMatch(recorded, /^(?:build |compose -f .* up )/mu)
   } finally {
     await rig.close()
   }
