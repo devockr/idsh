@@ -1137,13 +1137,23 @@ export const OPS: readonly OpDefinition[] = [
           type: 'string',
           description: 'The operation this resolves, so the check matches what that one accepts.',
         },
+        log: {
+          type: 'string',
+          description: 'Checked exactly as the build checks it, and otherwise unused.',
+          pattern: '^[\\w-]{1,64}$',
+        },
       },
       additionalProperties: false,
     },
     // git resolves refs in a second or two, but a slow origin is a build's problem, not a read's.
     timeoutMs: BUILD_TIMEOUT_MS,
     async run(args, ctx) {
-      rejectUnknown(args, ['pr', 'sha', 'for'])
+      rejectUnknown(args, ['pr', 'sha', 'for', 'log'])
+      // The whole request is checked here, not only the part this resolves: an argument the build
+      // would refuse must not reach the person as a question they cannot answer usefully.
+      if (args['log'] !== undefined) {
+        optionalLog(args)
+      }
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
       if (args['for'] === 'deploy.main') {

@@ -3231,6 +3231,14 @@ esac
     })
     assert.equal(mixed.ok, false)
     assert.match(mixed.error?.message ?? '', /give pr or sha to deploy\.build instead/u)
+    // The whole request is checked, not only the part the preview uses: a `log` the build would
+    // refuse must not reach the person as a question.
+    const badLog = await connection.request({
+      op: 'deploy.source',
+      args: { pr: 82, log: 'bad/log' },
+    })
+    assert.equal(badLog.ok, false)
+    assert.match(badLog.error?.message ?? '', /log must be 1-64 letters/u)
     // `deploy.build` with neither is refused here, before anyone is asked about it.
     const empty = await connection.request({ op: 'deploy.source', args: {} })
     assert.equal(empty.ok, false)
