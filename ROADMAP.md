@@ -206,12 +206,12 @@ must be reachable from a branch in the same repository; a fork's head is refused
 
 **Confirmation happens inside the tool call.** `deploy.build` and `deploy.main` resolve
 their source first and ask a question through the user question service — the request, the
-branch tip and `main` it resolves to, a summary of the change — and block until it is
-answered. The build resolves both again when it runs, so a branch that moves while the
-question is open is built at its new tip; the answer names the SHAs it built, so what was
-approved and what ran are both on the record. The model cannot answer the question, and it
-cannot deploy and then ask: the deployment is inside the same call. Approval cannot do this
-job: under the `never` policy it is rejected before anyone is asked.
+branch tip and the `main` it resolves to — and block until it is answered. The build
+resolves both again when it runs, so a branch that moves while the question is open is built
+at its new tip; the answer names the SHAs it built, so what was approved and what ran are
+both on the record. The model cannot answer the question, and it cannot deploy and then ask:
+the deployment is inside the same call. Approval cannot do this job: under the `never`
+policy it is rejected before anyone is asked.
 
 **The files that run as root are pinned to main.** The image starts as root and drops to the
 deployment's uid; anything executed before that drop is root, and it can write the mounts. So
