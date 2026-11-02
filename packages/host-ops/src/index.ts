@@ -156,12 +156,23 @@ export async function registerTools(
 ): Promise<void> {
   const described = await call(endpoint, 'ops.describe', {})
   const parsed: unknown = JSON.parse(described.text)
-  if (!Array.isArray(parsed)) {
+  // A broker older than this plugin answers with the bare table: usable, but it cannot say which
+  // arguments it takes beyond the ones in the entry, so the mismatch is worth one line in the log.
+  const describedTable = isRecord(parsed) ? parsed : undefined
+  const table: unknown[] | undefined =
+    describedTable === undefined
+      ? Array.isArray(parsed)
+        ? parsed
+        : undefined
+      : Array.isArray(describedTable['ops'])
+        ? (describedTable['ops'] as unknown[])
+        : undefined
+  if (table === undefined) {
     throw new TypeError('the broker did not describe a table of operations')
   }
-  const ops: unknown[] = parsed
+  warnProtocol(ctx, describedTable)
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const catalogue = ops.map(value => asOp(value))
+  const catalogue = table.map(value => asOp(value))
   // The preview is called before the confirmation gate, so an unknown name would fail the deploy
   // with an operation fault and a destructive one would run unasked.
   for (const op of catalogue) {
@@ -408,6 +419,34 @@ function previewArgs(
     args['for'] = op.name
   }
   return args
+}
+
+/** The protocol this plugin builds its tools from; a broker has to speak the same one. */
+const PROTOCOL = 1
+
+/**
+ * Say so when the broker and this plugin are out of step.
+ *
+ * Two lifecycles produce the two sides — the plugin is baked into the image, the broker runs from
+ * the deployment's checkout — so neither update drags the other along. A mismatch is not fatal (the
+ * table is still readable), but silence is how a stale pair is discovered by its symptoms instead
+ * of by its cause.
+ */
+function warnProtocol(ctx: HostContext, table: Record<string, unknown> | undefined): void {
+  const protocol = table?.['protocol']
+  const version = table?.['version']
+  const broker = typeof version === 'string' && version !== '' ? `broker ${version}` : 'the broker'
+  if (typeof protocol !== 'number') {
+    ctx.logger.warn(
+      `host-ops: ${broker} describes no protocol, so it is older than this plugin (protocol ${String(PROTOCOL)}); restart it and recreate the container`,
+    )
+    return
+  }
+  if (protocol !== PROTOCOL) {
+    ctx.logger.warn(
+      `host-ops: ${broker} speaks protocol ${String(protocol)} but this plugin speaks ${String(PROTOCOL)}; upgrade whichever is older and recreate the container`,
+    )
+  }
 }
 
 /** The person's answer: Run, or the reply they typed instead of choosing. */

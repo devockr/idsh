@@ -26,6 +26,11 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
   pipelined, and the broker validates the arguments against the schema it published.
 - The broker owns the bounds and the audit log: output is capped, operations are rate-limited, and
   every call — refusals included — leaves a line before the answer.
+- The table is read **once**, when the plugin loads: an operation added to the broker afterwards
+  needs a container recreate to appear, and a new argument on an existing operation needs one too.
+  `ops.describe` carries the broker's `protocol` and `version`; a broker speaking a different protocol
+  (or an older one that sends the bare table) is named in one warning at load — the tools still
+  register, because the table is readable either way.
 - A broker that is down does not fail the profile: the plugin logs a warning and registers no tools,
   so the delegation still boots and the tools appear the next time the plugin loads.
 - An operation that names a `preview` (`deploy.build`/`deploy.main` → `deploy.source`) is resolved

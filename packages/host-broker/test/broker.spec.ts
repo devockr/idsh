@@ -256,6 +256,17 @@ void test('the rate limiter opens a window per key and refills', () => {
   assert.equal(limiter.take('a', 1000), true)
 })
 
+interface DescribedTable {
+  protocol: number
+  version: string
+  ops: DescribedOp[]
+}
+
+/** The table inside an `ops.describe` answer, with the protocol it was built for. */
+function describedTable(result: string | undefined): DescribedTable {
+  return JSON.parse(result ?? '{}') as DescribedTable
+}
+
 interface DescribedOp {
   name: string
   input: { required?: string[] }
@@ -304,7 +315,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
       op: 'ops.describe',
       args: {},
     })
-    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const ops = describedTable(described.result).ops
     assert.deepEqual(
       ops.map(op => op.name),
       [
@@ -325,6 +336,12 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'disk.usage',
       ],
     )
+    const table = describedTable(described.result)
+    // The answer says which protocol it is shaped for, and which broker produced it: that is what a
+    // client compares with its own build.
+    assert.equal(table.protocol, 1)
+    assert.equal(typeof table.version, 'string')
+    assert.notEqual(table.version, '')
     const describedTail = ops.find(op => op.name === 'log.tail')
     assert.equal(describedTail?.input.required?.[0], 'file')
     // The build operations name the read-only one that resolves them, so the person is asked about
@@ -972,7 +989,7 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
   const connection = client(host.socketPath)
   try {
     const described = await connection.request({ op: 'ops.describe', args: {} })
-    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const ops = describedTable(described.result).ops
     const recreate = ops.find(op => op.name === 'deploy.recreate')
     assert.equal(recreate?.confirm, true)
     assert.equal(ops.find(op => op.name === 'deploy.rollback')?.confirm, true)
@@ -2739,7 +2756,7 @@ void test('gcb.update is offered only when its three values are configured', asy
   const connection = client(host.socketPath)
   try {
     const described = await connection.request({ op: 'ops.describe', args: {} })
-    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const ops = describedTable(described.result).ops
     assert.equal(
       ops.find(op => op.name === 'gcb.update'),
       undefined,
@@ -2754,7 +2771,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
   const rig = await gcbRig()
   try {
     const described = await rig.connection.request({ op: 'ops.describe', args: {} })
-    const ops = JSON.parse(described.result ?? '[]') as DescribedOp[]
+    const ops = describedTable(described.result).ops
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)

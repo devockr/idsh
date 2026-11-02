@@ -113,6 +113,11 @@ Rebuilding the container is how `entrypoint.sh`, the `Dockerfile` or the profile
 takes effect. It also kills whatever is running inside it — including an agent session (sessions
 live in the state directory, so the conversation survives, the process does not).
 
+- **The broker and the plugin are two lifecycles.** The plugin ships in the image; the broker runs
+  from the deployment's checkout on the host. The plugin reads `ops.describe` once at load, so a
+  broker change needs the container recreated as well, and a plugin change never reaches the broker.
+  `ops.describe` answers with `protocol` and `version` and the plugin warns when they differ; treat
+  that warning as "update both", not as noise.
 - Start it **on the host, detached** (`setsid sh -c '…' >/dev/null 2>&1 < /dev/null &`): a restart
   dies with the connection that asked for it. The command itself, with the host and the paths,
   lives in the local deployment notes. A deployment may wrap it in a local script that warms the

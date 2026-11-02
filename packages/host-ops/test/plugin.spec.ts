@@ -1122,3 +1122,39 @@ void test('a build runs as a job without injecting the registry', async () => {
     await broker.close()
   }
 })
+
+void test('a broker speaking another protocol is named in a warning', async () => {
+  const legacy = `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`
+  const current = `${JSON.stringify({
+    ok: true,
+    result: JSON.stringify({ protocol: 1, version: '9.9.9', ops: TABLE }),
+  })}\n`
+  const future = `${JSON.stringify({
+    ok: true,
+    result: JSON.stringify({ protocol: 2, version: '9.9.9', ops: TABLE }),
+  })}\n`
+
+  for (const [describe, expected] of [
+    [legacy, /describes no protocol, so it is older than this plugin/u],
+    [future, /broker 9\.9\.9 speaks protocol 2 but this plugin speaks 1/u],
+  ] as const) {
+    const broker = await fakeBroker(() => describe)
+    try {
+      const { ctx, warnings } = context()
+      await registerTools(ctx, { socketPath: broker.socketPath })
+      assert.match(warnings.join('\n'), expected)
+    } finally {
+      await broker.close()
+    }
+  }
+
+  // The same protocol is silent: a warning on every boot would be noise.
+  const broker = await fakeBroker(() => current)
+  try {
+    const { ctx, warnings } = context()
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.deepEqual(warnings, [])
+  } finally {
+    await broker.close()
+  }
+})

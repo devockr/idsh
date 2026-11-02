@@ -1432,16 +1432,29 @@ export function findOp(name: string, context?: OpContext): OpDefinition | undefi
 }
 
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
+/**
+ * What `ops.describe` answers: the table, the protocol it is shaped for, and this broker's version.
+ *
+ * The protocol is the compatibility number a client compares with its own — the table's shape and
+ * the arguments an operation accepts travel together — while `version` is for a person reading a
+ * warning.
+ */
+export const DESCRIBE_PROTOCOL = 1
+
 export function describeOps(context?: OpContext): string {
   return JSON.stringify(
-    available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
-      name,
-      summary,
-      input,
-      ...(confirm === true ? { confirm: true } : {}),
-      ...(preview === undefined ? {} : { preview }),
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    })),
+    {
+      protocol: DESCRIBE_PROTOCOL,
+      version: context?.brokerVersion ?? 'unknown',
+      ops: available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
+        name,
+        summary,
+        input,
+        ...(confirm === true ? { confirm: true } : {}),
+        ...(preview === undefined ? {} : { preview }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      })),
+    },
     null,
     2,
   )
