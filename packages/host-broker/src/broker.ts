@@ -719,7 +719,7 @@ async function prepareSocketDirectory(socketPath: string): Promise<void> {
   })
   if (created === undefined) {
     const existing = await stat(directory)
-    // eslint-disable-next-line sonarjs/bitwise-operators -- a permission mask, not a truthiness test
+    // A permission mask, not a truthiness test.
     if ((existing.mode & FORBIDDEN_DIRECTORY_BITS) !== 0) {
       throw new Error(`${directory} is group- or world-writable`)
     }

@@ -79,7 +79,6 @@ const LOG_TAIL_LINES = 25
 const OUTPUT_TAIL_CHARS = 400
 // A throwaway state directory under the system temp is the point: it is ours to delete, and
 // PROBE_HOME overrides it for a caller who wants to keep one.
-// eslint-disable-next-line sonarjs/publicly-writable-directories
 const HOME = process.env.PROBE_HOME ?? '/tmp/dsh-ui-probe'
 // Whether this run owns HOME. A caller-supplied PROBE_HOME can hold their own profile, so it is
 // never removed; the default directory is ours, and a run that was kept or killed must not turn
