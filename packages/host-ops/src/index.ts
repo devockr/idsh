@@ -84,13 +84,19 @@ export interface QuestionAnswer {
   readonly custom?: string
 }
 
+/** The services this plugin consumes from its context. */
+export interface Services {
+  readonly jobs: Jobs
+}
+
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
   /**
-   * The harness's background jobs; absent in a host without them, and then deploys stay
-   * synchronous.
+   * Cordis's read without the inject requirement: every plugin context has it, and it is how a
+   * sibling-provided service — the job registry — is reached. Typed over the services this plugin
+   * consumes, so a new dependency is named once here and the read is checked against it.
    */
-  readonly jobs?: Jobs
+  get<K extends keyof Services>(name: K): Services[K]
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -233,10 +239,7 @@ function enqueueDeploy(
   endpoint: BrokerEndpoint,
   statePath: string,
 ): string {
-  const jobs = ctx.jobs
-  if (jobs === undefined) {
-    throw new Error('host-ops: no job registry')
-  }
+  const jobs = ctx.get('jobs')
   // The call id names the log when the broker accepts it; anything else would be refused.
   const log =
     exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
@@ -344,7 +347,7 @@ function toolFor(
       // older broker declares no `log` and writes one shared file, so it stays synchronous.
       const properties = readField(op.input, 'properties')
       const supportsLog = isRecord(properties) && typeof properties['log'] === 'object'
-      if (ctx.jobs !== undefined && supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
+      if (supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
         const id = enqueueDeploy(ctx, op, input, exec, call, endpointForCall, statePath)
         return {
           text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
