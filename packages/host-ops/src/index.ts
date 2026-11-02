@@ -439,7 +439,7 @@ function warnProtocol(ctx: HostContext, table: Record<string, unknown> | undefin
   }
   if (protocol !== PROTOCOL) {
     ctx.logger.warn(
-      `host-ops: ${broker} speaks protocol ${String(protocol)} but this plugin speaks ${String(PROTOCOL)}; upgrade whichever is older and recreate the container`,
+      `host-ops: ${broker} speaks protocol ${String(protocol)} but this plugin speaks ${String(PROTOCOL)}; the lower number is the older side — update it and recreate the container`,
     )
   }
 }
