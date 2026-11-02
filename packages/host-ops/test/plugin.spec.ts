@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 
 import { apply, registerTools, type Config, type HostContext, type HostTool } from '../src/index.ts'
-import { buildLogSource, startDeployJob, type JobSpec } from '../src/stream.ts'
+import { buildLogSource, startDeployJob, type JobSpec, type Jobs } from '../src/stream.ts'
 import { fakeBroker } from './server.ts'
 
 // The plugin adds its own slack to an operation's declared budget; keep both numbers named.
@@ -36,6 +36,7 @@ const TABLE = [
 function context(
   selected: readonly string[] = ['Run'],
   custom?: string,
+  jobs?: Jobs,
 ): {
   ctx: HostContext
   tools: HostTool[]
@@ -75,13 +76,17 @@ function context(
           })
         },
       },
-      // Cordis serves a service through `get`; a test that adds `jobs` to its own spread of this
-      // context is then found the same way the deployment finds the registry.
+      // Cordis serves a service through `get`, never as a property of the plugin's context.
       get(name: string): unknown {
-        return name === 'jobs' ? this.jobs : undefined
+        return name === 'jobs' ? jobs : undefined
       },
     },
   }
+}
+
+/** A context that provides the job registry, as a deployment does. */
+function withJobs(ctx: HostContext, jobs: Jobs): HostContext {
+  return { ...ctx, get: (name: string) => (name === 'jobs' ? jobs : undefined) }
 }
 
 void test('the broker table becomes one tool per operation', async () => {
@@ -497,15 +502,12 @@ void test('a deploy runs as a job that follows the broker build log', async () =
   try {
     const built = context()
     const started: JobSpec[] = []
-    const ctx = {
-      ...built.ctx,
-      jobs: {
-        start(spec: JobSpec) {
-          started.push(spec)
-          return 'deploy-1'
-        },
+    const ctx = withJobs(built.ctx, {
+      start(spec: JobSpec) {
+        started.push(spec)
+        return 'deploy-1'
       },
-    }
+    })
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
     const answer = await built.tools[0].execute(
       {},
@@ -581,15 +583,12 @@ void test('a refused deploy job fails with the broker reason', async () => {
   try {
     const built = context()
     const started: JobSpec[] = []
-    const ctx = {
-      ...built.ctx,
-      jobs: {
-        start(spec: JobSpec) {
-          started.push(spec)
-          return 'deploy-1'
-        },
+    const ctx = withJobs(built.ctx, {
+      start(spec: JobSpec) {
+        started.push(spec)
+        return 'deploy-1'
       },
-    }
+    })
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
     await built.tools[0].execute({}, { signal: new AbortController().signal })
     const hooks = started[0].run({
@@ -629,15 +628,12 @@ void test('a cancelled deploy job settles killed', async () => {
   try {
     const built = context()
     const started: JobSpec[] = []
-    const ctx = {
-      ...built.ctx,
-      jobs: {
-        start(spec: JobSpec) {
-          started.push(spec)
-          return 'deploy-1'
-        },
+    const ctx = withJobs(built.ctx, {
+      start(spec: JobSpec) {
+        started.push(spec)
+        return 'deploy-1'
       },
-    }
+    })
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
     await built.tools[0].execute({}, { signal: new AbortController().signal })
     const hooks = started[0].run({
@@ -680,15 +676,12 @@ void test('apply carries the configured state path into the job', async () => {
   try {
     const built = context()
     const started: JobSpec[] = []
-    const ctx = {
-      ...built.ctx,
-      jobs: {
-        start(spec: JobSpec) {
-          started.push(spec)
-          return 'deploy-1'
-        },
+    const ctx = withJobs(built.ctx, {
+      start(spec: JobSpec) {
+        started.push(spec)
+        return 'deploy-1'
       },
-    }
+    })
     await apply(ctx, { socketPath: broker.socketPath, statePath: host })
     await built.tools[0].execute({}, { signal: new AbortController().signal })
     const source = started[0].output?.[0]
@@ -742,15 +735,12 @@ void test('a call id the broker would reject is replaced by a safe log name', as
   try {
     const built = context()
     const started: JobSpec[] = []
-    const ctx = {
-      ...built.ctx,
-      jobs: {
-        start(spec: JobSpec) {
-          started.push(spec)
-          return 'deploy-1'
-        },
+    const ctx = withJobs(built.ctx, {
+      start(spec: JobSpec) {
+        started.push(spec)
+        return 'deploy-1'
       },
-    }
+    })
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
     // A dot is not a broker-safe log id, so the plugin must not forward it.
     await built.tools[0].execute({}, { signal: new AbortController().signal, callId: 'call.1' })
@@ -786,15 +776,12 @@ void test('a broker without the log argument stays synchronous', async () => {
   try {
     const built = context()
     const started: JobSpec[] = []
-    const ctx = {
-      ...built.ctx,
-      jobs: {
-        start(spec: JobSpec) {
-          started.push(spec)
-          return 'deploy-1'
-        },
+    const ctx = withJobs(built.ctx, {
+      start(spec: JobSpec) {
+        started.push(spec)
+        return 'deploy-1'
       },
-    }
+    })
     await registerTools(ctx, { socketPath: broker.socketPath }, undefined, host)
     await built.tools[0].execute({}, { signal: new AbortController().signal, callId: 'call-1' })
     // No per-build log to follow, so an old broker stays synchronous: no job, the answer is the call.

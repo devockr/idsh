@@ -87,11 +87,9 @@ export interface QuestionAnswer {
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
   /**
-   * The harness's background jobs; absent in a host without them, and then deploys stay
-   * synchronous.
+   * Cordis's read without the inject requirement: how a sibling-provided service is reached, and
+   * how this plugin finds the job registry. Absent in a host that has no such accessor.
    */
-  readonly jobs?: Jobs
-  /** Cordis's read without the inject requirement: how a sibling-provided service is reached. */
   readonly get?: (name: string) => unknown
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
