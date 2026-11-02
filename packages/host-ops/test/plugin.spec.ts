@@ -287,6 +287,7 @@ void test('a registration that fails rolls back the ones already made', async ()
       },
     },
     logger: { warn: () => true },
+    get: () => undefined,
     userQuestions: {
       ask: () => Promise.resolve({ answers: [{ id: 'confirm', selected: [] }] }),
     },
