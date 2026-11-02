@@ -3306,6 +3306,15 @@ void test('ops.describe answers the bare table to a client that declares nothing
     assert.equal((envelope as { protocol?: unknown }).protocol, 1)
     assert.equal(Array.isArray((envelope as { ops?: unknown }).ops), true)
 
+    // A field this broker does not know is ignored rather than refused: the request is versioned
+    // too, and a newer client still gets the table and the protocol this broker speaks.
+    const extra = await connection.request({
+      op: 'ops.describe',
+      args: { protocol: 1, something: true },
+    })
+    assert.equal(extra.ok, true)
+    assert.equal((JSON.parse(extra.result ?? 'null') as { protocol?: unknown }).protocol, 1)
+
     // A wrong type is the caller's mistake, not a shape to guess at.
     const wrong = await connection.request({
       op: 'ops.describe',

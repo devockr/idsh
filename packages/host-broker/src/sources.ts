@@ -1456,7 +1456,10 @@ function describeTable(context?: OpContext): unknown[] {
  * broker".
  */
 export function describeOps(context?: OpContext, args?: Record<string, unknown>): string {
-  rejectUnknown(args ?? {}, ['protocol'])
+  // Unknown keys are ignored on purpose: this request is versioned too. A newer plugin may send a
+  // field this broker has never heard of, and answering the part it knows — with the protocol it
+  // speaks — lets the client decide; refusing would turn skew into a hard failure here, which is
+  // exactly what the negotiation exists to avoid.
   const declared = args?.['protocol']
   if (declared === undefined) {
     return JSON.stringify(describeTable(context), null, 2)
