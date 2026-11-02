@@ -1140,7 +1140,6 @@ export const OPS: readonly OpDefinition[] = [
         log: {
           type: 'string',
           description: 'Checked exactly as the build checks it, and otherwise unused.',
-          pattern: '^[\\w-]{1,64}$',
         },
       },
       additionalProperties: false,

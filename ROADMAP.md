@@ -353,10 +353,11 @@ phase-1 operation is host-local, and the router hop is phase 3.
 - Whether the deployment confirmation should also require an action outside the container — a
   label on the pull request, say — for the case where the agent is not merely confused but
   hostile. The question inside the tool call stops accidents; it does not stop a lie.
-- Whether `deploy.build` should build exactly the SHA the question showed, instead of resolving
-  the ref again when it runs. The answer names what was built, so a ref that moves between the
-  answer and the build is visible afterwards rather than approved — pinning would make the question
-  the commitment, and needs a rule for a commit that is no longer a branch tip.
+- Whether the build operations should build exactly the SHAs the question showed, instead of
+  resolving the refs again when they run. The answer names what was built, so a ref that moves
+  between the answer and the build is visible afterwards rather than approved — pinning would
+  make the question the commitment, and needs a rule for a commit that is no longer a branch
+  tip.
 - How the broker attributes a call to a session. The plugin knows; whether that is worth
   carrying over the socket is not settled.
 - How much of the wire protocol, audit format and build recipe to share with the credential
