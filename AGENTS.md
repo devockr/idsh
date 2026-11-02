@@ -118,9 +118,11 @@ live in the state directory, so the conversation survives, the process does not)
   broker change needs the container recreated as well, and a plugin change never reaches the broker.
   The answer is negotiated — a client declaring its `protocol` gets `{protocol, version, ops}`, a
   client declaring nothing gets the bare table — so updating one side alone cannot cost the other its
-  tools; the plugin warns when the two protocols differ, and that warning names the older side —
-  update it (`broker.update` for the broker, a rebuild for the plugin), then recreate the container
-  — not "the broker is broken".
+  tools. The plugin warns in two shapes, and they mean different things: a **bare table** means the
+  broker is older — update it (`broker.update`) and recreate the container; two **different numbers**
+  mean one side is ahead of the other, with no way to tell which from the numbers alone — update
+  whichever is older (a rebuild for the plugin) and then recreate the container. Neither shape means
+  "the broker is broken".
 - Start it **on the host, detached** (`setsid sh -c '…' >/dev/null 2>&1 < /dev/null &`): a restart
   dies with the connection that asked for it. The command itself, with the host and the paths,
   lives in the local deployment notes. A deployment may wrap it in a local script that warms the
