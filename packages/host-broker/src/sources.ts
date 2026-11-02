@@ -1121,7 +1121,7 @@ export const OPS: readonly OpDefinition[] = [
   {
     name: 'deploy.source',
     summary:
-      'Resolve what deploy.build would build — the branch tip and main — or main alone, without building.',
+      'Check a build request and resolve what it would build — the branch tip and main, or main alone — without building.',
     input: {
       type: 'object',
       properties: {
@@ -1150,9 +1150,7 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['pr', 'sha', 'for', 'log'])
       // The whole request is checked here, not only the part this resolves: an argument the build
       // would refuse must not reach the person as a question they cannot answer usefully.
-      if (args['log'] !== undefined) {
-        optionalLog(args)
-      }
+      optionalLog(args)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
       if (args['for'] === 'deploy.main') {
