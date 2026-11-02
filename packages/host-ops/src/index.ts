@@ -91,6 +91,8 @@ export interface HostContext {
    * synchronous.
    */
   readonly jobs?: Jobs
+  /** Cordis's read without the inject requirement: how a sibling-provided service is reached. */
+  readonly get?: (name: string) => unknown
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -226,16 +228,13 @@ function endpointOf(config: Config): BrokerEndpoint {
 /**
  * The job registry, when the context has one.
  *
- * `jobs` is a service, and cordis throws on reading one this plugin did not inject — but the plugin
- * works without it (a deployment with no job service runs its deploys synchronously), so the read
- * is guarded instead of becoming an injection that would keep the plugin from loading.
+ * `ctx.jobs` needs `jobs` in `inject`, which makes it mandatory — and a deployment with no registry
+ * still has to load this plugin (its deploys then run synchronously). `get` is cordis's lookup
+ * without the inject requirement: it finds the service whoever provides it, including a sibling
+ * fiber, and answers `undefined` when nothing does.
  */
 function jobRegistry(ctx: HostContext): Jobs | undefined {
-  try {
-    return ctx.jobs
-  } catch {
-    // A context with no job service: deploys run synchronously.
-  }
+  return ctx.get?.('jobs') as Jobs | undefined
 }
 
 /** Start one long operation as a job and return its id. */

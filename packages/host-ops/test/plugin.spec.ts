@@ -75,6 +75,11 @@ function context(
           })
         },
       },
+      // Cordis serves a service through `get`; a test that adds `jobs` to its own spread of this
+      // context is then found the same way the deployment finds the registry.
+      get(name: string): unknown {
+        return name === 'jobs' ? this.jobs : undefined
+      },
     },
   }
 }
@@ -1063,9 +1068,61 @@ void test('a previewed operation gets the preview budget on top of its own', asy
   }
 })
 
-void test('a context without the jobs service still runs operations', async () => {
-  // Cordis throws when a plugin reads a service it did not inject; `jobs` is optional here, so the
-  // read must not fail the call.
+void test('a sibling-provided job registry is reached without injecting it', async () => {
+  // What the deployment looks like: reading `ctx.jobs` throws (the service lives in a sibling
+  // fiber), while the injection-free accessor returns it. A registry that is present must be used.
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' }, log: { type: 'string' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+    },
+  ]
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+      : `${JSON.stringify({ ok: true, result: 'built' })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    const started: string[] = []
+    const jobs = {
+      start(): string {
+        const id = `job-${String(started.length + 1)}`
+        started.push(id)
+        return id
+      },
+    }
+    const deployment = {
+      ...ctx,
+      get jobs(): never {
+        throw new Error('cannot get property "jobs" without inject')
+      },
+      get(name: string): unknown {
+        return name === 'jobs' ? jobs : undefined
+      },
+    } as HostContext
+    await registerTools(deployment, { socketPath: broker.socketPath })
+    const build = tools.find(tool => tool.name === 'idsh_deploy_build')
+    assert.ok(build !== undefined)
+    const answer = (await build.execute(
+      { pr: 82, log: 'call-1' },
+      { signal: new AbortController().signal },
+    )) as { text: string }
+    // The job path, not the synchronous fallback: the registry was found where cordis put it.
+    assert.match(answer.text, /started job-1: deploy\.build runs in the background/u)
+    assert.deepEqual(started, ['job-1'])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a context with no job registry runs deploys synchronously', async () => {
   const table = [
     {
       name: 'deploy.status',
@@ -1080,13 +1137,13 @@ void test('a context without the jobs service still runs operations', async () =
   )
   try {
     const { ctx, tools } = context()
-    const guarded = {
+    const deployment = {
       ...ctx,
-      get jobs(): never {
-        throw new Error('cannot get property "jobs" without inject')
+      get(): unknown {
+        return undefined
       },
     } as HostContext
-    await registerTools(guarded, { socketPath: broker.socketPath })
+    await registerTools(deployment, { socketPath: broker.socketPath })
     const status = tools.find(tool => tool.name === 'idsh_deploy_status')
     assert.ok(status !== undefined)
     const answer = (await status.execute({}, { signal: new AbortController().signal })) as {
