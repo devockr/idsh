@@ -256,6 +256,14 @@ void test('the rate limiter opens a window per key and refills', () => {
   assert.equal(limiter.take('a', 1000), true)
 })
 
+interface DescribedOp {
+  name: string
+  input: { required?: string[] }
+  confirm?: boolean
+  preview?: string
+  timeoutMs?: number
+}
+
 interface DescribedTable {
   protocol: number
   version: string
@@ -265,14 +273,6 @@ interface DescribedTable {
 /** The table inside an `ops.describe` answer, with the protocol it was built for. */
 function describedTable(result: string | undefined): DescribedTable {
   return JSON.parse(result ?? '{}') as DescribedTable
-}
-
-interface DescribedOp {
-  name: string
-  input: { required?: string[] }
-  confirm?: boolean
-  preview?: string
-  timeoutMs?: number
 }
 
 interface AuditEntry {
@@ -3304,6 +3304,7 @@ void test('ops.describe answers the bare table to a client that declares nothing
     const envelope: unknown = JSON.parse(declared.result ?? 'null')
     assert.equal(typeof envelope, 'object')
     assert.equal((envelope as { protocol?: unknown }).protocol, 1)
+    assert.equal(Array.isArray((envelope as { ops?: unknown }).ops), true)
 
     // A wrong type is the caller's mistake, not a shape to guess at.
     const wrong = await connection.request({

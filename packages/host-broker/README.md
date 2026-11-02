@@ -111,17 +111,15 @@ request.
 
 The answer is negotiated, not changed: the envelope goes only to a client that declares a protocol,
 so updating either side alone cannot cost the other its tools — an old plugin keeps getting the bare
-table it expects. What an update still cannot fix is staleness inside a running container: the table
-is read once, at load.
+table it expects, and a newer one compares the protocol it receives with its own instead of letting a
+mismatch surface later as an unknown argument.
 
-The broker and the plugin that reads this table have **two lifecycles**: the plugin is baked into the
-image and the broker runs from the deployment's checkout, so neither update drags the other along.
-The table is read once, when the plugin loads, so a broker change reaches a client only after the
-container is recreated — and a plugin change reaches the broker never, because nothing is pushed.
-`ops.describe` answers with `protocol` and `version` for exactly this reason: the plugin compares the
-protocol with its own and warns when they differ, instead of letting the mismatch surface as an
-unknown argument. After changing either, do both: `deploy.recreate` for the plugin, a broker restart
-(`broker.update`, which exits and lets its supervisor start the new build) for the broker.
+What the negotiation cannot fix is staleness: the broker and the plugin have **two lifecycles** (the
+plugin is baked into the image, the broker runs from the deployment's checkout), and the table is
+read **once, at load**. A broker change therefore reaches a client only after the container is
+recreated, and a plugin change never reaches the broker. After either, do both: `deploy.recreate` for
+the plugin, a broker restart (`broker.update`, which exits and lets its supervisor start the new
+build) for the broker.
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing

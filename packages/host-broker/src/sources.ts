@@ -1456,6 +1456,7 @@ function describeTable(context?: OpContext): unknown[] {
  * broker".
  */
 export function describeOps(context?: OpContext, args?: Record<string, unknown>): string {
+  rejectUnknown(args ?? {}, ['protocol'])
   const declared = args?.['protocol']
   if (declared === undefined) {
     return JSON.stringify(describeTable(context), null, 2)
