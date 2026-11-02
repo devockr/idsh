@@ -84,13 +84,21 @@ export interface QuestionAnswer {
   readonly custom?: string
 }
 
+/** The services this plugin consumes from its context. */
+export interface Services {
+  readonly jobs: Jobs
+}
+
 export interface HostContext {
   readonly tools: { register(tool: HostTool): () => void }
   /**
    * Cordis's read without the inject requirement: how a sibling-provided service is reached, and
    * how this plugin finds the job registry. Absent in a host that has no such accessor.
+   *
+   * Typed over the services this plugin consumes, so a new dependency is named once here and the
+   * read is checked against it instead of being cast.
    */
-  readonly get?: (name: string) => unknown
+  readonly get?: <K extends keyof Services>(name: K) => Services[K] | undefined
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -232,7 +240,7 @@ function endpointOf(config: Config): BrokerEndpoint {
  * fiber, and answers `undefined` when nothing does.
  */
 function jobRegistry(ctx: HostContext): Jobs | undefined {
-  return ctx.get?.('jobs') as Jobs | undefined
+  return ctx.get?.('jobs')
 }
 
 /** Start one long operation as a job and return its id. */

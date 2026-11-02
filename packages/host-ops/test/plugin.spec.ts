@@ -77,7 +77,7 @@ function context(
         },
       },
       // Cordis serves a service through `get`, never as a property of the plugin's context.
-      get(name: string): unknown {
+      get(name: string): Jobs | undefined {
         return name === 'jobs' ? jobs : undefined
       },
     },
@@ -86,7 +86,10 @@ function context(
 
 /** A context that provides the job registry, as a deployment does. */
 function withJobs(ctx: HostContext, jobs: Jobs): HostContext {
-  return { ...ctx, get: (name: string) => (name === 'jobs' ? jobs : undefined) }
+  return {
+    ...ctx,
+    get: (name: string): Jobs | undefined => (name === 'jobs' ? jobs : undefined),
+  }
 }
 
 void test('the broker table becomes one tool per operation', async () => {
@@ -1090,7 +1093,7 @@ void test('a sibling-provided job registry is reached without injecting it', asy
       get jobs(): never {
         throw new Error('cannot get property "jobs" without inject')
       },
-      get(name: string): unknown {
+      get(name: string): Jobs | undefined {
         return name === 'jobs' ? jobs : undefined
       },
     } as HostContext
@@ -1126,7 +1129,7 @@ void test('a context with no job registry runs deploys synchronously', async () 
     const { ctx, tools } = context()
     const deployment = {
       ...ctx,
-      get(): unknown {
+      get(): undefined {
         return undefined
       },
     } as HostContext
