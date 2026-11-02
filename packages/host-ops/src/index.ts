@@ -234,7 +234,7 @@ function jobRegistry(ctx: HostContext): Jobs | undefined {
   try {
     return ctx.jobs
   } catch {
-    return undefined
+    // A context with no job service: deploys run synchronously.
   }
 }
 
