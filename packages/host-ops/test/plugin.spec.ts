@@ -33,10 +33,16 @@ const TABLE = [
   },
 ]
 
+const DEFAULT_JOBS: Jobs = {
+  start() {
+    throw new Error('this test does not expect a background job')
+  },
+}
+
 function context(
   selected: readonly string[] = ['Run'],
   custom?: string,
-  jobs?: Jobs,
+  jobs: Jobs = DEFAULT_JOBS,
 ): {
   ctx: HostContext
   tools: HostTool[]
@@ -77,8 +83,9 @@ function context(
         },
       },
       // Cordis serves a service through `get`, never as a property of the plugin's context.
-      get(name: string): Jobs | undefined {
-        return name === 'jobs' ? jobs : undefined
+      get(name: string): Jobs {
+        assert.equal(name, 'jobs')
+        return jobs
       },
     },
   }
@@ -88,7 +95,10 @@ function context(
 function withJobs(ctx: HostContext, jobs: Jobs): HostContext {
   return {
     ...ctx,
-    get: (name: string): Jobs | undefined => (name === 'jobs' ? jobs : undefined),
+    get: (name: string): Jobs => {
+      assert.equal(name, 'jobs')
+      return jobs
+    },
   }
 }
 
@@ -287,7 +297,7 @@ void test('a registration that fails rolls back the ones already made', async ()
       },
     },
     logger: { warn: () => true },
-    get: () => undefined,
+    get: () => DEFAULT_JOBS,
     userQuestions: {
       ask: () => Promise.resolve({ answers: [{ id: 'confirm', selected: [] }] }),
     },
@@ -899,7 +909,7 @@ void test('the preview does not see arguments its operation does not accept', as
       summary: 'Build the :dev image.',
       input: {
         type: 'object',
-        properties: { log: { type: 'string' } },
+        properties: { note: { type: 'string' } },
         additionalProperties: false,
       },
       confirm: true,
@@ -930,12 +940,12 @@ void test('the preview does not see arguments its operation does not accept', as
     const { ctx, tools } = context(['Run'])
     await registerTools(ctx, { socketPath: broker.socketPath })
     const built = tools.find(tool => tool.name === 'idsh_deploy_build')
-    await built?.execute({ pr: 82, log: 'call-1' }, { signal: new AbortController().signal })
+    await built?.execute({ pr: 82, note: 'call-1' }, { signal: new AbortController().signal })
     const source = broker.requests.find(request => request.op === 'deploy.source')
-    // `log` is the build's own argument; a preview that received it would refuse the request.
+    // `note` is the build's own argument; a preview that received it would refuse the request.
     assert.deepEqual(source?.args, { pr: 82, for: 'deploy.build' })
     const build = broker.requests.find(request => request.op === 'deploy.build')
-    assert.deepEqual(build?.args, { pr: 82, log: 'call-1' })
+    assert.deepEqual(build?.args, { pr: 82, note: 'call-1' })
   } finally {
     await broker.close()
   }
@@ -1059,7 +1069,7 @@ void test('a previewed operation gets the preview budget on top of its own', asy
   }
 })
 
-void test('a sibling-provided job registry is reached without injecting it', async () => {
+void test('a build runs as a job without injecting the registry', async () => {
   // What the deployment looks like: reading `ctx.jobs` throws (the service lives in a sibling
   // fiber), while the injection-free accessor returns it. A registry that is present must be used.
   const table = [
@@ -1108,39 +1118,6 @@ void test('a sibling-provided job registry is reached without injecting it', asy
     // The job path, not the synchronous fallback: the registry was found where cordis put it.
     assert.match(answer.text, /started job-1: deploy\.build runs in the background/u)
     assert.deepEqual(started, ['job-1'])
-  } finally {
-    await broker.close()
-  }
-})
-
-void test('a context with no job registry runs deploys synchronously', async () => {
-  const table = [
-    {
-      name: 'deploy.status',
-      summary: 'What is running.',
-      input: { type: 'object', properties: {}, additionalProperties: false },
-    },
-  ]
-  const broker = await fakeBroker(request =>
-    request.op === 'ops.describe'
-      ? `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
-      : `${JSON.stringify({ ok: true, result: 'ok' })}\n`,
-  )
-  try {
-    const { ctx, tools } = context()
-    const deployment = {
-      ...ctx,
-      get(): undefined {
-        return undefined
-      },
-    } as HostContext
-    await registerTools(deployment, { socketPath: broker.socketPath })
-    const status = tools.find(tool => tool.name === 'idsh_deploy_status')
-    assert.ok(status !== undefined)
-    const answer = (await status.execute({}, { signal: new AbortController().signal })) as {
-      text: string
-    }
-    assert.equal(answer.text, 'ok')
   } finally {
     await broker.close()
   }

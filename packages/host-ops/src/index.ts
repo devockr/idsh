@@ -96,7 +96,7 @@ export interface HostContext {
    * sibling-provided service — the job registry — is reached. Typed over the services this plugin
    * consumes, so a new dependency is named once here and the read is checked against it.
    */
-  get<K extends keyof Services>(name: K): Services[K] | undefined
+  get<K extends keyof Services>(name: K): Services[K]
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -229,18 +229,6 @@ function endpointOf(config: Config): BrokerEndpoint {
  * `idsh_` prefix namespaces them, so a sanitized name such as `read` or `bash` cannot collide with
  * a built-in tool or another plugin's.
  */
-/**
- * The job registry, when the context has one.
- *
- * `ctx.jobs` needs `jobs` in `inject`, which makes it mandatory — and a deployment with no registry
- * still has to load this plugin (its deploys then run synchronously). `get` is cordis's lookup
- * without the inject requirement: it finds the service whoever provides it, including a sibling
- * fiber, and answers `undefined` when nothing does.
- */
-function jobRegistry(ctx: HostContext): Jobs | undefined {
-  return ctx.get('jobs')
-}
-
 /** Start one long operation as a job and return its id. */
 function enqueueDeploy(
   ctx: HostContext,
@@ -251,10 +239,7 @@ function enqueueDeploy(
   endpoint: BrokerEndpoint,
   statePath: string,
 ): string {
-  const jobs = jobRegistry(ctx)
-  if (jobs === undefined) {
-    throw new Error('host-ops: no job registry')
-  }
+  const jobs = ctx.get('jobs')
   // The call id names the log when the broker accepts it; anything else would be refused.
   const log =
     exec.callId !== undefined && /^[\w-]{1,64}$/u.test(exec.callId)
@@ -362,7 +347,7 @@ function toolFor(
       // older broker declares no `log` and writes one shared file, so it stays synchronous.
       const properties = readField(op.input, 'properties')
       const supportsLog = isRecord(properties) && typeof properties['log'] === 'object'
-      if (jobRegistry(ctx) !== undefined && supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
+      if (supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
         const id = enqueueDeploy(ctx, op, input, exec, call, endpointForCall, statePath)
         return {
           text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
