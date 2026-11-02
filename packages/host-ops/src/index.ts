@@ -167,7 +167,7 @@ export async function registerTools(
   }
   warnProtocol(ctx, describedTable)
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const catalogue = table.map(value => asOp(value))
+  const catalogue = (table as unknown[]).map(value => asOp(value))
   // The preview is called before the confirmation gate, so an unknown name would fail the deploy
   // with an operation fault and a destructive one would run unasked.
   for (const op of catalogue) {
