@@ -1,6 +1,6 @@
 {
   "name": "@idsh/host-ops",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "dsh tools that ask the host broker over a unix socket — the container never holds a host credential",
   "repository": {
