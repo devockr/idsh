@@ -1431,16 +1431,7 @@ export function findOp(name: string, context?: OpContext): OpDefinition | undefi
   return available(context).find(op => op.name === name)
 }
 
-/** The table as the plugin sees it: names, summaries and the parameter schema of each. */
-/**
- * What `ops.describe` answers, and the protocol this broker is shaped for.
- *
- * The negotiation is one-sided on purpose: a client that declares `{protocol}` gets the envelope —
- * the table, that protocol and this broker's version — and a client that sends nothing gets the
- * bare table. An older plugin throws on anything but an array, so answering it with the envelope
- * would cost it every host tool; a newer plugin reads both, so the bare table only means "older
- * broker".
- */
+/** The protocol `ops.describe` is shaped for: the number a client compares with its own. */
 export const DESCRIBE_PROTOCOL = 1
 
 function describeTable(context?: OpContext): unknown[] {
@@ -1454,6 +1445,16 @@ function describeTable(context?: OpContext): unknown[] {
   }))
 }
 
+/**
+ * What `ops.describe` answers — the table as the plugin sees it: names, summaries and each
+ * operation's parameter schema.
+ *
+ * The negotiation is one-sided on purpose: a client that declares `{protocol}` gets the envelope —
+ * the table, that protocol and this broker's version — and a client that sends nothing gets the
+ * bare table. An older plugin throws on anything but an array, so answering it with the envelope
+ * would cost it every host tool; a newer plugin reads both, so the bare table only means "older
+ * broker".
+ */
 export function describeOps(context?: OpContext, args?: Record<string, unknown>): string {
   const declared = args?.['protocol']
   if (declared === undefined) {

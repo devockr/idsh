@@ -117,6 +117,9 @@ void test('the broker table becomes one tool per operation', async () => {
       ['idsh_log_tail', 'idsh_disk_usage'],
     )
     assert.deepEqual(tools[0]?.parameters, TABLE[0]?.input)
+    // The declaration that earns the envelope, and the only reason an old broker answers with the
+    // bare table instead: pin it, or a regression turns every boot into a false "older broker".
+    assert.deepEqual(broker.requests[0], { op: 'ops.describe', args: { protocol: 1 } })
     const result = await tools[0]?.execute(
       { file: 'messages' },
       { signal: new AbortController().signal },

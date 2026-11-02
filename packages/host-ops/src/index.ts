@@ -161,15 +161,8 @@ export async function registerTools(
   // A broker older than this plugin answers with the bare table: usable, but it cannot say which
   // arguments it takes beyond the ones in the entry, so the mismatch is worth one line in the log.
   const describedTable = isRecord(parsed) ? parsed : undefined
-  const table: unknown[] | undefined =
-    describedTable === undefined
-      ? Array.isArray(parsed)
-        ? parsed
-        : undefined
-      : Array.isArray(describedTable['ops'])
-        ? (describedTable['ops'] as unknown[])
-        : undefined
-  if (table === undefined) {
+  const table: unknown = describedTable === undefined ? parsed : describedTable['ops']
+  if (!Array.isArray(table)) {
     throw new TypeError('the broker did not describe a table of operations')
   }
   warnProtocol(ctx, describedTable)
@@ -440,7 +433,7 @@ function warnProtocol(ctx: HostContext, table: Record<string, unknown> | undefin
   const broker = typeof version === 'string' && version !== '' ? `broker ${version}` : 'the broker'
   if (typeof protocol !== 'number') {
     ctx.logger.warn(
-      `host-ops: ${broker} describes no protocol, so it is older than this plugin (protocol ${String(PROTOCOL)}); restart it and recreate the container`,
+      `host-ops: ${broker} describes no protocol, so it is older than this plugin (protocol ${String(PROTOCOL)}); update it (broker.update) and recreate the container`,
     )
     return
   }
