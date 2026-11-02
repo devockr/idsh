@@ -1,6 +1,6 @@
 {
   "name": "@idsh/host-broker",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "The host-side half of @idsh/host-ops: a typed, audited operation table on a unix socket, so the container never holds a host credential",
   "repository": {
