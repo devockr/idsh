@@ -1062,3 +1062,38 @@ void test('a previewed operation gets the preview budget on top of its own', asy
     await broker.close()
   }
 })
+
+void test('a context without the jobs service still runs operations', async () => {
+  // Cordis throws when a plugin reads a service it did not inject; `jobs` is optional here, so the
+  // read must not fail the call.
+  const table = [
+    {
+      name: 'deploy.status',
+      summary: 'What is running.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  ]
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+      : `${JSON.stringify({ ok: true, result: 'ok' })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    const guarded = {
+      ...ctx,
+      get jobs(): never {
+        throw new Error('cannot get property "jobs" without inject')
+      },
+    } as HostContext
+    await registerTools(guarded, { socketPath: broker.socketPath })
+    const status = tools.find(tool => tool.name === 'idsh_deploy_status')
+    assert.ok(status !== undefined)
+    const answer = (await status.execute({}, { signal: new AbortController().signal })) as {
+      text: string
+    }
+    assert.equal(answer.text, 'ok')
+  } finally {
+    await broker.close()
+  }
+})

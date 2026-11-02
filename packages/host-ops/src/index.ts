@@ -223,6 +223,21 @@ function endpointOf(config: Config): BrokerEndpoint {
  * `idsh_` prefix namespaces them, so a sanitized name such as `read` or `bash` cannot collide with
  * a built-in tool or another plugin's.
  */
+/**
+ * The job registry, when the context has one.
+ *
+ * `jobs` is a service, and cordis throws on reading one this plugin did not inject — but the plugin
+ * works without it (a deployment with no job service runs its deploys synchronously), so the read
+ * is guarded instead of becoming an injection that would keep the plugin from loading.
+ */
+function jobRegistry(ctx: HostContext): Jobs | undefined {
+  try {
+    return ctx.jobs
+  } catch {
+    return undefined
+  }
+}
+
 /** Start one long operation as a job and return its id. */
 function enqueueDeploy(
   ctx: HostContext,
@@ -233,7 +248,7 @@ function enqueueDeploy(
   endpoint: BrokerEndpoint,
   statePath: string,
 ): string {
-  const jobs = ctx.jobs
+  const jobs = jobRegistry(ctx)
   if (jobs === undefined) {
     throw new Error('host-ops: no job registry')
   }
@@ -344,7 +359,7 @@ function toolFor(
       // older broker declares no `log` and writes one shared file, so it stays synchronous.
       const properties = readField(op.input, 'properties')
       const supportsLog = isRecord(properties) && typeof properties['log'] === 'object'
-      if (ctx.jobs !== undefined && supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
+      if (jobRegistry(ctx) !== undefined && supportsLog && FOLLOWS_BUILD_LOG.has(op.name)) {
         const id = enqueueDeploy(ctx, op, input, exec, call, endpointForCall, statePath)
         return {
           text: `started ${id}: ${op.name} runs in the background; follow it with job_output`,
