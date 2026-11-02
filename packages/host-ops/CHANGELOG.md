@@ -1,5 +1,18 @@
 # @idsh/host-ops
 
+## 0.1.1
+
+### Patch Changes
+
+- [#85](https://github.com/devockr/idsh/pull/85) [`d07da5b`](https://github.com/devockr/idsh/commit/d07da5be7a2b1f97fb0c49fb6181da4c0b736f85) Thanks [@JounQin](https://github.com/JounQin)! - Read the job registry through cordis's injection-free accessor, `ctx.get('jobs')`: `ctx.jobs` needs
+  `jobs` in `inject`, and `inject` gates loading, so a required injection would keep the plugin from
+  loading at all. The registry ships with dsh (`dsh-base` loads `@deepseek-ai/dsh-jobs-local`), so it is
+  treated as present — a deployment without it is not supported: its first background deploy fails
+  instead of silently dropping to a synchronous path.
+  
+  Before this, every tool call failed with `cannot get property "jobs" without inject`: the registry is
+  provided from a sibling fiber, which the property read cannot see.
+
 ## 0.1.0
 
 ### Minor Changes
