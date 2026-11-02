@@ -97,6 +97,11 @@ export interface OpDefinition {
   readonly keep?: Keep
   /** Destructive: the plugin must ask the person before it runs. */
   readonly confirm?: boolean
+  /**
+   * The read-only operation that resolves what this one would do, so the person is asked about
+   * that.
+   */
+  readonly preview?: string
   /** How long the operation may take; defaults to the broker's per-program deadline. */
   readonly timeoutMs?: number
   /** Runs under the deployment lock: no build, recreate or rollback overlaps it. */
@@ -1114,10 +1119,62 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
   {
+    name: 'deploy.source',
+    summary:
+      'Check a build request and resolve what it would build — the branch tip and main, or main alone — without building.',
+    input: {
+      type: 'object',
+      properties: {
+        pr: {
+          type: 'integer',
+          description: 'A same-repository PR number; its head must be on an origin branch.',
+        },
+        sha: {
+          type: 'string',
+          description: 'The tip of an origin branch.',
+        },
+        for: {
+          type: 'string',
+          description: 'The operation this resolves, so the check matches what that one accepts.',
+        },
+        log: {
+          type: 'string',
+          description: 'Checked exactly as the build checks it, and otherwise unused.',
+        },
+      },
+      additionalProperties: false,
+    },
+    // git resolves refs in a second or two, but a slow origin is a build's problem, not a read's.
+    timeoutMs: BUILD_TIMEOUT_MS,
+    async run(args, ctx) {
+      rejectUnknown(args, ['pr', 'sha', 'for', 'log'])
+      // The whole request is checked here, not only the part this resolves: an argument the build
+      // would refuse must not reach the person as a question they cannot answer usefully.
+      optionalLog(args)
+      const deadline = Date.now() + BUILD_TIMEOUT_MS
+      // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
+      if (args['for'] === 'deploy.main') {
+        if (args['pr'] !== undefined || args['sha'] !== undefined) {
+          throw new BrokerFault(
+            'bad-argument',
+            'deploy.main resolves main; give pr or sha to deploy.build instead',
+          )
+        }
+        const main = await resolveMainSource(ctx, deadline)
+        return `main at ${main.sha}`
+      }
+      // Anything else is `deploy.build`, which refuses a request without one of the two — the
+      // preview refuses it too, so the person is never asked about a build that cannot start.
+      const source = await resolveBuildSource(ctx, args, deadline)
+      return `${source.label} at ${source.sha}; main at ${source.mainSha}`
+    },
+  },
+  {
     name: 'deploy.build',
     summary:
       'Build the :dev image from a PR head or the tip of an origin branch; the root files stay at main.',
     confirm: true,
+    preview: 'deploy.source',
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
     input: {
@@ -1154,6 +1211,7 @@ export const OPS: readonly OpDefinition[] = [
     name: 'deploy.main',
     summary: 'Build the tip of main as :dev, then recreate the container from it.',
     confirm: true,
+    preview: 'deploy.source',
     serial: true,
     timeoutMs: BUILD_TIMEOUT_MS,
     input: {
@@ -1376,11 +1434,12 @@ export function findOp(name: string, context?: OpContext): OpDefinition | undefi
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
 export function describeOps(context?: OpContext): string {
   return JSON.stringify(
-    available(context).map(({ name, summary, input, confirm, timeoutMs }) => ({
+    available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
       name,
       summary,
       input,
       ...(confirm === true ? { confirm: true } : {}),
+      ...(preview === undefined ? {} : { preview }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     })),
     null,

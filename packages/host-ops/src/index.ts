@@ -108,6 +108,8 @@ interface DescribedOp {
   readonly input: Record<string, unknown>
   /** Destructive: ask the person before the broker is called. */
   readonly confirm?: boolean
+  /** The read-only operation that resolves what this one would do. */
+  readonly preview?: string
   /** How long the broker may take; a build is minutes, not the client's default. */
   readonly timeoutMs?: number
 }
@@ -153,7 +155,26 @@ export async function registerTools(
   }
   const ops: unknown[] = parsed
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const tools = ops.map(value => toolFor(ctx, endpoint, asOp(value), call, statePath))
+  const catalogue = ops.map(value => asOp(value))
+  // The preview is called before the confirmation gate, so an unknown name would fail the deploy
+  // with an operation fault and a destructive one would run unasked.
+  for (const op of catalogue) {
+    if (op.preview === undefined) {
+      continue
+    }
+    const preview = catalogue.find(candidate => candidate.name === op.preview)
+    if (preview === undefined) {
+      throw new Error(
+        `host-ops: ${op.name} previews ${op.preview}, which the broker does not offer`,
+      )
+    }
+    if (preview.confirm === true) {
+      throw new Error(
+        `host-ops: ${op.name} previews ${op.preview}, which itself needs confirmation`,
+      )
+    }
+  }
+  const tools = catalogue.map(op => toolFor(ctx, endpoint, op, catalogue, call, statePath))
   const names = new Set<string>()
   for (const tool of tools) {
     if (names.has(tool.name)) {
@@ -250,11 +271,21 @@ function toolFor(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   op: DescribedOp,
+  ops: readonly DescribedOp[],
   call: BrokerCaller,
   statePath: string,
 ): HostTool {
-  // A long operation says so; the tool call and the socket wait inherit it together.
-  const timeoutMs = op.timeoutMs === undefined ? undefined : op.timeoutMs + OP_TIMEOUT_SLACK_MS
+  // A long operation says so; the tool call and the socket wait inherit it together. A preview
+  // runs inside the same call on the synchronous path, so its budget is part of this one.
+  const previewOp = ops.find(candidate => candidate.name === op.preview)
+  const previewBudget = previewOp?.timeoutMs ?? 0
+  const timeoutMs =
+    op.timeoutMs === undefined ? undefined : op.timeoutMs + previewBudget + OP_TIMEOUT_SLACK_MS
+  // The preview is its own operation with its own budget: resolving refs is not a build's wait.
+  const previewEndpoint =
+    previewOp?.timeoutMs === undefined
+      ? endpoint
+      : { ...endpoint, timeoutMs: previewOp.timeoutMs + OP_TIMEOUT_SLACK_MS }
   return {
     name: toolName(op.name),
     description: op.summary,
@@ -291,7 +322,15 @@ function toolFor(
       }
       const input = isRecord(args) ? args : {}
       const confirmation: Confirmation =
-        op.confirm === true ? await confirmed(ctx, op, args, exec) : { ok: true }
+        op.confirm === true
+          ? await confirmed(ctx, op, input, exec, () =>
+              op.preview === undefined
+                ? Promise.resolve(undefined)
+                : call(previewEndpoint, op.preview, previewArgs(op, ops, input), exec.signal).then(
+                    answer => answer.text,
+                  ),
+            )
+          : { ok: true }
       if (confirmation.ok === false) {
         throw new Error(
           `host-ops: ${op.name} was not confirmed; the host was not touched` +
@@ -321,7 +360,7 @@ function asOp(value: unknown): DescribedOp {
   if (!isRecord(value)) {
     throw new Error('the broker described an operation that is not an object')
   }
-  const { name, summary, input, confirm, timeoutMs } = value
+  const { name, summary, input, confirm, preview, timeoutMs } = value
   if (typeof name !== 'string' || typeof summary !== 'string' || !isRecord(input)) {
     throw new Error('the broker described an operation without a name, summary or object input')
   }
@@ -330,12 +369,42 @@ function asOp(value: unknown): DescribedOp {
     summary,
     input,
     ...(confirm === true ? { confirm: true } : {}),
+    ...(typeof preview === 'string' && preview !== '' ? { preview } : {}),
     // The broker's per-operation budget travels with the operation; dropping it silently is how
     // a long build ends up waiting the default 15 seconds again.
     ...(typeof timeoutMs === 'number' && Number.isInteger(timeoutMs) && timeoutMs > 0
       ? { timeoutMs }
       : {}),
   }
+}
+
+/**
+ * The arguments a preview gets: the ones it declares, and which operation it resolves for.
+ *
+ * A build's own `log` is not a source argument, and handing it over would make the preview refuse a
+ * request the build itself accepts.
+ */
+function previewArgs(
+  op: DescribedOp,
+  ops: readonly DescribedOp[],
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const preview = ops.find(candidate => candidate.name === op.preview)
+  const properties = readField(preview?.input, 'properties')
+  if (!isRecord(properties)) {
+    return {}
+  }
+  const args: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(input)) {
+    // `for` says which operation this answers for; a caller does not get to choose that.
+    if (key !== 'for' && properties[key] !== undefined) {
+      args[key] = value
+    }
+  }
+  if (properties['for'] !== undefined) {
+    args['for'] = op.name
+  }
+  return args
 }
 
 /** The person's answer: Run, or the reply they typed instead of choosing. */
@@ -353,13 +422,19 @@ async function confirmed(
   op: DescribedOp,
   args: unknown,
   exec: ToolExecution,
+  resolve: () => Promise<string | undefined>,
 ): Promise<Confirmation> {
+  // Resolve before asking: a question about "PR 82" is not a question about a commit, and a source
+  // that cannot be resolved is an error the person should see instead of a prompt.
+  const resolved = await resolve()
+  const detail =
+    resolved === undefined ? `${JSON.stringify(args)}\n` : `${JSON.stringify(args)}\n${resolved}\n`
   const answer = await ctx.userQuestions.ask({
     questions: [
       {
         id: 'confirm',
         header: 'Host operation',
-        question: `Run ${op.name} on the host?\n\n${JSON.stringify(args)}\n\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
+        question: `Run ${op.name} on the host?\n\n${detail}\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
         options: [{ label: CONFIRM_OPTION, description: op.summary }, { label: 'Cancel' }],
       },
     ],

@@ -799,3 +799,266 @@ void test('a broker without the log argument stays synchronous', async () => {
     await rm(host, { recursive: true, force: true })
   }
 })
+
+void test('an operation with a preview is asked about what it resolved', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      preview: 'deploy.source',
+    },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' }, sha: { type: 'string' }, for: { type: 'string' } },
+        additionalProperties: false,
+      },
+      timeoutMs: OP_TIMEOUT_MS,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(request => {
+    if (request.op === 'ops.describe') {
+      return describe
+    }
+    if (request.op === 'deploy.source') {
+      return `${JSON.stringify({ ok: true, result: 'pr 82 at aaaaaaa; main at bbbbbbb' })}\n`
+    }
+    return `${JSON.stringify({ ok: false, error: { code: 'unavailable', message: 'never ran' } })}\n`
+  })
+  try {
+    const { ctx, tools, asks } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    await assert.rejects(
+      tools[0].execute({ pr: 82 }, { signal: new AbortController().signal }),
+      /never ran/u,
+    )
+    // Resolved first, then asked, then run.
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe', 'deploy.source', 'deploy.build'],
+    )
+    assert.equal(asks.length, 1)
+    const source = broker.requests.find(request => request.op === 'deploy.source')
+    assert.deepEqual(source?.args, { pr: 82, for: 'deploy.build' })
+    const asked = asks[0]?.['questions'] as Array<{ question: string }> | undefined
+    const question = asked?.[0]?.question ?? ''
+    assert.match(question, /pr 82 at aaaaaaa; main at bbbbbbb/u)
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('an unresolvable preview is an error, not a question', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      preview: 'deploy.source',
+    },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(request =>
+    request.op === 'ops.describe'
+      ? describe
+      : `${JSON.stringify({ ok: false, error: { code: 'bad-argument', message: 'no such PR' } })}\n`,
+  )
+  try {
+    const { ctx, tools, asks } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    await assert.rejects(
+      tools[0].execute({ pr: 82 }, { signal: new AbortController().signal }),
+      /no such PR/u,
+    )
+    // Nothing was asked, and the operation itself was never called.
+    assert.equal(asks.length, 0)
+    assert.deepEqual(
+      broker.requests.map(request => request.op),
+      ['ops.describe', 'deploy.source'],
+    )
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('the preview does not see arguments its operation does not accept', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: {
+        type: 'object',
+        properties: { log: { type: 'string' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      preview: 'deploy.source',
+    },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' }, sha: { type: 'string' }, for: { type: 'string' } },
+        additionalProperties: false,
+      },
+      timeoutMs: OP_TIMEOUT_MS,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(request => {
+    if (request.op === 'ops.describe') {
+      return describe
+    }
+    if (request.op === 'deploy.source') {
+      return `${JSON.stringify({ ok: true, result: 'PR #82 at aaaaaaa; main at bbbbbbb' })}\n`
+    }
+    return `${JSON.stringify({ ok: true, result: 'built' })}\n`
+  })
+  try {
+    const { ctx, tools } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    const built = tools.find(tool => tool.name === 'idsh_deploy_build')
+    await built?.execute({ pr: 82, log: 'call-1' }, { signal: new AbortController().signal })
+    const source = broker.requests.find(request => request.op === 'deploy.source')
+    // `log` is the build's own argument; a preview that received it would refuse the request.
+    assert.deepEqual(source?.args, { pr: 82, for: 'deploy.build' })
+    const build = broker.requests.find(request => request.op === 'deploy.build')
+    assert.deepEqual(build?.args, { pr: 82, log: 'call-1' })
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a missing or destructive preview is refused at registration', async () => {
+  const missing = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      preview: 'deploy.source',
+    },
+  ]
+  const destructive = [
+    ...missing,
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+    },
+  ]
+  for (const [table, message] of [
+    [missing, /previews deploy\.source, which the broker does not offer/u],
+    [destructive, /previews deploy\.source, which itself needs confirmation/u],
+  ] as const) {
+    const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+    const broker = await fakeBroker(() => describe)
+    try {
+      const { ctx } = context()
+      await assert.rejects(registerTools(ctx, { socketPath: broker.socketPath }), message)
+    } finally {
+      await broker.close()
+    }
+  }
+})
+
+void test('the preview is called with its own budget, not the default', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' } },
+        additionalProperties: false,
+      },
+      confirm: true,
+      preview: 'deploy.source',
+      timeoutMs: OP_TIMEOUT_MS,
+    },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: {
+        type: 'object',
+        properties: { pr: { type: 'integer' }, for: { type: 'string' } },
+        additionalProperties: false,
+      },
+      timeoutMs: SHORT_OP_TIMEOUT_MS,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(() => describe)
+  const budgets: Array<{ op: string; timeoutMs?: number }> = []
+  const call = (
+    endpoint: { timeoutMs?: number },
+    op: string,
+  ): Promise<{ text: string; truncated: boolean }> => {
+    if (op === 'ops.describe') {
+      return Promise.resolve({ text: JSON.stringify(table), truncated: false })
+    }
+    budgets.push({
+      op,
+      ...(endpoint.timeoutMs === undefined ? {} : { timeoutMs: endpoint.timeoutMs }),
+    })
+    return Promise.resolve({ text: '', truncated: false })
+  }
+  try {
+    const { ctx, tools } = context(['Run'])
+    await registerTools(ctx, { socketPath: broker.socketPath }, call)
+    await tools
+      .find(tool => tool.name === 'idsh_deploy_build')
+      ?.execute({ pr: 82 }, { signal: new AbortController().signal })
+    // The preview's budget plus the plugin's slack, not the build's.
+    const preview = budgets.find(entry => entry.op === 'deploy.source')
+    assert.equal(preview?.timeoutMs, SHORT_OP_TIMEOUT_MS + SLACK_MS)
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a previewed operation gets the preview budget on top of its own', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      preview: 'deploy.source',
+      timeoutMs: OP_TIMEOUT_MS,
+    },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      timeoutMs: SHORT_OP_TIMEOUT_MS,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(() => describe)
+  try {
+    const { ctx, tools } = context()
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    // On the synchronous path the preview runs inside the call, so its budget is part of the tool's.
+    assert.equal(tools[0]?.timeoutMs, OP_TIMEOUT_MS + SHORT_OP_TIMEOUT_MS + SLACK_MS)
+  } finally {
+    await broker.close()
+  }
+})

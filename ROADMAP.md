@@ -4,24 +4,25 @@ This is the plan for letting the agent reach the machine it runs on — to diagn
 LAN and the router, and to deploy — without the credentials that make that reach possible ever
 living inside the container.
 
-Phase 1 has started: `packages/host-broker` carries the socket, six read sources, the bounds and
-the audit log, `deploy.status`/`deploy.log` inspect the deployment container, `deploy.recreate`
-restarts it, `deploy.build` builds it from an origin-only source, `deploy.main` builds and ships
-main in one call and `deploy.rollback` returns to the image recorded before that build — all
-behind an in-tool confirmation — and `packages/host-ops` turns that table into dsh tools.
-The confirmation shows the request (`pr`/`sha`), not the source it resolves to yet; build,
-main, recreate and rollback are serialized by one deployment lock; and `broker.update` lets
-the broker replace itself under a supervisor instead of a shell, while `gcb.update` does the
-same for the credential broker — its checkout, the image its compose names, and only its
-container. A build retires the labelled images it makes unnecessary — every `idsh.keep=1`
-image that is neither the one it produced nor the recorded target — so after a build at most
-two of them stay on disk. A sweep that could not finish says so in the build answer — a
-removal that failed, a listing cut at the broker's output window, an image this build
-produced that does not resolve, or a sweep that ran out of the build's time — and the next
-build tries again. `resolve-then-ask` is the next item in this slice, and the rest of the
-phase list (including `run` and its allowlist, and a deployment that rolls itself back when
-it will not come up) is still the plan. This file is the contract the implementation is
-judged against.
+Phase 1 has started: `packages/host-broker` carries the socket, six read sources, the bounds
+and the audit log, `deploy.status`/`deploy.log` inspect the deployment container,
+`deploy.recreate` restarts it, `deploy.build` builds it from an origin-only source,
+`deploy.main` builds and ships main in one call and `deploy.rollback` returns to the image
+recorded before that build — all behind an in-tool confirmation — and `packages/host-ops`
+turns that table into dsh tools. The confirmation shows what the request resolves to, not
+the request: `deploy.build` and `deploy.main` name `deploy.source` as their preview, so the
+question carries the branch tip and main sha before anything is built; build, main, recreate
+and rollback are serialized by one deployment lock; and `broker.update` lets the broker
+replace itself under a supervisor instead of a shell, while `gcb.update` does the same for
+the credential broker — its checkout, the image its compose names, and only its container. A
+build retires the labelled images it makes unnecessary — every `idsh.keep=1` image that is
+neither the one it produced nor the recorded target — so after a build at most two of them
+stay on disk. A sweep that could not finish says so in the build answer — a removal that
+failed, a listing cut at the broker's output window, an image this build produced that does
+not resolve, or a sweep that ran out of the build's time — and the next build tries again.
+The rest of the phase list (including `run` and its allowlist, and a deployment that rolls
+itself back when it will not come up) is still the plan. This file is the contract the
+implementation is judged against.
 
 ## The problem
 
@@ -203,21 +204,22 @@ checkout, so a working-tree path would mean deploying whatever the agent has jus
 remote commit at least ties every deployment to a commit anyone can read afterwards. A PR head
 must be reachable from a branch in the same repository; a fork's head is refused.
 
-**Confirmation happens inside the tool call.** Every deploy resolves its source to a commit SHA
-first, asks a question through the user question service — PR number, that SHA, a summary of the
-change — and blocks until it is answered. The build and the deploy use only the SHA that was
-shown, so a branch that moves while the question is open cannot change what was approved. The
-model cannot answer the question, and it cannot deploy and then ask: the deployment is inside the
-same call. Approval cannot do this job: under the `never` policy it is rejected before anyone is
-asked.
+**Confirmation happens inside the tool call.** `deploy.build` and `deploy.main` resolve
+their source first and ask a question through the user question service — the request, the
+branch tip and the `main` it resolves to — and block until it is answered. The build
+resolves both again when it runs, so a branch that moves while the question is open is built
+at its new tip; the answer names the SHAs it built, so what was approved and what ran are
+both on the record. The model cannot answer the question, and it cannot deploy and then ask:
+the deployment is inside the same call. Approval cannot do this job: under the `never`
+policy it is rejected before anyone is asked.
 
 **The files that run as root are pinned to main.** The image starts as root and drops to the
 deployment's uid; anything executed before that drop is root, and it can write the mounts. So
 the build takes `entrypoint.sh`, the tools it runs, both Dockerfiles and both ignore files from
 main, never from the PR — `Dockerfile.dev` is included because one `RUN` in it could rewrite the
-tool the entrypoint runs as root. `main` is resolved to a SHA at the same moment as the source,
-both SHAs are shown in the confirmation, and the build checks out exactly those two snapshots —
-a `main` that advances while the question is open cannot change what was approved. Everything
+tool the entrypoint runs as root. `main` is resolved with the source before the question and both
+SHAs are shown, and the build resolves `main` again when it runs — a `main` that advances is picked
+up and named in the answer rather than silently pinned to the preview. Everything
 else comes from the PR, including `packages/`: the dev image copies that directory whole and
 links every package that declares itself a plugin, so **a new plugin needs no Dockerfile change
 and can be verified before it is merged**. Only a change to those six files must be merged first,
@@ -351,6 +353,11 @@ phase-1 operation is host-local, and the router hop is phase 3.
 - Whether the deployment confirmation should also require an action outside the container — a
   label on the pull request, say — for the case where the agent is not merely confused but
   hostile. The question inside the tool call stops accidents; it does not stop a lie.
+- Whether the build operations should build exactly the SHAs the question showed, instead of
+  resolving the refs again when they run. The answer names what was built, so a ref that moves
+  between the question and the build is visible afterwards rather than approved — pinning would
+  make the question the commitment, and needs a rule for a commit that is no longer a branch
+  tip.
 - How the broker attributes a call to a session. The plugin knows; whether that is worth
   carrying over the socket is not settled.
 - How much of the wire protocol, audit format and build recipe to share with the credential
