@@ -111,4 +111,5 @@ RUN mkdir -p /opt/dsh/home \
   && dsh plugin --profile web add @idsh/mobile@0.0.3 \
   && dsh plugin --profile web add @idsh/privileged-ui@0.0.3 \
   && dsh plugin --profile web add @idsh/remote-access@0.0.2 \
+  && dsh plugin --profile web add @idsh/host-ops@0.1.1 \
   && test -f /opt/dsh/home/.dsh/profiles/web/package.json
