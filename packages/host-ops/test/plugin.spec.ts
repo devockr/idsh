@@ -1033,3 +1033,32 @@ void test('the preview is called with its own budget, not the default', async ()
     await broker.close()
   }
 })
+
+void test('a previewed operation gets the preview budget on top of its own', async () => {
+  const table = [
+    {
+      name: 'deploy.build',
+      summary: 'Build the :dev image.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      confirm: true,
+      preview: 'deploy.source',
+      timeoutMs: OP_TIMEOUT_MS,
+    },
+    {
+      name: 'deploy.source',
+      summary: 'Resolve the source.',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      timeoutMs: SHORT_OP_TIMEOUT_MS,
+    },
+  ]
+  const describe = `${JSON.stringify({ ok: true, result: JSON.stringify(table) })}\n`
+  const broker = await fakeBroker(() => describe)
+  try {
+    const { ctx, tools } = context()
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    // On the synchronous path the preview runs inside the call, so its budget is part of the tool's.
+    assert.equal(tools[0]?.timeoutMs, OP_TIMEOUT_MS + SHORT_OP_TIMEOUT_MS + SLACK_MS)
+  } finally {
+    await broker.close()
+  }
+})

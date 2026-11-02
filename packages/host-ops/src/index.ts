@@ -275,10 +275,13 @@ function toolFor(
   call: BrokerCaller,
   statePath: string,
 ): HostTool {
-  // A long operation says so; the tool call and the socket wait inherit it together.
-  const timeoutMs = op.timeoutMs === undefined ? undefined : op.timeoutMs + OP_TIMEOUT_SLACK_MS
-  // The preview is its own operation with its own budget: resolving refs is not a build's wait.
+  // A long operation says so; the tool call and the socket wait inherit it together. A preview
+  // runs inside the same call on the synchronous path, so its budget is part of this one.
   const previewOp = ops.find(candidate => candidate.name === op.preview)
+  const previewBudget = previewOp?.timeoutMs ?? 0
+  const timeoutMs =
+    op.timeoutMs === undefined ? undefined : op.timeoutMs + previewBudget + OP_TIMEOUT_SLACK_MS
+  // The preview is its own operation with its own budget: resolving refs is not a build's wait.
   const previewEndpoint =
     previewOp?.timeoutMs === undefined
       ? endpoint
