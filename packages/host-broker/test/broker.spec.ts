@@ -313,7 +313,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
 
     const described = await connection.request({
       op: 'ops.describe',
-      args: {},
+      args: { protocol: 1 },
     })
     const ops = describedTable(described.result).ops
     assert.deepEqual(
@@ -340,8 +340,12 @@ void test('the broker answers, audits, and keeps its socket private', async () =
     // The answer says which protocol it is shaped for, and which broker produced it: that is what a
     // client compares with its own build.
     assert.equal(table.protocol, 1)
-    assert.equal(typeof table.version, 'string')
-    assert.notEqual(table.version, '')
+    const ownVersion = (
+      JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+        version: string
+      }
+    ).version
+    assert.equal(table.version, ownVersion)
     const describedTail = ops.find(op => op.name === 'log.tail')
     assert.equal(describedTail?.input.required?.[0], 'file')
     // The build operations name the read-only one that resolves them, so the person is asked about
@@ -988,7 +992,10 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
   })
   const connection = client(host.socketPath)
   try {
-    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const described = await connection.request({
+      op: 'ops.describe',
+      args: { protocol: 1 },
+    })
     const ops = describedTable(described.result).ops
     const recreate = ops.find(op => op.name === 'deploy.recreate')
     assert.equal(recreate?.confirm, true)
@@ -2755,7 +2762,10 @@ void test('gcb.update is offered only when its three values are configured', asy
   })
   const connection = client(host.socketPath)
   try {
-    const described = await connection.request({ op: 'ops.describe', args: {} })
+    const described = await connection.request({
+      op: 'ops.describe',
+      args: { protocol: 1 },
+    })
     const ops = describedTable(described.result).ops
     assert.equal(
       ops.find(op => op.name === 'gcb.update'),
@@ -2770,7 +2780,10 @@ void test('gcb.update is offered only when its three values are configured', asy
 void test('gcb.update pulls, builds the one image and probes the deployment', async () => {
   const rig = await gcbRig()
   try {
-    const described = await rig.connection.request({ op: 'ops.describe', args: {} })
+    const described = await rig.connection.request({
+      op: 'ops.describe',
+      args: { protocol: 1 },
+    })
     const ops = describedTable(described.result).ops
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
@@ -3260,6 +3273,45 @@ esac
     const empty = await connection.request({ op: 'deploy.source', args: {} })
     assert.equal(empty.ok, false)
     assert.match(empty.error?.message ?? '', /give exactly one of pr or sha/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('ops.describe answers the bare table to a client that declares nothing', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(dockerPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    // An older plugin throws unless this is an array: the envelope is for clients that ask for it.
+    const legacy = await connection.request({ op: 'ops.describe', args: {} })
+    const parsed: unknown = JSON.parse(legacy.result ?? 'null')
+    assert.equal(Array.isArray(parsed), true)
+
+    const declared = await connection.request({
+      op: 'ops.describe',
+      args: { protocol: 1 },
+    })
+    const envelope: unknown = JSON.parse(declared.result ?? 'null')
+    assert.equal(typeof envelope, 'object')
+    assert.equal((envelope as { protocol?: unknown }).protocol, 1)
+
+    // A wrong type is the caller's mistake, not a shape to guess at.
+    const wrong = await connection.request({
+      op: 'ops.describe',
+      args: { protocol: 'one' },
+    })
+    assert.equal(wrong.ok, false)
+    assert.match(wrong.error?.message ?? '', /protocol must be an integer/u)
   } finally {
     connection.close()
     await broker.close()

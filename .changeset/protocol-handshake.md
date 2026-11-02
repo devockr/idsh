@@ -3,9 +3,7 @@
 "@idsh/host-ops": minor
 ---
 
-`ops.describe` now answers with `{ protocol, version, ops }` instead of the bare table, and the plugin
-compares that `protocol` with its own: a broker that sends no protocol (older than the plugin) or a
-different one is named in a warning at load instead of surfacing later as an unknown argument. The
-bare table is still accepted, so an older broker keeps working — the warning says to update both,
-because the plugin ships in the image and the broker runs from the deployment's checkout, and neither
-update carries the other.
+`ops.describe` is negotiated: a client that declares `{protocol}` gets `{ protocol, version, ops }` and
+a client that declares nothing gets the bare table it has always read. A newer plugin therefore
+warns — "older broker", or a different protocol number — instead of an older plugin losing every host
+tool against a newer broker, which is what a one-way change to the answer would have caused.

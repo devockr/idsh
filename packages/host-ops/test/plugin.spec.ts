@@ -1140,9 +1140,14 @@ void test('a broker speaking another protocol is named in a warning', async () =
   ] as const) {
     const broker = await fakeBroker(() => describe)
     try {
-      const { ctx, warnings } = context()
+      const { ctx, tools, warnings } = context()
       await registerTools(ctx, { socketPath: broker.socketPath })
       assert.match(warnings.join('\n'), expected)
+      // The warning is not a refusal: the table is readable, so the tools exist.
+      assert.deepEqual(
+        tools.map(tool => tool.name),
+        ['idsh_log_tail', 'idsh_disk_usage'],
+      )
     } finally {
       await broker.close()
     }

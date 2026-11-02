@@ -154,7 +154,9 @@ export async function registerTools(
   call: BrokerCaller = callBroker,
   statePath: string | undefined = DEFAULT_STATE_PATH,
 ): Promise<void> {
-  const described = await call(endpoint, 'ops.describe', {})
+  // The argument is the negotiation: a broker new enough to answer with `{protocol, …}` does so
+  // only for a client that declares one, and an older broker ignores it and sends the bare table.
+  const described = await call(endpoint, 'ops.describe', { protocol: PROTOCOL })
   const parsed: unknown = JSON.parse(described.text)
   // A broker older than this plugin answers with the bare table: usable, but it cannot say which
   // arguments it takes beyond the ones in the entry, so the mismatch is worth one line in the log.
@@ -421,7 +423,7 @@ function previewArgs(
   return args
 }
 
-/** The protocol this plugin builds its tools from; a broker has to speak the same one. */
+/** The protocol this plugin builds its tools from, and declares when it asks for the table. */
 const PROTOCOL = 1
 
 /**

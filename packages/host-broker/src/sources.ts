@@ -1433,27 +1433,40 @@ export function findOp(name: string, context?: OpContext): OpDefinition | undefi
 
 /** The table as the plugin sees it: names, summaries and the parameter schema of each. */
 /**
- * What `ops.describe` answers: the table, the protocol it is shaped for, and this broker's version.
+ * What `ops.describe` answers, and the protocol this broker is shaped for.
  *
- * The protocol is the compatibility number a client compares with its own — the table's shape and
- * the arguments an operation accepts travel together — while `version` is for a person reading a
- * warning.
+ * The negotiation is one-sided on purpose: a client that declares `{protocol}` gets the envelope —
+ * the table, that protocol and this broker's version — and a client that sends nothing gets the
+ * bare table. An older plugin throws on anything but an array, so answering it with the envelope
+ * would cost it every host tool; a newer plugin reads both, so the bare table only means "older
+ * broker".
  */
 export const DESCRIBE_PROTOCOL = 1
 
-export function describeOps(context?: OpContext): string {
+function describeTable(context?: OpContext): unknown[] {
+  return available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
+    name,
+    summary,
+    input,
+    ...(confirm === true ? { confirm: true } : {}),
+    ...(preview === undefined ? {} : { preview }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  }))
+}
+
+export function describeOps(context?: OpContext, args?: Record<string, unknown>): string {
+  const declared = args?.['protocol']
+  if (declared === undefined) {
+    return JSON.stringify(describeTable(context), null, 2)
+  }
+  if (typeof declared !== 'number' || !Number.isInteger(declared)) {
+    throw new BrokerFault('bad-argument', 'protocol must be an integer')
+  }
   return JSON.stringify(
     {
       protocol: DESCRIBE_PROTOCOL,
       version: context?.brokerVersion ?? 'unknown',
-      ops: available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
-        name,
-        summary,
-        input,
-        ...(confirm === true ? { confirm: true } : {}),
-        ...(preview === undefined ? {} : { preview }),
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
-      })),
+      ops: describeTable(context),
     },
     null,
     2,
