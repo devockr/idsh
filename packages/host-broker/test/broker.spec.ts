@@ -33,6 +33,7 @@ import {
   startBroker,
   TAIL_WINDOW_BYTES,
   type BrokerResponse,
+  type RunningBroker,
 } from '@idsh/host-broker'
 
 // The bounds these tests assert against; named here because the broker keeps them internal.
@@ -374,7 +375,7 @@ void test('run looks for a declared binary outside an inherited PATH', async () 
   await writeFile(path.join(fakeDir, 'df'), '#!/bin/sh\necho HIJACKED\n', { mode: 0o755 })
   const original = process.env.PATH
   process.env.PATH = `${fakeDir}:${original ?? ''}`
-  let broker: Awaited<ReturnType<typeof startBroker>> | undefined
+  let broker: RunningBroker | undefined
   try {
     broker = await startBroker({
       socketPath: host.socketPath,
