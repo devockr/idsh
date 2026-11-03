@@ -330,7 +330,6 @@ export async function registerTools(
         one.dispose()
       }
       mounted = []
-      fingerprint = ''
     },
   }
 }
