@@ -5,6 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 
 import { apply, registerTools, type Config, type HostContext, type HostTool } from '../src/index.ts'
+import { type BrokerAnswer } from '../src/socket.ts'
 import { buildLogSource, startDeployJob, type JobSpec, type Jobs } from '../src/stream.ts'
 import { fakeBroker } from './server.ts'
 
@@ -1275,6 +1276,39 @@ void test('a refresh queued before disposal never asks the broker', async () => 
   } finally {
     await broker.close()
   }
+})
+
+void test('a disposal during an in-flight read mounts nothing', async () => {
+  let calls = 0
+  let started!: () => void
+  let release!: (answer: BrokerAnswer) => void
+  const readStarted = new Promise<void>(resolve => {
+    started = resolve
+  })
+  // A caller whose second read stays pending until the test says otherwise, so the disposal lands
+  // between the request and its answer.
+  const call = async (): Promise<BrokerAnswer> => {
+    calls += 1
+    const table = calls === 1 ? [TABLE[0]] : TABLE
+    if (calls === 1) {
+      return {
+        text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }),
+        truncated: false,
+      }
+    }
+    return new Promise<BrokerAnswer>(resolve => {
+      release = resolve
+      started()
+    })
+  }
+  const { ctx, tools } = context()
+  const registered = await registerTools(ctx, { socketPath: '/unused' }, call)
+  const refresh = registered.refresh()
+  await readStarted
+  registered.dispose()
+  release({ text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }), truncated: false })
+  assert.equal(await refresh, false)
+  assert.deepEqual(tools, [])
 })
 
 void test('an older broker is named once, not once per poll', async () => {
