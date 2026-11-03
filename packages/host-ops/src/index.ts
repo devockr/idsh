@@ -457,21 +457,31 @@ type Confirmation = { ok: false; reply?: string } | { ok: true }
 async function confirmed(
   ctx: HostContext,
   op: DescribedOp,
-  args: unknown,
+  args: Record<string, unknown>,
   exec: ToolExecution,
   resolve: () => Promise<string | undefined>,
 ): Promise<Confirmation> {
   // Resolve before asking: a question about "PR 82" is not a question about a commit, and a source
   // that cannot be resolved is an error the person should see instead of a prompt.
   const resolved = await resolve()
-  const detail =
-    resolved === undefined ? `${JSON.stringify(args)}\n` : `${JSON.stringify(args)}\n${resolved}\n`
+  // Blocks of text, not one formatted blob. `JSON.stringify` already answers whether there is
+  // anything to show — an argument-free call is exactly the string `{}`, which reads like a
+  // placeholder that failed to fill in — and a resolved source is a block of its own.
+  const blocks = [`Run ${op.name} on the host?`]
+  const shown = JSON.stringify(args)
+  if (shown !== '{}') {
+    blocks.push(shown)
+  }
+  if (resolved !== undefined) {
+    blocks.push(resolved)
+  }
+  blocks.push(`Choose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`)
   const answer = await ctx.userQuestions.ask({
     questions: [
       {
         id: 'confirm',
         header: 'Host operation',
-        question: `Run ${op.name} on the host?\n\n${detail}\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
+        question: blocks.join('\n\n'),
         options: [{ label: CONFIRM_OPTION, description: op.summary }, { label: 'Cancel' }],
       },
     ],
