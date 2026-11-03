@@ -10,11 +10,14 @@ import { spawn } from 'node:child_process'
 import {
   appendFile,
   chmod,
+  lstat,
   readdir,
   mkdir,
   mkdtemp,
   open,
   readFile,
+  readlink,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -652,17 +655,78 @@ function remaining(deadline: number): number {
 
 const BROKER_PACKAGE = '@idsh/host-broker'
 
+/** Up to how many links one resolution follows, so a chain that loops cannot hang the operation. */
+const MAX_LINK_HOPS = 16
+
+/**
+ * A path as the filesystem names it, so the two sides of the comparison agree when one is reached
+ * through a symlink — a deployment whose checkout lives under `/var/services` and a process whose
+ * entry resolved to `/volume1` are the same tree, and a plain `resolve` cannot say so.
+ *
+ * A path that no longer exists is named through its nearest existing ancestor and the segments
+ * below it, because a cleaned `lib/` must not turn a symlinked checkout into "outside the
+ * checkout".
+ */
+async function realOrResolved(value: string, hops = 0): Promise<string> {
+  const resolved = path.resolve(value)
+  const missing: string[] = []
+  let head = resolved
+  for (;;) {
+    try {
+      return path.join(await realpath(head), ...missing.toReversed())
+    } catch (error) {
+      const parent = path.dirname(head)
+      // Only "this segment is missing" continues the walk; a loop or a permission error is a path
+      // that exists in some form, and the lexical name is the honest answer for it.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === head) {
+        return resolved
+      }
+      // A dangling link still names where it pointed: follow that instead of treating the link's
+      // own name as the missing segment, because the target may be the tree being looked for.
+      const target = hops < MAX_LINK_HOPS ? await danglingTarget(head) : undefined
+      if (target !== undefined) {
+        return realOrResolved(path.join(target, ...missing.toReversed()), hops + 1)
+      }
+      missing.push(path.basename(head))
+      head = parent
+    }
+  }
+}
+
+/**
+ * The target of a symlink whose target is gone, or `undefined` when the path is not a symlink (or
+ * cannot be read at all, which is not this case to answer).
+ */
+async function danglingTarget(value: string): Promise<string | undefined> {
+  try {
+    if (!(await lstat(value)).isSymbolicLink()) {
+      return undefined
+    }
+    const link = await readlink(value)
+    // A relative target is relative to the directory the link lives in *as the filesystem names
+    // it*: the lexical parent may itself be a symlink, and the two spellings reach different trees.
+    const parent = await realpath(path.dirname(value)).catch(() => path.dirname(value))
+    const target = path.isAbsolute(link) ? link : path.resolve(parent, link)
+    return target === path.resolve(value) ? undefined : target
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * How this broker was installed, read from the program it is running: inside the checkout it builds
  * there (the entry it is running from), otherwise the published package is what to update.
  */
-function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
+async function brokerUpdateSource(ctx: OpContext): Promise<'checkout' | 'npm'> {
   if (ctx.checkout === undefined) {
     return 'npm'
   }
-  const entry = path.resolve(ctx.entryPath)
-  const relative = path.relative(ctx.checkout, entry)
-  return relative !== '' && !relative.startsWith('..') ? 'checkout' : 'npm'
+  const entry = await realOrResolved(ctx.entryPath)
+  const relative = path.relative(await realOrResolved(ctx.checkout), entry)
+  // `..` as a segment, not as a prefix: a child directory called `..build` is inside the checkout,
+  // and a plain `startsWith('..')` would send it to the npm branch and the refusal there.
+  const outside = relative === '..' || relative.startsWith(`..${path.sep}`)
+  return relative !== '' && !outside ? 'checkout' : 'npm'
 }
 
 /**
@@ -1373,7 +1437,7 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, [])
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      const source = brokerUpdateSource(ctx)
+      const source = await brokerUpdateSource(ctx)
       // Synchronous on purpose: a failed step must be the answer, not a silent no-op behind it.
       // Each step gets what is left of the one budget, like the build.
       for (const step of brokerUpdate(ctx, source)) {
