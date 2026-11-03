@@ -892,6 +892,16 @@ const RUN_BINARIES: Readonly<Record<string, RunDeclaration>> = {
   uptime: { summary: 'Load average and uptime.' },
 }
 
+/** The declared name a token spells, or `undefined` when it spells none of them. */
+function flagName(token: string): string | undefined {
+  // One leading dash, or the plus `dig` uses — the declaration's spelling exactly. `--h` for a
+  // declared `-h` would be a second grammar, and `-+short` is not the plus form either.
+  if (token.startsWith('+')) {
+    return token
+  }
+  return /^-[^-+]/u.test(token) ? token.slice(1) : undefined
+}
+
 /** One parsed `run` call: the program, its argv, and what the declaration said about it. */
 interface RunVerdict {
   readonly program: string
@@ -937,15 +947,7 @@ function parseRun(tokens: readonly string[]): RunVerdict {
       if (token === '--' || token === '-') {
         throw new BrokerFault('bad-argument', `${JSON.stringify(token)} is not a declared flag`)
       }
-      // The declared spelling, exactly: one leading dash (or the plus dig uses). `--h` for a
-      // declared `-h` would be a second grammar the declaration never described.
-      const name = token.startsWith('+')
-        ? token
-        : token.startsWith('--')
-          ? undefined
-          : token.slice(1).includes('+')
-            ? undefined
-            : token.slice(1)
+      const name = flagName(token)
       const flags = declaration.flags
       const kind =
         name !== undefined && flags !== undefined && Object.hasOwn(flags, name)

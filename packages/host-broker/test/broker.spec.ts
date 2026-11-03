@@ -335,6 +335,35 @@ void test('run answers the policy verdict, and refuses what the declaration does
   }
 })
 
+void test('run uses the configured path where a source already owns the binary', async () => {
+  const host = await fakeHost()
+  // The fake programs answer their own argv, so the assertion proves which path ran — `ip addr` is
+  // `addr` only if the broker spawned the configured one.
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    ipPath: '/bin/echo',
+    ssPath: '/bin/echo',
+  })
+  const connection = client(host.socketPath)
+  try {
+    for (const [argv, expected] of [
+      [['ip', 'addr'], 'addr'],
+      [['ip', '-4', 'route'], '-4 route'],
+      [['ss', '-t'], '-t'],
+    ] as const) {
+      const answer = await connection.request({ op: 'run', args: { argv } })
+      assert.equal(answer.ok, true, JSON.stringify(answer.error))
+      assert.equal((answer.result ?? '').trim(), expected, argv.join(' '))
+    }
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('run executes a declared binary and answers its output', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
