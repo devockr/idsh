@@ -457,7 +457,7 @@ type Confirmation = { ok: false; reply?: string } | { ok: true }
 async function confirmed(
   ctx: HostContext,
   op: DescribedOp,
-  args: unknown,
+  args: Record<string, unknown>,
   exec: ToolExecution,
   resolve: () => Promise<string | undefined>,
 ): Promise<Confirmation> {
