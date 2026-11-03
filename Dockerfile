@@ -102,7 +102,7 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com/
 # the dev image's apt install, ten minutes of it — for a change dev never uses. Dockerfile.dev
 # copies the client from the broker's own dev image instead.
 RUN --mount=type=cache,id=npm_cache,target=/root/.npm \
-  npm install -g --registry="$NPM_REGISTRY" gcb-client@0.1.0
+  npm install -g --registry="$NPM_REGISTRY" gcb-client@0.2.0
 
 RUN mkdir -p /opt/dsh/home \
   && export HOME=/opt/dsh/home \
