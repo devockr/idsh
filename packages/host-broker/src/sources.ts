@@ -702,8 +702,12 @@ async function danglingTarget(value: string): Promise<string | undefined> {
     if (!(await lstat(value)).isSymbolicLink()) {
       return undefined
     }
-    const target = path.resolve(path.dirname(value), await readlink(value))
-    return target === value ? undefined : target
+    const link = await readlink(value)
+    // A relative target is relative to the directory the link lives in *as the filesystem names
+    // it*: the lexical parent may itself be a symlink, and the two spellings reach different trees.
+    const parent = await realpath(path.dirname(value)).catch(() => path.dirname(value))
+    const target = path.isAbsolute(link) ? link : path.resolve(parent, link)
+    return target === path.resolve(value) ? undefined : target
   } catch {
     return undefined
   }

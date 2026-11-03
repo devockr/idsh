@@ -2286,6 +2286,51 @@ echo "$PWD $*" >> '${gitLog}'
   })
 }
 
+void test('broker.update reads a relative link target through the real directory', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$PWD $*" >> '${gitLog}'
+`,
+    { mode: 0o755 },
+  )
+  const real = path.join(host.root, 'checkout')
+  const target = path.join(real, 'packages', 'host-broker', 'lib', 'cli.js')
+  await mkdir(path.dirname(target), { recursive: true })
+  await writeFile(target, '\n')
+  // The link lives under a directory reached through a symlink of its own, and points at its target
+  // relatively: the lexical parent and the real one are different spellings of the same tree, so a
+  // target resolved against the lexical one would miss.
+  const aliasParent = path.join(host.root, 'alias')
+  await symlink(path.join(host.root, 'installed'), aliasParent, 'dir')
+  await mkdir(path.join(host.root, 'installed', 'nested'), { recursive: true })
+  const entryPath = path.join(aliasParent, 'nested', 'cli.js')
+  await symlink('../../checkout/packages/host-broker/lib/cli.js', entryPath, 'file')
+  await rm(target)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath,
+    pnpmPath: gitPath,
+    checkout: real,
+    entryPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^updated from checkout/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('broker.update treats a directory whose name starts with dots as inside', async () => {
   const host = await fakeHost()
   const gitLog = path.join(host.root, 'git.log')
