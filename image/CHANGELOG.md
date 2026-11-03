@@ -1,5 +1,19 @@
 # @idsh/image
 
+## 0.1.1
+
+### Patch Changes
+
+- [#90](https://github.com/devockr/idsh/pull/90) [`aeb1f18`](https://github.com/devockr/idsh/commit/aeb1f18d617e0c83c5b183e3fa5f62dd5927b4f9) Thanks [@git-credential-broker](https://github.com/apps/git-credential-broker)! - The published image bakes `@idsh/host-ops` as well: `:latest` now ships the host tools
+  (`idsh_deploy_*`, `idsh_broker_*`, `idsh_log_tail`, …) that only `:dev` had, so a published
+  deployment can reach its host broker. Without a broker the plugin logs its "broker is down" warning
+  and registers no tools, exactly as it already does on a deployment that mounts no socket. The host
+  broker itself stays a host program: it is not `dsh plugin add`ed, and nothing in the image runs it.
+
+- [#93](https://github.com/devockr/idsh/pull/93) [`8571561`](https://github.com/devockr/idsh/commit/85715614c0a409aa0ee5aa733ccdf960491feaef) Thanks [@JounQin](https://github.com/JounQin)! - The published image installs `gcb-client@0.2.0`, matching the `gcb-host` 0.2.0 the broker's daemon
+  runs. `:dev` already takes its client from `code-vaults/gcb-client:dev`, so this is the released
+  image catching up rather than a new capability.
+
 ## 0.1.0
 
 ### Minor Changes

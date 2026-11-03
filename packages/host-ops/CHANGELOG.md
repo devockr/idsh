@@ -1,5 +1,21 @@
 # @idsh/host-ops
 
+## 0.2.0
+
+### Minor Changes
+
+- [#88](https://github.com/devockr/idsh/pull/88) [`7ae99f5`](https://github.com/devockr/idsh/commit/7ae99f5ef8b036e473f67577865e6c1926166eb0) Thanks [@JounQin](https://github.com/JounQin)! - `ops.describe` is negotiated: a client that declares `{protocol}` gets `{ protocol, version, ops }` and
+  a client that declares nothing gets the bare table it has always read. A newer plugin therefore
+  warns — "older broker", or a different protocol number — instead of an older plugin losing every host
+  tool against a newer broker, which is what a one-way change to the answer would have caused.
+
+### Patch Changes
+
+- [#92](https://github.com/devockr/idsh/pull/92) [`b368a95`](https://github.com/devockr/idsh/commit/b368a950ecde7e320e9df01e0007ff7253733071) Thanks [@git-credential-broker](https://github.com/apps/git-credential-broker)! - The confirmation question is built from blocks instead of one formatted string, so an operation with
+  no arguments no longer shows `{}` where its arguments would be — a question reads "Run
+  deploy.recreate on the host?" followed by the resolved source, when there is one, and the instruction
+  to choose Run. A typed reply is still not an approval.
+
 ## 0.1.1
 
 ### Patch Changes
