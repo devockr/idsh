@@ -2302,13 +2302,16 @@ echo "$PWD $*" >> '${gitLog}'
   await mkdir(path.dirname(target), { recursive: true })
   await writeFile(target, '\n')
   // The link lives under a directory reached through a symlink of its own, and points at its target
-  // relatively: the lexical parent and the real one are different spellings of the same tree, so a
-  // target resolved against the lexical one would miss.
+  // relatively. The alias sits at a *different depth* than its target on purpose: at equal depth
+  // both spellings walk up to the same place, and the test would pass with a lexical parent.
+  const aliasTarget = path.join(host.root, 'installed', 'deep', 'dir')
+  await mkdir(aliasTarget, { recursive: true })
   const aliasParent = path.join(host.root, 'alias')
-  await symlink(path.join(host.root, 'installed'), aliasParent, 'dir')
-  await mkdir(path.join(host.root, 'installed', 'nested'), { recursive: true })
-  const entryPath = path.join(aliasParent, 'nested', 'cli.js')
-  await symlink('../../checkout/packages/host-broker/lib/cli.js', entryPath, 'file')
+  await symlink(aliasTarget, aliasParent, 'dir')
+  const entryPath = path.join(aliasParent, 'cli.js')
+  // From the real directory (`installed/deep/dir`) the checkout is four levels up; from the lexical
+  // one (`alias`) the same spelling points outside the tree.
+  await symlink('../../../checkout/packages/host-broker/lib/cli.js', entryPath, 'file')
   await rm(target)
   const broker = await startBroker({
     socketPath: host.socketPath,
