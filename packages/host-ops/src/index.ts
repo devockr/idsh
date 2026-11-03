@@ -238,7 +238,7 @@ export async function registerTools(
     const mounted: Mounted[] = []
     try {
       for (const tool of tools) {
-        mounted.push({ dispose: ctx.tools.register(tool) })
+        mounted.push({ tool, dispose: ctx.tools.register(tool) })
       }
     } catch (error) {
       for (const one of mounted) {
@@ -255,6 +255,7 @@ export async function registerTools(
   // caller's warning ("no tools this boot") true.
   const first = await load()
   mounted = mount(first.catalogue)
+  let previous = first.catalogue
   fingerprint = first.fingerprint
 
   return {
@@ -263,13 +264,19 @@ export async function registerTools(
       if (next.fingerprint === fingerprint) {
         return false
       }
-      // Mount first: a table the broker answers but cannot be mounted must leave the old tools in
-      // place, and `mount` disposes its own partial work when registration throws.
-      const nextMounted = mount(next.catalogue)
+      // The registry is keyed by tool name, so the new tools cannot be registered while the old
+      // ones hold their names. Drop them first, and put them back if the new mount fails: a table
+      // that cannot be mounted must leave what worked available.
       for (const one of mounted) {
         one.dispose()
       }
-      mounted = nextMounted
+      try {
+        mounted = mount(next.catalogue)
+      } catch (error) {
+        mounted = mount(previous)
+        throw error
+      }
+      previous = next.catalogue
       fingerprint = next.fingerprint
       return true
     },
@@ -283,8 +290,9 @@ export async function registerTools(
   }
 }
 
-/** What one registration put in place: the disposer Cordis handed back. */
+/** What one registration put in place: the tool and the disposer Cordis handed back. */
 interface Mounted {
+  readonly tool: HostTool
   readonly dispose: () => void
 }
 

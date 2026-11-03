@@ -59,6 +59,11 @@ function context(
     ctx: {
       tools: {
         register(tool) {
+          // dsh's registry is keyed by name and refuses a second registration with one, so the
+          // harness must too: a refresh that mounts before it disposes would pass here otherwise.
+          if (tools.some(one => one.name === tool.name)) {
+            throw new Error(`tool "${tool.name}" is already registered`)
+          }
           tools.push(tool)
           // Cordis hands back a disposer; the harness has to honour it, or a refresh looks like a
           // duplicate registration.
