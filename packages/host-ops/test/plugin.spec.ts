@@ -1256,6 +1256,27 @@ void test('a disposed registration ignores a refresh', async () => {
   }
 })
 
+void test('a refresh queued before disposal never asks the broker', async () => {
+  const broker = await fakeBroker(
+    () =>
+      `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }) })}\n`,
+  )
+  try {
+    const { ctx } = context()
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    const before = broker.requests.length
+    // Both are queued while the first read is still pending, then disposal lands.
+    const first = registered.refresh()
+    const second = registered.refresh()
+    registered.dispose()
+    assert.deepEqual(await Promise.all([first, second]), [false, false])
+    // The guard is inside the queued function, so neither opened a socket after disposal.
+    assert.equal(broker.requests.length - before, 0)
+  } finally {
+    await broker.close()
+  }
+})
+
 void test('an older broker is named once, not once per poll', async () => {
   const broker = await fakeBroker(
     () => `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`,

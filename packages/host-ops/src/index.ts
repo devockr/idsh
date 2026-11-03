@@ -289,6 +289,10 @@ export async function registerTools(
   fingerprint = first.fingerprint
 
   const refreshOnce = async (): Promise<boolean> => {
+    // Disposed, including while this call waited in the queue: no broker call, nothing to mount.
+    if (disposed) {
+      return false
+    }
     const next = await load()
     // A disposal that happened while the read was in flight must not be undone by a mount.
     if (disposed || next.fingerprint === fingerprint) {
@@ -315,10 +319,6 @@ export async function registerTools(
 
   return {
     refresh(): Promise<boolean> {
-      if (disposed) {
-        // Nothing to re-read for, and a disposed registration has no business calling the broker.
-        return Promise.resolve(false)
-      }
       const next = queue.then(() => refreshOnce())
       // The queue keeps going even when one read failed, so one bad poll does not stop the rest.
       queue = next.catch(() => undefined)
