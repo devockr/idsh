@@ -25,6 +25,9 @@ async function waitFor(condition: () => boolean): Promise<void> {
 /** The most a timer-driven assertion waits before giving up. */
 const POLL_WINDOW_MS = 2_000
 
+/** A number that is not a whole number of milliseconds, for the interval validation. */
+const FRACTIONAL_MS = 1.5
+
 const TABLE = [
   {
     name: 'log.tail',
@@ -1187,6 +1190,16 @@ void test('a table that changes is picked up without a reload', async () => {
     assert.deepEqual(tools, [])
   } finally {
     await broker.close()
+  }
+})
+
+void test('a refreshMs that is not a positive integer is refused, not coerced', async () => {
+  for (const refreshMs of [true, '5', FRACTIONAL_MS, 0, -1] as unknown[]) {
+    const base = context()
+    // `apply` turns a rejected config into its one warning, so the message is the assertion.
+    await apply(base.ctx, { socketPath: '/nonexistent/host.sock', refreshMs } as never)
+    assert.match(base.warnings.at(0) ?? '', /refreshMs must be a positive integer/u)
+    assert.deepEqual(base.tools, [])
   }
 })
 

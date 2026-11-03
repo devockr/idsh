@@ -349,12 +349,15 @@ function endpointOf(config: Config): BrokerEndpoint {
   if (typeof socketPath !== 'string' || socketPath === '') {
     throw new Error('host-ops: socketPath must be a non-empty string')
   }
-  // Node clamps an interval above `MAX_TIMER_MS` to one millisecond, which would poll the broker in
-  // a tight loop; the same ceiling `callBroker` puts on a call's timeout applies here.
-  const refreshMs = Math.min(config.refreshMs ?? REFRESH_MS, MAX_TIMER_MS)
-  if (!Number.isInteger(refreshMs) || refreshMs < 1) {
+  // Validate before clamping: `Math.min` coerces, so `true` would pass as `1` and poll every
+  // millisecond — the tight loop the ceiling exists to prevent.
+  const configured = config.refreshMs ?? REFRESH_MS
+  if (!Number.isInteger(configured) || configured < 1) {
     throw new Error('host-ops: refreshMs must be a positive integer')
   }
+  // Node clamps an interval above `MAX_TIMER_MS` to one millisecond, so the same ceiling
+  // `callBroker` puts on a call's timeout applies here.
+  const refreshMs = Math.min(configured, MAX_TIMER_MS)
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error('host-ops: timeoutMs must be a positive integer')
