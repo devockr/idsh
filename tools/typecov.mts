@@ -33,10 +33,28 @@ for (const project of projects) {
   process.stdout.write(`\n# ${project}\n`)
   const result = spawnSync(
     process.execPath,
-    [path.join(root, 'node_modules/type-coverage/bin/type-coverage'), '-p', project],
-    { cwd: root, stdio: 'inherit' },
+    [
+      path.join(root, 'node_modules/type-coverage/bin/type-coverage'),
+      // An absolute project path: a relative one is resolved against the `type-coverage` process's
+      // own directory, and every project but the root then measures nothing — "0 / 0" with a zero
+      // exit, which is a gate that cannot fail.
+      '-p',
+      path.join(root, project),
+    ],
+    { cwd: root, encoding: 'utf8' },
   )
+  process.stdout.write(result.stdout ?? '')
+  process.stderr.write(result.stderr ?? '')
   if (result.status !== 0) {
+    failed = true
+  }
+  // A run that measured nothing is not a pass: it is the failure mode above, and the one a version
+  // that cannot read this TypeScript produces. Refuse it rather than reporting green.
+  const measured = [...(result.stdout ?? '').matchAll(/\((\d+) \/ (\d+)\)/gu)].at(-1)
+  if (measured === undefined || measured[2] === '0') {
+    process.stderr.write(
+      `typecov: ${project} was not measured — type-coverage answered "${(result.stdout ?? '').trim() || '(no output)'}"\n`,
+    )
     failed = true
   }
 }
