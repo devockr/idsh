@@ -1680,11 +1680,20 @@ export const OPS: readonly OpDefinition[] = [
     },
     async run(args, ctx) {
       rejectUnknown(args, ['argv', 'dryRun'])
-      const argv = args['argv']
-      if (!Array.isArray(argv) || argv.some(token => typeof token !== 'string')) {
+      const raw = args['argv']
+      if (!Array.isArray(raw)) {
         throw new BrokerFault('bad-argument', 'argv must be an array of strings')
       }
-      const verdict = parseRun(argv as string[])
+      // Narrowed element by element: `Array.isArray` leaves the elements `any`, and type coverage is
+      // measured over this file, so the check has to say what it knows.
+      const tokens: string[] = []
+      for (const token of raw as unknown[]) {
+        if (typeof token !== 'string') {
+          throw new BrokerFault('bad-argument', 'argv must be an array of strings')
+        }
+        tokens.push(token)
+      }
+      const verdict = parseRun(tokens)
       if (args['dryRun'] === true) {
         return describeRun(verdict)
       }
