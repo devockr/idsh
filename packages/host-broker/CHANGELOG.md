@@ -1,5 +1,14 @@
 # @idsh/host-broker
 
+## 0.2.0
+
+### Minor Changes
+
+- [#88](https://github.com/devockr/idsh/pull/88) [`7ae99f5`](https://github.com/devockr/idsh/commit/7ae99f5ef8b036e473f67577865e6c1926166eb0) Thanks [@JounQin](https://github.com/JounQin)! - `ops.describe` is negotiated: a client that declares `{protocol}` gets `{ protocol, version, ops }` and
+  a client that declares nothing gets the bare table it has always read. A newer plugin therefore
+  warns — "older broker", or a different protocol number — instead of an older plugin losing every host
+  tool against a newer broker, which is what a one-way change to the answer would have caused.
+
 ## 0.1.0
 
 ### Minor Changes
