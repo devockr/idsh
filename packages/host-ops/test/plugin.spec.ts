@@ -14,8 +14,16 @@ const OP_TIMEOUT_MS = 900_000
 const TOOL_TIMEOUT_MS = OP_TIMEOUT_MS + SLACK_MS
 const SHORT_OP_TIMEOUT_MS = 200
 const SHORT_TOOL_TIMEOUT_MS = SHORT_OP_TIMEOUT_MS + SLACK_MS
-/** Long enough for several polls of the 5 ms interval the timer test configures. */
-const POLL_WINDOW_MS = 40
+/** Bounded wait for a condition a timer will satisfy, so a slow machine does not fail the test. */
+async function waitFor(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + POLL_WINDOW_MS
+  while (!condition() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
+/** The most a timer-driven assertion waits before giving up. */
+const POLL_WINDOW_MS = 2_000
 
 const TABLE = [
   {
@@ -1203,8 +1211,8 @@ void test('the timer replaces the tools without a reload', async () => {
     )
 
     table = [TABLE[0], TABLE[1]]
-    // The timer is the thing under test; eight polls of the 5 ms interval instead of a minute.
-    await new Promise(resolve => setTimeout(resolve, POLL_WINDOW_MS))
+    // The timer is the thing under test: wait for the outcome, not a fixed slice of time.
+    await waitFor(() => base.tools.length === 2)
     assert.deepEqual(
       base.tools.map(tool => tool.name),
       ['idsh_log_tail', 'idsh_disk_usage'],

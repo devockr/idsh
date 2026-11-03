@@ -9,4 +9,4 @@ table was read once at load — so a new operation stayed invisible until the wh
 replaced. The re-read is one socket roundtrip and an unchanged table registers nothing; the new tools
 are mounted after the old ones are disposed (the registry is keyed by name, so both cannot be visible
 at once) and the old ones are put back if the new mount fails, so a bad table leaves what worked in
-place. The plugin's own disposal clears the timer.
+place. The plugin's own disposal clears the timer, and `refreshMs` (a minute by default) sets the interval.

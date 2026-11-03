@@ -5,7 +5,12 @@
  * There is no shell here either: a tool call is one request to the broker, which validates the
  * arguments against the same schema and owns the audit line.
  */
-import { DEFAULT_SOCKET_PATH, DEFAULT_STATE_PATH, DEFAULT_TIMEOUT_MS } from './constants.ts'
+import {
+  DEFAULT_SOCKET_PATH,
+  DEFAULT_STATE_PATH,
+  DEFAULT_TIMEOUT_MS,
+  MAX_TIMER_MS,
+} from './constants.ts'
 import { callBroker, type BrokerAnswer, type BrokerEndpoint } from './socket.ts'
 import { startDeployJob, type Jobs } from './stream.ts'
 import { isRecord, readField } from './values.ts'
@@ -344,7 +349,9 @@ function endpointOf(config: Config): BrokerEndpoint {
   if (typeof socketPath !== 'string' || socketPath === '') {
     throw new Error('host-ops: socketPath must be a non-empty string')
   }
-  const refreshMs = config.refreshMs ?? REFRESH_MS
+  // Node clamps an interval above `MAX_TIMER_MS` to one millisecond, which would poll the broker in
+  // a tight loop; the same ceiling `callBroker` puts on a call's timeout applies here.
+  const refreshMs = Math.min(config.refreshMs ?? REFRESH_MS, MAX_TIMER_MS)
   if (!Number.isInteger(refreshMs) || refreshMs < 1) {
     throw new Error('host-ops: refreshMs must be a positive integer')
   }

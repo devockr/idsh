@@ -13,12 +13,15 @@ tool-safe name (`log.tail` becomes `idsh_log_tail`; the call still goes to the b
   config:
     socketPath: /run/idsh-host/host.sock
     timeoutMs: 15000
+    refreshMs: 60000
 ```
 
 `socketPath` defaults to `/run/idsh-host/host.sock` and `timeoutMs` to 15 seconds — slightly longer
 than the broker's own 10-second operation deadline, so the broker's `timeout` is the one the agent
 sees. An operation that publishes its own `timeoutMs` (the build) uses that instead, for the tool
-call and the socket wait alike. The socket's directory is the deployment's to mount; this package names nothing else.
+call and the socket wait alike. `refreshMs` defaults to a minute: the interval at which the table is
+asked for again, clamped to the largest delay a Node timer can express. The socket's directory is
+the deployment's to mount; this package names nothing else.
 
 ## Shape
 
