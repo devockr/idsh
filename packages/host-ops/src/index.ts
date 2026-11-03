@@ -319,7 +319,7 @@ export async function registerTools(
 
   return {
     refresh(): Promise<boolean> {
-      const next = queue.then(() => refreshOnce())
+      const next = queue.then(refreshOnce)
       // The queue keeps going even when one read failed, so one bad poll does not stop the rest.
       queue = next.catch(() => undefined)
       return next
