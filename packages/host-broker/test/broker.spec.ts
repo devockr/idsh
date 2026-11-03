@@ -2188,6 +2188,49 @@ echo "$PWD $*" >> '${gitLog}'
   }
 })
 
+void test('broker.update follows a dangling entry link into the checkout', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$PWD $*" >> '${gitLog}'
+`,
+    { mode: 0o755 },
+  )
+  const real = path.join(host.root, 'checkout')
+  const target = path.join(real, 'packages', 'host-broker', 'lib', 'cli.js')
+  await mkdir(path.dirname(target), { recursive: true })
+  await writeFile(target, '\n')
+  // A `link:` install outside the checkout points in; the target is then removed, so the link is
+  // what names the tree rather than what it points at.
+  const entryPath = path.join(host.root, 'installed', 'cli.js')
+  await mkdir(path.dirname(entryPath), { recursive: true })
+  await symlink(target, entryPath, 'file')
+  await rm(target)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath,
+    pnpmPath: gitPath,
+    checkout: real,
+    entryPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^updated from checkout/u)
+    assert.match(await readFile(gitLog, 'utf8'), /pull --ff-only$/mu)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 // Two shapes of "the thing the broker runs from is gone": the file alone, and the directory that
 // held it. The first needs one ancestor lookup, the second two, so both are pinned through one body.
 for (const [gone, remove] of [

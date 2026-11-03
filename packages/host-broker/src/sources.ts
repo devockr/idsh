@@ -7,7 +7,7 @@
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
 import { spawn } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import {
   appendFile,
   chmod,
@@ -662,7 +662,7 @@ const BROKER_PACKAGE = '@idsh/host-broker'
  * below it, because a cleaned `lib/` must not turn a symlinked checkout into "outside the
  * checkout".
  */
-function realOrResolved(value: string): string {
+function realOrResolved(value: string, hops = 0): string {
   const resolved = path.resolve(value)
   const missing: string[] = []
   let head = resolved
@@ -676,9 +676,34 @@ function realOrResolved(value: string): string {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === head) {
         return resolved
       }
+      // A dangling link still names where it pointed: follow that instead of treating the link's
+      // own name as the missing segment, because the target may be the tree being looked for.
+      const target = hops < MAX_LINK_HOPS ? danglingTarget(head) : undefined
+      if (target !== undefined) {
+        return realOrResolved(path.join(target, ...missing.toReversed()), hops + 1)
+      }
       missing.push(path.basename(head))
       head = parent
     }
+  }
+}
+
+/** Up to how many links one resolution follows, so a chain that loops cannot hang the operation. */
+const MAX_LINK_HOPS = 16
+
+/**
+ * The target of a symlink whose target is gone, or `undefined` when the path is not a symlink (or
+ * cannot be read at all, which is not this case to answer).
+ */
+function danglingTarget(value: string): string | undefined {
+  try {
+    if (!lstatSync(value).isSymbolicLink()) {
+      return undefined
+    }
+    const target = path.resolve(path.dirname(value), readlinkSync(value))
+    return target === value ? undefined : target
+  } catch {
+    return undefined
   }
 }
 
