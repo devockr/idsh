@@ -58,4 +58,6 @@ for (const project of projects) {
     failed = true
   }
 }
-process.exit(failed ? 1 : 0)
+// `exitCode`, not `process.exit`: a piped stdout write is asynchronous, and exiting straight after
+// the last `write` can truncate the very summary this gate is read for.
+process.exitCode = failed ? 1 : 0
