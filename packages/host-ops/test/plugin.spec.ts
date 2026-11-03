@@ -60,7 +60,14 @@ function context(
       tools: {
         register(tool) {
           tools.push(tool)
-          return () => true
+          // Cordis hands back a disposer; the harness has to honour it, or a refresh looks like a
+          // duplicate registration.
+          return () => {
+            const at = tools.indexOf(tool)
+            if (at >= 0) {
+              tools.splice(at, 1)
+            }
+          }
         },
       },
       logger: {
@@ -1131,6 +1138,38 @@ void test('a build runs as a job without injecting the registry', async () => {
     // The job path, not the synchronous fallback: the registry was found where cordis put it.
     assert.match(answer.text, /started job-1: deploy\.build runs in the background/u)
     assert.deepEqual(started, ['job-1'])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a table that changes is picked up without a reload', async () => {
+  let table: unknown[] = [TABLE[0]]
+  const answer = (): string =>
+    `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }) })}\n`
+  const broker = await fakeBroker(request => (request.op === 'ops.describe' ? answer() : null))
+  try {
+    const { ctx, tools } = context()
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.deepEqual(
+      tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    // The same table again: nothing is re-registered and nothing is disposed.
+    assert.equal(await registered.refresh(), false)
+    assert.equal(tools.length, 1)
+
+    // A broker that grew an operation: the tools are replaced, so a call can reach it now.
+    table = [TABLE[0], { ...TABLE[1], name: 'run', summary: 'Run one declared binary.' }]
+    assert.equal(await registered.refresh(), true)
+    assert.deepEqual(
+      tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_run'],
+    )
+
+    registered.dispose()
+    assert.deepEqual(tools, [])
   } finally {
     await broker.close()
   }

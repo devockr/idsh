@@ -26,8 +26,9 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
   pipelined, and the broker validates the arguments against the schema it published.
 - The broker owns the bounds and the audit log: output is capped, operations are rate-limited, and
   every call — refusals included — leaves a line before the answer.
-- The table is read **once**, when the plugin loads: an operation added to the broker afterwards
-  needs a container recreate to appear, and a new argument on an existing operation needs one too.
+- The table is read at load **and asked for again every minute**: an operation added to the broker
+  appears without a container recreate, and the tools are replaced only when the table changed — an
+  unchanged one registers nothing. A re-read that fails leaves the mounted tools in place.
   The plugin declares its own `protocol` when it asks, so a broker that speaks one answers with
   `{protocol, version, ops}` and an older one ignores the argument and sends the bare table. A
   different protocol — or a bare table, which only means "older broker" — is named in one warning at

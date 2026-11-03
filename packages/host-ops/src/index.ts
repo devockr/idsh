@@ -97,6 +97,11 @@ export interface HostContext {
    * consumes, so a new dependency is named once here and the read is checked against it.
    */
   get<K extends keyof Services>(name: K): Services[K]
+  /**
+   * Cordis's lifecycle helper, optional so a test context can leave it out: the refresh timer is
+   * registered through it, so the plugin's own disposal is what clears it.
+   */
+  readonly effect?: (run: () => () => void) => void
   readonly logger: { warn(message: string): void }
   readonly userQuestions: {
     ask(request: {
@@ -141,72 +146,146 @@ export const apply = (ctx: HostContext, config: Config = {}): Promise<void> =>
 async function discover(ctx: HostContext, config: Config): Promise<void> {
   const endpoint = endpointOf(config)
   const statePath = statePathOf(config)
-  await registerTools(ctx, endpoint, callBroker, statePath)
+  const table = await registerTools(ctx, endpoint, callBroker, statePath)
+  if (typeof ctx.effect !== 'function') {
+    return
+  }
+  // Asked again on a timer because the two sides have two lifecycles (#88's warning says so): a
+  // broker upgrade used to need a container recreate even when the plugin itself had not changed.
+  // The table is small, the call is one socket roundtrip, and an unchanged fingerprint registers
+  // nothing, so the cost of the poll is a comparison.
+  ctx.effect(() => {
+    const timer = setInterval(() => {
+      table.refresh().catch((error: unknown) => {
+        ctx.logger.warn(
+          `host-ops: re-reading the broker table failed: ${error instanceof Error ? error.message : String(error)}; keeping the tools it registered`,
+        )
+      })
+    }, REFRESH_MS)
+    // A timer must not hold the process open on its own.
+    timer.unref()
+    return () => {
+      clearInterval(timer)
+      table.dispose()
+    }
+  })
 }
 
 /** The caller the tools use; a test can pass a stub instead of waiting on a socket. */
 type BrokerCaller = typeof callBroker
 
 /** Ask the broker for its table and register each operation. Exported for the tests. */
+export interface ToolTable {
+  /** Re-read the broker's table; `true` when what is registered changed. */
+  refresh(): Promise<boolean>
+  /** Unregister everything this registration put in place. */
+  dispose(): void
+}
+
 export async function registerTools(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   call: BrokerCaller = callBroker,
   statePath: string | undefined = DEFAULT_STATE_PATH,
-): Promise<void> {
-  // The argument is the negotiation: a broker new enough to answer with `{protocol, …}` does so
-  // only for a client that declares one, and an older broker ignores it and sends the bare table.
-  const described = await call(endpoint, 'ops.describe', { protocol: PROTOCOL })
-  const parsed: unknown = JSON.parse(described.text)
-  // A broker older than this plugin answers with the bare table: usable, but it cannot say which
-  // arguments it takes beyond the ones in the entry, so the mismatch is worth one line in the log.
-  const describedTable = isRecord(parsed) ? parsed : undefined
-  const table: unknown = describedTable === undefined ? parsed : describedTable['ops']
-  if (!Array.isArray(table)) {
-    throw new TypeError('the broker did not describe a table of operations')
+): Promise<ToolTable> {
+  const load = async (): Promise<{ catalogue: DescribedOp[]; fingerprint: string }> => {
+    // The argument is the negotiation: a broker new enough to answer with `{protocol, …}` does so
+    // only for a client that declares one, and an older broker ignores it and sends the bare table.
+    const described = await call(endpoint, 'ops.describe', { protocol: PROTOCOL })
+    const parsed: unknown = JSON.parse(described.text)
+    // A broker older than this plugin answers with the bare table: usable, but it cannot say which
+    // arguments it takes beyond the ones in the entry, so the mismatch is worth one line in the log.
+    const describedTable = isRecord(parsed) ? parsed : undefined
+    const table: unknown = describedTable === undefined ? parsed : describedTable['ops']
+    if (!Array.isArray(table)) {
+      throw new TypeError('the broker did not describe a table of operations')
+    }
+    warnProtocol(ctx, describedTable)
+    // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
+    const catalogue = (table as unknown[]).map(value => asOp(value))
+    // The preview is called before the confirmation gate, so an unknown name would fail the deploy
+    // with an operation fault and a destructive one would run unasked.
+    for (const op of catalogue) {
+      if (op.preview === undefined) {
+        continue
+      }
+      const preview = catalogue.find(candidate => candidate.name === op.preview)
+      if (preview === undefined) {
+        throw new Error(
+          `host-ops: ${op.name} previews ${op.preview}, which the broker does not offer`,
+        )
+      }
+      if (preview.confirm === true) {
+        throw new Error(
+          `host-ops: ${op.name} previews ${op.preview}, which itself needs confirmation`,
+        )
+      }
+    }
+    return { catalogue, fingerprint: JSON.stringify(catalogue) }
   }
-  warnProtocol(ctx, describedTable)
-  // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const catalogue = (table as unknown[]).map(value => asOp(value))
-  // The preview is called before the confirmation gate, so an unknown name would fail the deploy
-  // with an operation fault and a destructive one would run unasked.
-  for (const op of catalogue) {
-    if (op.preview === undefined) {
-      continue
-    }
-    const preview = catalogue.find(candidate => candidate.name === op.preview)
-    if (preview === undefined) {
-      throw new Error(
-        `host-ops: ${op.name} previews ${op.preview}, which the broker does not offer`,
-      )
-    }
-    if (preview.confirm === true) {
-      throw new Error(
-        `host-ops: ${op.name} previews ${op.preview}, which itself needs confirmation`,
-      )
-    }
-  }
-  const tools = catalogue.map(op => toolFor(ctx, endpoint, op, catalogue, call, statePath))
-  const names = new Set<string>()
-  for (const tool of tools) {
-    if (names.has(tool.name)) {
-      throw new Error(
-        `host-ops: two operations map to the same tool name ${JSON.stringify(tool.name)}`,
-      )
-    }
-    names.add(tool.name)
-  }
-  const dispose: Array<() => void> = []
-  try {
+
+  const mount = (catalogue: DescribedOp[]): Mounted[] => {
+    const tools = catalogue.map(op => toolFor(ctx, endpoint, op, catalogue, call, statePath))
+    const names = new Set<string>()
     for (const tool of tools) {
-      dispose.push(ctx.tools.register(tool))
+      if (names.has(tool.name)) {
+        throw new Error(
+          `host-ops: two operations map to the same tool name ${JSON.stringify(tool.name)}`,
+        )
+      }
+      names.add(tool.name)
     }
-  } catch (error) {
-    for (const drop of dispose) {
-      drop()
+    const mounted: Mounted[] = []
+    try {
+      for (const tool of tools) {
+        mounted.push({ dispose: ctx.tools.register(tool) })
+      }
+    } catch (error) {
+      for (const one of mounted) {
+        one.dispose()
+      }
+      throw error
     }
-    throw error
+    return mounted
   }
+
+  let mounted: Mounted[] = []
+  let fingerprint = ''
+  // Nothing is mounted until the table has loaded and validated, so a failure here leaves the
+  // caller's warning ("no tools this boot") true.
+  const first = await load()
+  mounted = mount(first.catalogue)
+  fingerprint = first.fingerprint
+
+  return {
+    async refresh(): Promise<boolean> {
+      const next = await load()
+      if (next.fingerprint === fingerprint) {
+        return false
+      }
+      // Mount first: a table the broker answers but cannot be mounted must leave the old tools in
+      // place, and `mount` disposes its own partial work when registration throws.
+      const nextMounted = mount(next.catalogue)
+      for (const one of mounted) {
+        one.dispose()
+      }
+      mounted = nextMounted
+      fingerprint = next.fingerprint
+      return true
+    },
+    dispose(): void {
+      for (const one of mounted) {
+        one.dispose()
+      }
+      mounted = []
+      fingerprint = ''
+    },
+  }
+}
+
+/** What one registration put in place: the disposer Cordis handed back. */
+interface Mounted {
+  readonly dispose: () => void
 }
 
 function statePathOf(config: Config): string {
@@ -420,6 +499,12 @@ function previewArgs(
 const PROTOCOL = 1
 
 /**
+ * How often the table is asked for again. A broker upgrade is rare; a minute of staleness after one
+ * is the price of not needing a container recreate for a table that has not changed at all.
+ */
+const REFRESH_MS = 60_000
+
+/**
  * Say so when the broker and this plugin are out of step.
  *
  * Two lifecycles produce the two sides — the plugin is baked into the image, the broker runs from
@@ -433,13 +518,13 @@ function warnProtocol(ctx: HostContext, table: Record<string, unknown> | undefin
   const broker = typeof version === 'string' && version !== '' ? `broker ${version}` : 'the broker'
   if (typeof protocol !== 'number') {
     ctx.logger.warn(
-      `host-ops: ${broker} describes no protocol, so it is older than this plugin (protocol ${String(PROTOCOL)}); update it (broker.update) and recreate the container`,
+      `host-ops: ${broker} describes no protocol, so it is older than this plugin (protocol ${String(PROTOCOL)}); update it (broker.update) — the plugin re-reads the table every minute`,
     )
     return
   }
   if (protocol !== PROTOCOL) {
     ctx.logger.warn(
-      `host-ops: ${broker} speaks protocol ${String(protocol)} but this plugin speaks ${String(PROTOCOL)}; the lower number is the older side — update it and recreate the container`,
+      `host-ops: ${broker} speaks protocol ${String(protocol)} but this plugin speaks ${String(PROTOCOL)}; the lower number is the older side — update it; the plugin re-reads the table every minute`,
     )
   }
 }
