@@ -669,9 +669,11 @@ function realOrResolved(value: string): string {
   for (;;) {
     try {
       return path.join(realpathSync(head), ...missing.toReversed())
-    } catch {
+    } catch (error) {
       const parent = path.dirname(head)
-      if (parent === head) {
+      // Only "this segment is missing" continues the walk; a loop or a permission error is a path
+      // that exists in some form, and the lexical name is the honest answer for it.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === head) {
         return resolved
       }
       missing.push(path.basename(head))

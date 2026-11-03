@@ -2200,13 +2200,16 @@ echo "$PWD $*" >> '${gitLog}'
     { mode: 0o755 },
   )
   const real = path.join(host.root, 'checkout')
-  const entryPath = path.join(real, 'packages', 'host-broker', 'lib', 'cli.js')
+  await mkdir(real, { recursive: true })
+  const linked = path.join(host.root, 'linked')
+  await symlink(real, linked, 'dir')
+  // Named through the symlink on purpose: once the file is gone, a lexical `path.resolve` of this
+  // name cannot be placed in the real tree, which is what makes the ancestor walk the only way back.
+  const entryPath = path.join(linked, 'packages', 'host-broker', 'lib', 'cli.js')
   await mkdir(path.dirname(entryPath), { recursive: true })
   await writeFile(entryPath, '\n')
   // The entry is removed after the broker started from it — a rebuild that cleaned `lib/` looks
-  // like this — while the checkout is still reached through the symlink.
-  const linked = path.join(host.root, 'linked')
-  await symlink(real, linked, 'dir')
+  // like this.
   await rm(entryPath)
   const broker = await startBroker({
     socketPath: host.socketPath,
@@ -2215,7 +2218,7 @@ echo "$PWD $*" >> '${gitLog}'
     procDir: host.procDir,
     gitPath,
     pnpmPath: gitPath,
-    checkout: linked,
+    checkout: real,
     entryPath,
   })
   const connection = client(host.socketPath)
