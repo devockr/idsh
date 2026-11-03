@@ -279,8 +279,9 @@ export async function registerTools(
   let mounted: Mounted[] = []
   let fingerprint = ''
   let disposed = false
-  // One refresh at a time: two overlapping reads could mount the older table over the newer one.
-  let queue: Promise<unknown> = Promise.resolve()
+  // One read at a time: a tick that arrives while a read is pending joins it instead of queueing
+  // another, so a slow broker cannot turn a short interval into a burst once it answers again.
+  let inFlight: Promise<boolean> | undefined
   // Nothing is mounted until the table has loaded and validated, so a failure here leaves the
   // caller's warning ("no tools this boot") true.
   const first = await load()
@@ -319,10 +320,16 @@ export async function registerTools(
 
   return {
     refresh(): Promise<boolean> {
-      const next = queue.then(refreshOnce)
-      // The queue keeps going even when one read failed, so one bad poll does not stop the rest.
-      queue = next.catch(() => undefined)
-      return next
+      const pending = inFlight ?? refreshOnce()
+      inFlight = pending
+      const clear = (): void => {
+        if (inFlight === pending) {
+          inFlight = undefined
+        }
+      }
+      // A failed read must not leave the slot filled for the next tick.
+      pending.then(clear, clear)
+      return pending
     },
     dispose(): void {
       disposed = true
