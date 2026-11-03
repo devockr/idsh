@@ -444,6 +444,11 @@ function warnProtocol(ctx: HostContext, table: Record<string, unknown> | undefin
   }
 }
 
+/** Whether a call carried no arguments, which is what makes `{}` noise rather than information. */
+function isEmptyArgs(args: unknown): boolean {
+  return typeof args !== 'object' || args === null || Object.keys(args).length === 0
+}
+
 /** The person's answer: Run, or the reply they typed instead of choosing. */
 type Confirmation = { ok: false; reply?: string } | { ok: true }
 
@@ -464,14 +469,23 @@ async function confirmed(
   // Resolve before asking: a question about "PR 82" is not a question about a commit, and a source
   // that cannot be resolved is an error the person should see instead of a prompt.
   const resolved = await resolve()
-  const detail =
-    resolved === undefined ? `${JSON.stringify(args)}\n` : `${JSON.stringify(args)}\n${resolved}\n`
+  // Blocks of text, not one formatted blob: an operation with no arguments has nothing to show for
+  // them, and `{}` in a question reads like a placeholder that failed to fill in.
+  const blocks = [`Run ${op.name} on the host?`]
+  const shown = isEmptyArgs(args) ? undefined : JSON.stringify(args)
+  if (shown !== undefined) {
+    blocks.push(shown)
+  }
+  if (resolved !== undefined) {
+    blocks.push(resolved)
+  }
+  blocks.push(`Choose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`)
   const answer = await ctx.userQuestions.ask({
     questions: [
       {
         id: 'confirm',
         header: 'Host operation',
-        question: `Run ${op.name} on the host?\n\n${detail}\nChoose ${CONFIRM_OPTION} to proceed; a typed reply is not an approval.`,
+        question: blocks.join('\n\n'),
         options: [{ label: CONFIRM_OPTION, description: op.summary }, { label: 'Cancel' }],
       },
     ],

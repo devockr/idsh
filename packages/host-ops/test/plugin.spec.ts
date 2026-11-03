@@ -366,6 +366,12 @@ void test('a destructive operation asks before it calls the broker', async () =>
     )
     assert.equal(cancelled.asks[0]?.agent, agent)
     assert.deepEqual(cancelled.asks[0]?.wait, { callId: 'call-1' })
+    // An operation with no arguments says so by saying nothing: `{}` reads like a placeholder that
+    // failed to fill in.
+    const asked = cancelled.asks[0]?.['questions'] as Array<{ question: string }> | undefined
+    const question = asked?.[0]?.question ?? ''
+    assert.match(question, /^Run deploy\.recreate on the host\?\n\nChoose Run to proceed/u)
+    assert.doesNotMatch(question, /\{\}/u)
     assert.deepEqual(
       broker.requests.map(request => request.op),
       ['ops.describe'],
