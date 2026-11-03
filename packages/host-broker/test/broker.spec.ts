@@ -248,6 +248,73 @@ void test('capOutput trims to the ceiling on a line boundary', () => {
   assert.ok(!capped.text.endsWith('\n'))
 })
 
+void test('run answers the policy verdict, and refuses what the declaration does not allow', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const verdict = await connection.request({
+      op: 'run',
+      args: { argv: ['ping', '-c', '3', '1.1.1.1'], dryRun: true },
+    })
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.error))
+    assert.match(verdict.result ?? '', /would run: ping -c 3 1\.1\.1\.1/u)
+    assert.match(verdict.result ?? '', /nothing was executed/u)
+
+    const subcommand = await connection.request({
+      op: 'run',
+      args: { argv: ['ip', 'addr'], dryRun: true },
+    })
+    assert.equal(subcommand.ok, true, JSON.stringify(subcommand.error))
+
+    for (const argv of [
+      // Not declared, so not a program this broker starts.
+      ['rm', '-rf', '/'],
+      // A declared binary with a subcommand it does not have.
+      ['ip', 'link', 'set', 'eth0', 'down'],
+      // A flag that is not in the declaration.
+      ['df', '-h;rm'],
+      // A value flag without its value.
+      ['ping', '-c'],
+      // More positionals than the declaration allows.
+      ['ping', '1.1.1.1', '8.8.8.8'],
+      // A positional that could be read as a flag.
+      ['ping', '--help'],
+    ] as const) {
+      const refused = await connection.request({ op: 'run', args: { argv } })
+      assert.equal(refused.ok, false, argv.join(' '))
+      assert.equal(refused.error?.code, 'bad-argument', argv.join(' '))
+    }
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('run executes a declared binary and answers its output', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'run', args: { argv: ['df', '-h'] } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.notEqual((answer.result ?? '').trim(), '')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('the rate limiter opens a window per key and refills', () => {
   const limiter = new RateLimiter(2, 1000)
   assert.equal(limiter.take('a', 0), true)
@@ -335,6 +402,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'broker.status',
         'broker.update',
         'proc.list',
+        'run',
         'disk.usage',
       ],
     )

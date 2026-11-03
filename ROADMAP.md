@@ -20,8 +20,11 @@ neither the one it produced nor the recorded target — so after a build at most
 stay on disk. A sweep that could not finish says so in the build answer — a removal that
 failed, a listing cut at the broker's output window, an image this build produced that does
 not resolve, or a sweep that ran out of the build's time — and the next build tries again.
-The rest of the phase list (including `run` and its allowlist, and a deployment that rolls
-itself back when it will not come up) is still the plan. This file is the contract the
+`run` is in the table with its first declarations — ping, dig, traceroute, `ip addr/route/neigh`,
+`ss`, `df`, `free`, `uptime` — each an argument table rather than code, with `dryRun` answering the
+policy verdict before anything executes; the race-safe path guard the section below describes lands
+with the first declaration that takes a filesystem path, and none of these does. The rest of the
+phase list (a deployment that rolls itself back when it will not come up) is still the plan. This file is the contract the
 implementation is judged against.
 
 ## The problem
