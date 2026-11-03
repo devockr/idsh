@@ -2188,6 +2188,45 @@ echo "$PWD $*" >> '${gitLog}'
   }
 })
 
+void test('broker.update treats a directory whose name starts with dots as inside', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$PWD $*" >> '${gitLog}'
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  // `..build` is a child of the checkout; only `..` itself is outside, not a name that starts
+  // with the same two characters.
+  const entryPath = path.join(checkout, '..build', 'lib', 'cli.js')
+  await mkdir(path.dirname(entryPath), { recursive: true })
+  await writeFile(entryPath, '\n')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath,
+    pnpmPath: gitPath,
+    checkout,
+    entryPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^updated from checkout/u)
+    assert.match(await readFile(gitLog, 'utf8'), /pull --ff-only$/mu)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('broker.update follows an entry reached through a symlink', async () => {
   const host = await fakeHost()
   const gitLog = path.join(host.root, 'git.log')

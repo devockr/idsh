@@ -676,7 +676,10 @@ function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
   }
   const entry = realOrResolved(ctx.entryPath)
   const relative = path.relative(realOrResolved(ctx.checkout), entry)
-  return relative !== '' && !relative.startsWith('..') ? 'checkout' : 'npm'
+  // `..` as a segment, not as a prefix: a child directory called `..build` is inside the checkout,
+  // and a plain `startsWith('..')` would send it to the npm branch and the refusal there.
+  const outside = relative === '..' || relative.startsWith(`..${path.sep}`)
+  return relative !== '' && !outside ? 'checkout' : 'npm'
 }
 
 /**
