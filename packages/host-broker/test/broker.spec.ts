@@ -33,6 +33,7 @@ import {
   startBroker,
   TAIL_WINDOW_BYTES,
   type BrokerResponse,
+  type RunningBroker,
 } from '@idsh/host-broker'
 
 // The bounds these tests assert against; named here because the broker keeps them internal.
@@ -248,6 +249,173 @@ void test('capOutput trims to the ceiling on a line boundary', () => {
   assert.ok(!capped.text.endsWith('\n'))
 })
 
+void test('run answers the policy verdict, and refuses what the declaration does not allow', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const verdict = await connection.request({
+      op: 'run',
+      args: { argv: ['ping', '-c', '3', '1.1.1.1'], dryRun: true },
+    })
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.error))
+    assert.equal(
+      verdict.result,
+      'would run: ping -c 3 1.1.1.1\nnothing was executed; dryRun answered the policy verdict only',
+    )
+
+    for (const argv of [
+      // A flag before the object, which is the form iproute2 documents.
+      ['ip', '-4', 'addr'],
+      ['ip', 'addr'],
+      // A +flag is a flag: dig's only spelling.
+      ['dig', '+short', 'example.com'],
+      // A compressed IPv6 literal starts with a colon and is still a host.
+      ['ping', '::1'],
+      ['ping', 'fe80::1'],
+      // A link-local literal carries its zone.
+      ['ping', 'fe80::1%eth0'],
+      // dig without a target is a valid default query, so it stays optional.
+      ['dig'],
+    ] as const) {
+      const accepted = await connection.request({ op: 'run', args: { argv, dryRun: true } })
+      assert.equal(accepted.ok, true, `${argv.join(' ')}: ${JSON.stringify(accepted.error)}`)
+    }
+
+    for (const argv of [
+      // Not declared, so not a program this broker starts.
+      ['rm', '-rf', '/'],
+      // A declared binary with a subcommand it does not have.
+      ['ip', 'link', 'set', 'eth0', 'down'],
+      // A flag that is not in the declaration.
+      ['df', '-h;rm'],
+      // The declared spelling, not a second one: `--h` was never in the table.
+      ['df', '--h'],
+      // A colon run names no host.
+      ['ping', ':::'],
+      // A probe needs something to probe.
+      ['ping'],
+      ['traceroute'],
+      ['ping', '-c', '3'],
+      // A value flag without its value.
+      ['ping', '-c'],
+      // More positionals than the declaration allows.
+      ['ping', '1.1.1.1', '8.8.8.8'],
+      // A positional that could be read as a flag.
+      ['ping', '--help'],
+      // Prototype names are not declarations, in the binary table or the flag table.
+      ['constructor'],
+      ['toString'],
+      ['__proto__'],
+      ['ping', '--toString', '1.1.1.1'],
+      ['df', '-toString'],
+      // A flag the binary declares, on a binary that does not.
+      ['dig', '-4', 'example.com'],
+      // The plus form only in the plus spelling: dig rejects `-+short` itself.
+      ['dig', '-+short', 'example.com'],
+    ] as const) {
+      const refused = await connection.request({ op: 'run', args: { argv } })
+      assert.equal(refused.ok, false, argv.join(' '))
+      assert.equal(refused.error?.code, 'bad-argument', argv.join(' '))
+    }
+
+    const wrongType = await connection.request({
+      op: 'run',
+      args: { argv: ['df', '-h'], dryRun: 'yes' },
+    })
+    assert.equal(wrongType.ok, false)
+    assert.equal(wrongType.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('run uses the configured path where a source already owns the binary', async () => {
+  const host = await fakeHost()
+  // The fake programs answer their own argv, so the assertion proves which path ran — `ip addr` is
+  // `addr` only if the broker spawned the configured one.
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    ipPath: '/bin/echo',
+    ssPath: '/bin/echo',
+  })
+  const connection = client(host.socketPath)
+  try {
+    for (const [argv, expected] of [
+      [['ip', 'addr'], 'addr'],
+      [['ip', '-4', 'route'], '-4 route'],
+      [['ss', '-t'], '-t'],
+    ] as const) {
+      const answer = await connection.request({ op: 'run', args: { argv } })
+      assert.equal(answer.ok, true, JSON.stringify(answer.error))
+      assert.equal((answer.result ?? '').trim(), expected, argv.join(' '))
+    }
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('run looks for a declared binary outside an inherited PATH', async () => {
+  const host = await fakeHost()
+  // A `df` first on the inherited PATH answers `HIJACKED`; the fixed list is what keeps it from
+  // being the one that runs. The process environment is the seam because the broker spawns its
+  // children from it.
+  const fakeDir = path.join(host.root, 'bin')
+  await mkdir(fakeDir, { recursive: true })
+  await writeFile(path.join(fakeDir, 'df'), '#!/bin/sh\necho HIJACKED\n', { mode: 0o755 })
+  const original = process.env.PATH
+  process.env.PATH = `${fakeDir}:${original ?? ''}`
+  let broker: RunningBroker | undefined
+  try {
+    broker = await startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      logDir: host.logDir,
+      procDir: host.procDir,
+    })
+    const connection = client(host.socketPath)
+    try {
+      const answer = await connection.request({ op: 'run', args: { argv: ['df', '-h'] } })
+      assert.equal(answer.ok, true, JSON.stringify(answer.error))
+      assert.doesNotMatch(answer.result ?? '', /HIJACKED/u)
+    } finally {
+      connection.close()
+    }
+  } finally {
+    process.env.PATH = original
+    await broker?.close()
+  }
+})
+
+void test('run executes a declared binary and answers its output', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'run', args: { argv: ['df', '-h'] } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.notEqual((answer.result ?? '').trim(), '')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('the rate limiter opens a window per key and refills', () => {
   const limiter = new RateLimiter(2, 1000)
   assert.equal(limiter.take('a', 0), true)
@@ -335,6 +503,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'broker.status',
         'broker.update',
         'proc.list',
+        'run',
         'disk.usage',
       ],
     )

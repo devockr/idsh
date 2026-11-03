@@ -3,8 +3,10 @@
  *
  * Each one names a **source** rather than a command: a fixed set of files or one fixed program,
  * with a small set of validated arguments. That is the whole shape — the questions asked of a host
- * are unbounded, the places an answer can come from are not. Nothing here takes a path or an
- * arbitrary argument, so there is no path guard to get wrong yet.
+ * are unbounded, the places an answer can come from are not. `run` is the one operation that takes
+ * an argv, and it takes only the form its declaration allows: a declared binary, declared flags and
+ * a positional shape checked against the declaration, never a shell. No declaration takes a path
+ * yet, so there is no path guard to get wrong.
  */
 import { spawn } from 'node:child_process'
 import {
@@ -787,6 +789,231 @@ function brokerUpdate(ctx: OpContext, source: 'checkout' | 'npm'): UpdateStep[] 
   ]
 }
 
+/* ------------------------------------------------------------------ run */
+
+/** Where the declared binaries are looked for, independent of the PATH the broker inherited. */
+const RUN_PATH = [
+  '/usr/local/sbin',
+  '/usr/local/bin',
+  '/usr/sbin',
+  '/usr/bin',
+  '/sbin',
+  '/bin',
+].join(':')
+
+/** The most tokens one `run` call may carry, and the longest a single token may be. */
+const MAX_RUN_TOKENS = 16
+const MAX_RUN_TOKEN_CHARS = 128
+
+/** Flags a `run` declaration accepts: a bare switch, or one that takes the next token as its value. */
+type RunFlag = 'boolean' | 'value'
+
+/** One binary `run` may start. Adding a binary is a declaration, not code. */
+interface RunDeclaration {
+  readonly summary: string
+  /** The first positional must be one of these, when set. */
+  readonly subcommands?: readonly string[]
+  readonly flags?: Readonly<Record<string, RunFlag>>
+  /** What a positional may look like, when the binary takes any. */
+  readonly positional?: (value: string) => boolean
+  /** How many positionals the declaration requires, subcommand excluded. */
+  readonly minPositionals?: number
+  /** How many positionals the declaration allows, subcommand excluded. */
+  readonly maxPositionals?: number
+}
+
+/**
+ * A hostname, an IPv4 literal or an IPv6 literal, and nothing that could be a flag or a path. The
+ * first character may be a colon because every compressed IPv6 literal starts with one (`::1`); a
+ * bare colon run is still refused, since it names no host.
+ */
+const RUN_TARGET = /^(?=.*[A-Za-z0-9])[A-Za-z0-9:](?:[A-Za-z0-9._:%-]{0,252})$/u
+
+/**
+ * No declaration takes a filesystem path yet, on purpose: the ROADMAP's race-safe guard (resolve
+ * once, consume the resolved object, and only inside a root the container's uid cannot write) is
+ * what a path-taking binary has to land with. A declaration without paths does not need it, and
+ * saying so here is cheaper than a guard nobody exercises.
+ */
+const RUN_BINARIES: Readonly<Record<string, RunDeclaration>> = {
+  ping: {
+    summary: 'ICMP probe: ping -c/-W/-w, -4/-6, -q, -n, one host.',
+    flags: {
+      c: 'value',
+      W: 'value',
+      w: 'value',
+      '4': 'boolean',
+      '6': 'boolean',
+      q: 'boolean',
+      n: 'boolean',
+    },
+    positional: value => RUN_TARGET.test(value),
+    minPositionals: 1,
+    maxPositionals: 1,
+  },
+  dig: {
+    summary: 'DNS query: dig +short/+noall/+answer, one host.',
+    flags: { '+short': 'boolean', '+noall': 'boolean', '+answer': 'boolean' },
+    positional: value => RUN_TARGET.test(value),
+    maxPositionals: 1,
+  },
+  traceroute: {
+    summary: 'Path probe: traceroute -n/-m/-w/-q, one host.',
+    flags: { n: 'boolean', m: 'value', w: 'value', q: 'value', '4': 'boolean', '6': 'boolean' },
+    positional: value => RUN_TARGET.test(value),
+    minPositionals: 1,
+    maxPositionals: 1,
+  },
+  ip: {
+    summary: 'ip addr/route/neigh: -4/-6/-o/-s.',
+    subcommands: ['addr', 'route', 'neigh'],
+    flags: { '4': 'boolean', '6': 'boolean', o: 'boolean', s: 'boolean' },
+  },
+  ss: {
+    summary: 'Socket tables: ss -t/-u/-l/-n/-p/-a/-s.',
+    flags: {
+      t: 'boolean',
+      u: 'boolean',
+      l: 'boolean',
+      n: 'boolean',
+      p: 'boolean',
+      a: 'boolean',
+      s: 'boolean',
+    },
+  },
+  df: {
+    summary: 'Filesystem usage: df -h/-a/-i/-P (every mount, no path argument).',
+    flags: { h: 'boolean', a: 'boolean', i: 'boolean', P: 'boolean' },
+  },
+  free: {
+    summary: 'Memory: free -h/-m/-g.',
+    flags: { h: 'boolean', m: 'boolean', g: 'boolean' },
+  },
+  uptime: { summary: 'Load average and uptime.' },
+}
+
+/** The declared name a token spells, or `undefined` when it spells none of them. */
+function flagName(token: string): string | undefined {
+  // One leading dash, or the plus `dig` uses — the declaration's spelling exactly. `--h` for a
+  // declared `-h` would be a second grammar, and `-+short` is not the plus form either.
+  if (token.startsWith('+')) {
+    return token
+  }
+  return /^-[^-+]/u.test(token) ? token.slice(1) : undefined
+}
+
+/** One parsed `run` call: the program, its argv, and what the declaration said about it. */
+interface RunVerdict {
+  readonly program: string
+  readonly argv: readonly string[]
+}
+
+/**
+ * Turn the caller's tokens into the argv the declaration allows.
+ *
+ * Parsed, not passed through: a token starting with `-` is a flag and must be declared, a
+ * positional must match the declaration, and nothing is ever handed to a shell.
+ */
+function parseRun(tokens: readonly string[]): RunVerdict {
+  if (tokens.length === 0) {
+    throw new BrokerFault('bad-argument', 'argv needs at least the program to run')
+  }
+  if (tokens.length > MAX_RUN_TOKENS) {
+    throw new BrokerFault('bad-argument', `argv may carry at most ${String(MAX_RUN_TOKENS)} tokens`)
+  }
+  for (const token of tokens) {
+    if (token.length === 0 || token.length > MAX_RUN_TOKEN_CHARS) {
+      throw new BrokerFault(
+        'bad-argument',
+        `every argv token must be 1-${String(MAX_RUN_TOKEN_CHARS)} characters`,
+      )
+    }
+  }
+  const [program, ...rest] = tokens
+  const declaration = Object.hasOwn(RUN_BINARIES, program) ? RUN_BINARIES[program] : undefined
+  if (declaration === undefined) {
+    throw new BrokerFault(
+      'bad-argument',
+      `${JSON.stringify(program)} is not a declared binary; ${Object.keys(RUN_BINARIES).sort().join(', ')}`,
+    )
+  }
+  const argv: string[] = [program]
+  const subcommands = declaration.subcommands
+  let sawSubcommand = subcommands === undefined
+  let positionals = 0
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = rest[index]
+    if (token.startsWith('-') || token.startsWith('+')) {
+      if (token === '--' || token === '-') {
+        throw new BrokerFault('bad-argument', `${JSON.stringify(token)} is not a declared flag`)
+      }
+      const name = flagName(token)
+      const flags = declaration.flags
+      const kind =
+        name !== undefined && flags !== undefined && Object.hasOwn(flags, name)
+          ? flags[name]
+          : undefined
+      if (kind === undefined) {
+        throw new BrokerFault('bad-argument', `${program} does not accept ${JSON.stringify(token)}`)
+      }
+      argv.push(token)
+      if (kind === 'value') {
+        const value = rest[index + 1]
+        if (
+          value === undefined ||
+          value.startsWith('-') ||
+          !/^[A-Za-z0-9._:+,]{1,64}$/u.test(value)
+        ) {
+          throw new BrokerFault('bad-argument', `${token} needs one value`)
+        }
+        argv.push(value)
+        index += 1
+      }
+      continue
+    }
+    if (!sawSubcommand) {
+      if (subcommands === undefined || !subcommands.includes(token)) {
+        throw new BrokerFault(
+          'bad-argument',
+          `${program} needs one of ${(subcommands ?? []).map(item => JSON.stringify(item)).join(', ')}`,
+        )
+      }
+      sawSubcommand = true
+      argv.push(token)
+      continue
+    }
+    if (declaration.positional === undefined || !declaration.positional(token)) {
+      throw new BrokerFault('bad-argument', `${program} does not accept ${JSON.stringify(token)}`)
+    }
+    positionals += 1
+    if (positionals > (declaration.maxPositionals ?? 0)) {
+      throw new BrokerFault('bad-argument', `${program} accepts no more positionals`)
+    }
+    argv.push(token)
+  }
+  if (!sawSubcommand) {
+    throw new BrokerFault(
+      'bad-argument',
+      `${program} needs one of ${(subcommands ?? []).map(item => JSON.stringify(item)).join(', ')}`,
+    )
+  }
+  // A verdict has to be runnable: `ping` and `traceroute` without a target exit non-zero without
+  // probing anything, and a dry run that approves them answers a question nobody can execute.
+  const minimum = declaration.minPositionals ?? 0
+  if (positionals < minimum) {
+    throw new BrokerFault(
+      'bad-argument',
+      `${program} needs at least ${String(minimum)} positional argument${minimum === 1 ? '' : 's'}`,
+    )
+  }
+  return { program, argv }
+}
+
+/** The text a dry run answers: the exact argv, and the note that nothing ran. */
+function describeRun(verdict: RunVerdict): string {
+  return `would run: ${verdict.argv.join(' ')}\nnothing was executed; dryRun answered the policy verdict only`
+}
+
 /* ---------------------------------------------------------------- net.sockets */
 
 /** The socket tables `net.sockets` can read. */
@@ -1469,6 +1696,69 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['lines'])
       const lines = integer(args, 'lines', 1, MAX_PROC_LINES, DEFAULT_PROC_LINES)
       return procList(ctx, lines)
+    },
+  },
+  {
+    name: 'run',
+    summary:
+      'Run one declared, read-only binary on the host: an argv parsed against the declaration, never a shell.',
+    confirm: true,
+    input: {
+      type: 'object',
+      properties: {
+        argv: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: MAX_RUN_TOKENS,
+          description: `The program and its arguments, e.g. ["ping", "-c", "3", "1.1.1.1"].`,
+        },
+        dryRun: {
+          type: 'boolean',
+          description: 'Answer the policy verdict without running anything.',
+        },
+      },
+      required: ['argv'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['argv', 'dryRun'])
+      const raw = args['argv']
+      if (!Array.isArray(raw)) {
+        throw new BrokerFault('bad-argument', 'argv must be an array of strings')
+      }
+      // Narrowed element by element: `Array.isArray` leaves the elements `any`, and type coverage is
+      // measured over this file, so the check has to say what it knows.
+      const tokens: string[] = []
+      for (const token of raw as unknown[]) {
+        if (typeof token !== 'string') {
+          throw new BrokerFault('bad-argument', 'argv must be an array of strings')
+        }
+        tokens.push(token)
+      }
+      const dryRun = args['dryRun']
+      if (dryRun !== undefined && typeof dryRun !== 'boolean') {
+        throw new BrokerFault('bad-argument', 'dryRun must be a boolean')
+      }
+      const verdict = parseRun(tokens)
+      if (dryRun === true) {
+        return describeRun(verdict)
+      }
+      const [, ...rest] = verdict.argv
+      // The configured path wins where a source already owns the binary: `--ip`/`--ss` exist so a
+      // host can name the client it actually has.
+      const program =
+        verdict.program === 'ip'
+          ? ctx.ipPath
+          : verdict.program === 'ss'
+            ? ctx.ssPath
+            : verdict.program
+      return runFixed(ctx, program, rest, {
+        // Not the broker's inherited PATH: a supervisor with a narrow one would make every declared
+        // binary unreachable (ENOENT) rather than refused, and these live in the sbin directories on
+        // most hosts. A fixed list is the same answer everywhere.
+        env: { PATH: RUN_PATH },
+      })
     },
   },
   {

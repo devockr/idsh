@@ -317,7 +317,9 @@ Observe the running thing; do not reason from source.
 holds the broker's first slice — the read sources (`log.tail`, `proc.read`, `proc.list`,
 `disk.usage`, `net.status`, `net.sockets`) and the deploy
 operations (`deploy.status`, `deploy.log`, `deploy.build`,
-`deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `broker.status`/`broker.update`, so the
+`deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `run`, the one operation that takes an
+argv: a declared, read-only binary, its flags and positional shape checked against the declaration,
+`dryRun` answering the verdict first — `broker.status`/`broker.update`, so the
 broker can replace itself under its supervisor, and `gcb.update`, which rebuilds the credential
 broker from its own checkout, recreates only the named service (one or more compose files) and
 probes it through the deployment's client — and `packages/host-ops` turns that
