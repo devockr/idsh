@@ -315,6 +315,10 @@ export async function registerTools(
 
   return {
     refresh(): Promise<boolean> {
+      if (disposed) {
+        // Nothing to re-read for, and a disposed registration has no business calling the broker.
+        return Promise.resolve(false)
+      }
       const next = queue.then(() => refreshOnce())
       // The queue keeps going even when one read failed, so one bad poll does not stop the rest.
       queue = next.catch(() => undefined)

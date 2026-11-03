@@ -34,10 +34,12 @@ the deployment's to mount; this package names nothing else.
   unchanged one registers nothing. A re-read that fails leaves the mounted tools in place.
   The plugin declares its own `protocol` when it asks, so a broker that speaks one answers with
   `{protocol, version, ops}` and an older one ignores the argument and sends the bare table. A
-  different protocol — or a bare table, which only means "older broker" — is named in one warning at
-  load; the tools still register, because the table is readable either way.
+  different protocol — or a bare table, which only means "older broker" — is named once per table
+  (its protocol and version), not once per poll; the tools still register, because the table is
+  readable either way.
 - A broker that is down does not fail the profile: the plugin logs a warning and registers no tools,
-  so the delegation still boots and the tools appear the next time the plugin loads.
+  so the delegation still boots. The poll starts only after a table has been read, so such a broker
+  is picked up on the next load, not by the timer.
 - An operation that names a `preview` (`deploy.build`/`deploy.main` → `deploy.source`) is resolved
   first: the broker's read-only answer — the branch tip and the `main` sha — goes into the question,
   so the person approves a commit rather than `{"pr": 82}`. A preview that fails is the error the
