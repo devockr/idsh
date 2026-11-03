@@ -174,7 +174,7 @@ async function discover(ctx: HostContext, config: Config): Promise<void> {
 /** The caller the tools use; a test can pass a stub instead of waiting on a socket. */
 type BrokerCaller = typeof callBroker
 
-/** Ask the broker for its table and register each operation. Exported for the tests. */
+/** The registration: what it mounted, and how to refresh or drop it. */
 export interface ToolTable {
   /** Re-read the broker's table; `true` when what is registered changed. */
   refresh(): Promise<boolean>
@@ -182,12 +182,19 @@ export interface ToolTable {
   dispose(): void
 }
 
+/**
+ * Ask the broker for its table and register each operation, answering with the registration.
+ *
+ * Exported for the tests: they hand it a fake caller and then drive `refresh` and `dispose`
+ * directly instead of waiting for the timer.
+ */
 export async function registerTools(
   ctx: HostContext,
   endpoint: BrokerEndpoint,
   call: BrokerCaller = callBroker,
   statePath: string | undefined = DEFAULT_STATE_PATH,
 ): Promise<ToolTable> {
+  let warned = ''
   const load = async (): Promise<{ catalogue: DescribedOp[]; fingerprint: string }> => {
     // The argument is the negotiation: a broker new enough to answer with `{protocol, …}` does so
     // only for a client that declares one, and an older broker ignores it and sends the bare table.
@@ -200,7 +207,12 @@ export async function registerTools(
     if (!Array.isArray(table)) {
       throw new TypeError('the broker did not describe a table of operations')
     }
-    warnProtocol(ctx, describedTable)
+    // The poll would otherwise repeat the same warning every minute; one table, one warning.
+    const tableKey = JSON.stringify([describedTable?.['protocol'], describedTable?.['version']])
+    if (tableKey !== warned) {
+      warnProtocol(ctx, describedTable)
+      warned = tableKey
+    }
     // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
     const catalogue = (table as unknown[]).map(value => asOp(value))
     // The preview is called before the confirmation gate, so an unknown name would fail the deploy
@@ -238,7 +250,7 @@ export async function registerTools(
     const mounted: Mounted[] = []
     try {
       for (const tool of tools) {
-        mounted.push({ tool, dispose: ctx.tools.register(tool) })
+        mounted.push({ dispose: ctx.tools.register(tool) })
       }
     } catch (error) {
       for (const one of mounted) {
@@ -251,6 +263,9 @@ export async function registerTools(
 
   let mounted: Mounted[] = []
   let fingerprint = ''
+  let disposed = false
+  // One refresh at a time: two overlapping reads could mount the older table over the newer one.
+  let queue: Promise<unknown> = Promise.resolve()
   // Nothing is mounted until the table has loaded and validated, so a failure here leaves the
   // caller's warning ("no tools this boot") true.
   const first = await load()
@@ -258,29 +273,38 @@ export async function registerTools(
   let previous = first.catalogue
   fingerprint = first.fingerprint
 
+  const refreshOnce = async (): Promise<boolean> => {
+    const next = await load()
+    // A disposal that happened while the read was in flight must not be undone by a mount.
+    if (disposed || next.fingerprint === fingerprint) {
+      return false
+    }
+    // The registry is keyed by tool name, so the new tools cannot be registered while the old
+    // ones hold their names. Drop them first, and put them back if the new mount fails: a table
+    // that cannot be mounted must leave what worked available.
+    for (const one of mounted) {
+      one.dispose()
+    }
+    try {
+      mounted = mount(next.catalogue)
+    } catch (error) {
+      mounted = mount(previous)
+      throw error
+    }
+    previous = next.catalogue
+    fingerprint = next.fingerprint
+    return true
+  }
+
   return {
-    async refresh(): Promise<boolean> {
-      const next = await load()
-      if (next.fingerprint === fingerprint) {
-        return false
-      }
-      // The registry is keyed by tool name, so the new tools cannot be registered while the old
-      // ones hold their names. Drop them first, and put them back if the new mount fails: a table
-      // that cannot be mounted must leave what worked available.
-      for (const one of mounted) {
-        one.dispose()
-      }
-      try {
-        mounted = mount(next.catalogue)
-      } catch (error) {
-        mounted = mount(previous)
-        throw error
-      }
-      previous = next.catalogue
-      fingerprint = next.fingerprint
-      return true
+    refresh(): Promise<boolean> {
+      const next = queue.then(() => refreshOnce())
+      // The queue keeps going even when one read failed, so one bad poll does not stop the rest.
+      queue = next.catch(() => undefined)
+      return next
     },
     dispose(): void {
+      disposed = true
       for (const one of mounted) {
         one.dispose()
       }
@@ -290,9 +314,8 @@ export async function registerTools(
   }
 }
 
-/** What one registration put in place: the tool and the disposer Cordis handed back. */
+/** What one registration put in place: the disposer Cordis handed back. */
 interface Mounted {
-  readonly tool: HostTool
   readonly dispose: () => void
 }
 

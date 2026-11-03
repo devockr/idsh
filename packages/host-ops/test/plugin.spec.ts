@@ -1180,6 +1180,52 @@ void test('a table that changes is picked up without a reload', async () => {
   }
 })
 
+void test('a refresh that cannot mount puts the previous tools back', async () => {
+  let table: unknown[] = [TABLE[0]]
+  const answer = (): string =>
+    `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }) })}\n`
+  const broker = await fakeBroker(request => (request.op === 'ops.describe' ? answer() : null))
+  try {
+    const base = context()
+    let failOnce = false
+    const ctx: HostContext = {
+      ...base.ctx,
+      tools: {
+        register(tool) {
+          if (failOnce) {
+            failOnce = false
+            throw new Error('the registry refused it')
+          }
+          return base.ctx.tools.register(tool)
+        },
+      },
+    }
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    // The new table mounts, but the registry refuses the new name: the old tools come back.
+    table = [TABLE[0], TABLE[1]]
+    failOnce = true
+    await assert.rejects(registered.refresh(), /registry refused it/u)
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    // Once the registry cooperates, the same table is applied.
+    assert.equal(await registered.refresh(), true)
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_disk_usage'],
+    )
+  } finally {
+    await broker.close()
+  }
+})
+
 void test('a broker speaking another protocol is named in a warning', async () => {
   const legacy = `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`
   const current = `${JSON.stringify({
