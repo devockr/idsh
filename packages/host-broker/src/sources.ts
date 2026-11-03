@@ -816,6 +816,8 @@ interface RunDeclaration {
   readonly flags?: Readonly<Record<string, RunFlag>>
   /** What a positional may look like, when the binary takes any. */
   readonly positional?: (value: string) => boolean
+  /** How many positionals the declaration requires, subcommand excluded. */
+  readonly minPositionals?: number
   /** How many positionals the declaration allows, subcommand excluded. */
   readonly maxPositionals?: number
 }
@@ -846,6 +848,7 @@ const RUN_BINARIES: Readonly<Record<string, RunDeclaration>> = {
       n: 'boolean',
     },
     positional: value => RUN_TARGET.test(value),
+    minPositionals: 1,
     maxPositionals: 1,
   },
   dig: {
@@ -858,6 +861,7 @@ const RUN_BINARIES: Readonly<Record<string, RunDeclaration>> = {
     summary: 'Path probe: traceroute -n/-m/-w/-q, one host.',
     flags: { n: 'boolean', m: 'value', w: 'value', q: 'value', '4': 'boolean', '6': 'boolean' },
     positional: value => RUN_TARGET.test(value),
+    minPositionals: 1,
     maxPositionals: 1,
   },
   ip: {
@@ -988,6 +992,12 @@ function parseRun(tokens: readonly string[]): RunVerdict {
       'bad-argument',
       `${program} needs one of ${(subcommands ?? []).map(item => JSON.stringify(item)).join(', ')}`,
     )
+  }
+  // A verdict has to be runnable: `ping` and `traceroute` without a target exit non-zero without
+  // probing anything, and a dry run that approves them answers a question nobody can execute.
+  const minimum = declaration.minPositionals ?? 0
+  if (positionals < minimum) {
+    throw new BrokerFault('bad-argument', `${program} needs ${String(minimum)} positional(s)`)
   }
   return { program, argv }
 }

@@ -277,6 +277,8 @@ void test('run answers the policy verdict, and refuses what the declaration does
       // A compressed IPv6 literal starts with a colon and is still a host.
       ['ping', '::1'],
       ['ping', 'fe80::1'],
+      // dig without a target is a valid default query, so it stays optional.
+      ['dig'],
     ] as const) {
       const accepted = await connection.request({ op: 'run', args: { argv, dryRun: true } })
       assert.equal(accepted.ok, true, `${argv.join(' ')}: ${JSON.stringify(accepted.error)}`)
@@ -293,6 +295,10 @@ void test('run answers the policy verdict, and refuses what the declaration does
       ['df', '--h'],
       // A colon run names no host.
       ['ping', ':::'],
+      // A probe needs something to probe.
+      ['ping'],
+      ['traceroute'],
+      ['ping', '-c', '3'],
       // A value flag without its value.
       ['ping', '-c'],
       // More positionals than the declaration allows.
