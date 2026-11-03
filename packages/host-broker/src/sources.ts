@@ -820,8 +820,12 @@ interface RunDeclaration {
   readonly maxPositionals?: number
 }
 
-/** A hostname, an IPv4 literal or an IPv6 literal, and nothing that could be a flag or a path. */
-const RUN_TARGET = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,252})$/u
+/**
+ * A hostname, an IPv4 literal or an IPv6 literal, and nothing that could be a flag or a path. The
+ * first character may be a colon because every compressed IPv6 literal starts with one (`::1`); a
+ * bare colon run is still refused, since it names no host.
+ */
+const RUN_TARGET = /^(?=.*[A-Za-z0-9])[A-Za-z0-9:](?:[A-Za-z0-9._:-]{0,252})$/u
 
 /**
  * No declaration takes a filesystem path yet, on purpose: the ROADMAP's race-safe guard (resolve

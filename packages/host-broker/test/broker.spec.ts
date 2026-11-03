@@ -274,6 +274,9 @@ void test('run answers the policy verdict, and refuses what the declaration does
       ['ip', 'addr'],
       // A +flag is a flag: dig's only spelling.
       ['dig', '+short', 'example.com'],
+      // A compressed IPv6 literal starts with a colon and is still a host.
+      ['ping', '::1'],
+      ['ping', 'fe80::1'],
     ] as const) {
       const accepted = await connection.request({ op: 'run', args: { argv, dryRun: true } })
       assert.equal(accepted.ok, true, `${argv.join(' ')}: ${JSON.stringify(accepted.error)}`)
@@ -288,6 +291,8 @@ void test('run answers the policy verdict, and refuses what the declaration does
       ['df', '-h;rm'],
       // The declared spelling, not a second one: `--h` was never in the table.
       ['df', '--h'],
+      // A colon run names no host.
+      ['ping', ':::'],
       // A value flag without its value.
       ['ping', '-c'],
       // More positionals than the declaration allows.
