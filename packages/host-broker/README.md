@@ -151,7 +151,10 @@ to escape, nothing that can backtrack.
 
 ## What is not here yet
 
-The router operations and the `run` allowlist are phase‑1/phase‑3 work in `ROADMAP.md`.
+`run` has its first declarations (the table above lists them) but takes no path yet: the race-safe
+path guard comes with the first declaration that does. The router operations are phase‑3 work in
+`ROADMAP.md`. Through the plugin, `run` is `confirm: true`, so a `dryRun: true` call still asks
+before it answers the verdict.
 `deploy.recreate` is the first destructive operation: it runs one fixed `docker compose` in
 `--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`), and the plugin
 asks the person before calling it. `deploy.build` records the rollback target, and `deploy.rollback`

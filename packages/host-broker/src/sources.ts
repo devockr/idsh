@@ -3,8 +3,10 @@
  *
  * Each one names a **source** rather than a command: a fixed set of files or one fixed program,
  * with a small set of validated arguments. That is the whole shape — the questions asked of a host
- * are unbounded, the places an answer can come from are not. Nothing here takes a path or an
- * arbitrary argument, so there is no path guard to get wrong yet.
+ * are unbounded, the places an answer can come from are not. `run` is the one operation that takes
+ * an argv, and it takes only the form its declaration allows: a declared binary, declared flags and
+ * a positional shape checked against the declaration, never a shell. No declaration takes a path
+ * yet, so there is no path guard to get wrong.
  */
 import { spawn } from 'node:child_process'
 import {
@@ -900,10 +902,7 @@ function parseRun(tokens: readonly string[]): RunVerdict {
     }
   }
   const [program, ...rest] = tokens
-  if (program === undefined) {
-    throw new BrokerFault('bad-argument', 'argv needs at least the program to run')
-  }
-  const declaration = RUN_BINARIES[program]
+  const declaration = Object.hasOwn(RUN_BINARIES, program) ? RUN_BINARIES[program] : undefined
   if (declaration === undefined) {
     throw new BrokerFault(
       'bad-argument',
@@ -911,31 +910,18 @@ function parseRun(tokens: readonly string[]): RunVerdict {
     )
   }
   const argv: string[] = [program]
-  let index = 0
   const subcommands = declaration.subcommands
-  if (subcommands !== undefined) {
-    const sub = rest[0]
-    if (sub === undefined || !subcommands.includes(sub)) {
-      throw new BrokerFault(
-        'bad-argument',
-        `${program} needs one of ${subcommands.map(item => JSON.stringify(item)).join(', ')}`,
-      )
-    }
-    argv.push(sub)
-    index = 1
-  }
+  let sawSubcommand = subcommands === undefined
   let positionals = 0
-  for (; index < rest.length; index += 1) {
+  for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index]
-    if (token === undefined) {
-      break
-    }
-    if (token.startsWith('-')) {
+    if (token.startsWith('-') || token.startsWith('+')) {
       if (token === '--' || token === '-') {
         throw new BrokerFault('bad-argument', `${JSON.stringify(token)} is not a declared flag`)
       }
-      const name = token.replace(/^--?/u, '')
-      const kind = declaration.flags?.[name]
+      const name = token.startsWith('+') ? token : token.replace(/^--?/u, '')
+      const flags = declaration.flags
+      const kind = flags !== undefined && Object.hasOwn(flags, name) ? flags[name] : undefined
       if (kind === undefined) {
         throw new BrokerFault('bad-argument', `${program} does not accept ${JSON.stringify(token)}`)
       }
@@ -954,6 +940,17 @@ function parseRun(tokens: readonly string[]): RunVerdict {
       }
       continue
     }
+    if (!sawSubcommand) {
+      if (subcommands === undefined || !subcommands.includes(token)) {
+        throw new BrokerFault(
+          'bad-argument',
+          `${program} needs one of ${(subcommands ?? []).map(item => JSON.stringify(item)).join(', ')}`,
+        )
+      }
+      sawSubcommand = true
+      argv.push(token)
+      continue
+    }
     if (declaration.positional === undefined || !declaration.positional(token)) {
       throw new BrokerFault('bad-argument', `${program} does not accept ${JSON.stringify(token)}`)
     }
@@ -963,12 +960,18 @@ function parseRun(tokens: readonly string[]): RunVerdict {
     }
     argv.push(token)
   }
+  if (!sawSubcommand) {
+    throw new BrokerFault(
+      'bad-argument',
+      `${program} needs one of ${(subcommands ?? []).map(item => JSON.stringify(item)).join(', ')}`,
+    )
+  }
   return { program, argv }
 }
 
 /** The text a dry run answers: the exact argv, and the note that nothing ran. */
 function describeRun(verdict: RunVerdict): string {
-  return `would run: ${verdict.argv.join(' ')}\\nnothing was executed; dryRun answered the policy verdict only`
+  return `would run: ${verdict.argv.join(' ')}\nnothing was executed; dryRun answered the policy verdict only`
 }
 
 /* ---------------------------------------------------------------- net.sockets */
@@ -1693,8 +1696,12 @@ export const OPS: readonly OpDefinition[] = [
         }
         tokens.push(token)
       }
+      const dryRun = args['dryRun']
+      if (dryRun !== undefined && typeof dryRun !== 'boolean') {
+        throw new BrokerFault('bad-argument', 'dryRun must be a boolean')
+      }
       const verdict = parseRun(tokens)
-      if (args['dryRun'] === true) {
+      if (dryRun === true) {
         return describeRun(verdict)
       }
       const [, ...rest] = verdict.argv

@@ -263,14 +263,21 @@ void test('run answers the policy verdict, and refuses what the declaration does
       args: { argv: ['ping', '-c', '3', '1.1.1.1'], dryRun: true },
     })
     assert.equal(verdict.ok, true, JSON.stringify(verdict.error))
-    assert.match(verdict.result ?? '', /would run: ping -c 3 1\.1\.1\.1/u)
-    assert.match(verdict.result ?? '', /nothing was executed/u)
+    assert.equal(
+      verdict.result,
+      'would run: ping -c 3 1.1.1.1\nnothing was executed; dryRun answered the policy verdict only',
+    )
 
-    const subcommand = await connection.request({
-      op: 'run',
-      args: { argv: ['ip', 'addr'], dryRun: true },
-    })
-    assert.equal(subcommand.ok, true, JSON.stringify(subcommand.error))
+    for (const argv of [
+      // A flag before the object, which is the form iproute2 documents.
+      ['ip', '-4', 'addr'],
+      ['ip', 'addr'],
+      // A +flag is a flag: dig's only spelling.
+      ['dig', '+short', 'example.com'],
+    ] as const) {
+      const accepted = await connection.request({ op: 'run', args: { argv, dryRun: true } })
+      assert.equal(accepted.ok, true, `${argv.join(' ')}: ${JSON.stringify(accepted.error)}`)
+    }
 
     for (const argv of [
       // Not declared, so not a program this broker starts.
@@ -285,11 +292,26 @@ void test('run answers the policy verdict, and refuses what the declaration does
       ['ping', '1.1.1.1', '8.8.8.8'],
       // A positional that could be read as a flag.
       ['ping', '--help'],
+      // Prototype names are not declarations, in the binary table or the flag table.
+      ['constructor'],
+      ['toString'],
+      ['__proto__'],
+      ['ping', '--toString', '1.1.1.1'],
+      ['df', '-toString'],
+      // A flag the binary declares, on a binary that does not.
+      ['dig', '-4', 'example.com'],
     ] as const) {
       const refused = await connection.request({ op: 'run', args: { argv } })
       assert.equal(refused.ok, false, argv.join(' '))
       assert.equal(refused.error?.code, 'bad-argument', argv.join(' '))
     }
+
+    const wrongType = await connection.request({
+      op: 'run',
+      args: { argv: ['df', '-h'], dryRun: 'yes' },
+    })
+    assert.equal(wrongType.ok, false)
+    assert.equal(wrongType.error?.code, 'bad-argument')
   } finally {
     connection.close()
     await broker.close()
