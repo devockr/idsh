@@ -364,6 +364,38 @@ void test('run uses the configured path where a source already owns the binary',
   }
 })
 
+void test('run looks for a declared binary outside an inherited PATH', async () => {
+  const host = await fakeHost()
+  // A `df` first on the inherited PATH answers `HIJACKED`; the fixed list is what keeps it from
+  // being the one that runs. The process environment is the seam because the broker spawns its
+  // children from it.
+  const fakeDir = path.join(host.root, 'bin')
+  await mkdir(fakeDir, { recursive: true })
+  await writeFile(path.join(fakeDir, 'df'), '#!/bin/sh\necho HIJACKED\n', { mode: 0o755 })
+  const original = process.env.PATH
+  process.env.PATH = `${fakeDir}:${original ?? ''}`
+  let broker: Awaited<ReturnType<typeof startBroker>> | undefined
+  try {
+    broker = await startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      logDir: host.logDir,
+      procDir: host.procDir,
+    })
+    const connection = client(host.socketPath)
+    try {
+      const answer = await connection.request({ op: 'run', args: { argv: ['df', '-h'] } })
+      assert.equal(answer.ok, true, JSON.stringify(answer.error))
+      assert.doesNotMatch(answer.result ?? '', /HIJACKED/u)
+    } finally {
+      connection.close()
+    }
+  } finally {
+    process.env.PATH = original
+    await broker?.close()
+  }
+})
+
 void test('run executes a declared binary and answers its output', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
