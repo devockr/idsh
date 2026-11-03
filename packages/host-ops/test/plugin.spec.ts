@@ -29,6 +29,9 @@ const POLL_WINDOW_MS = 2_000
 /** A number that is not a whole number of milliseconds, for the interval validation. */
 const FRACTIONAL_MS = 1.5
 
+/** Long enough for the initial read, short enough that a stalled refresh fails within the test. */
+const STALL_TIMEOUT_MS = 200
+
 const TABLE = [
   {
     name: 'log.tail',
@@ -1312,17 +1315,20 @@ void test('a stalled broker under a short interval sees one read and one warning
         stop = run()
       },
     }
-    // A millisecond interval against a 40 ms timeout: without coalescing this is a storm.
-    await apply(ctx, { socketPath: broker.socketPath, refreshMs: 1, timeoutMs: 40 })
-    await waitFor(() => base.warnings.length > 0)
-    // The failed read kept what it had; reading the tools has to happen before the disposer runs.
+    // A millisecond interval against a timeout the initial read can also meet: without coalescing
+    // this is a storm, and the 200 ms leaves the first read room on a loaded worker.
+    await apply(ctx, { socketPath: broker.socketPath, refreshMs: 1, timeoutMs: STALL_TIMEOUT_MS })
+    // The initial read must have landed before the warning means anything; an initial timeout would
+    // otherwise satisfy the wait below without testing the refresh at all.
     assert.deepEqual(
       base.tools.map(tool => tool.name),
       ['idsh_log_tail', 'idsh_disk_usage'],
     )
+    await waitFor(() => base.warnings.length > 0)
     // Stop before the next stalled read can finish and warn again.
     stop?.()
     assert.equal(base.warnings.length, 1)
+    assert.match(base.warnings.at(0) ?? '', /re-reading the broker table failed/u)
     // The initial load and the one stalled read; joined ticks add nothing.
     assert.ok(broker.requests.length <= 3, String(broker.requests.length))
   } finally {
