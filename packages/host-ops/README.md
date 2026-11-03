@@ -13,12 +13,15 @@ tool-safe name (`log.tail` becomes `idsh_log_tail`; the call still goes to the b
   config:
     socketPath: /run/idsh-host/host.sock
     timeoutMs: 15000
+    refreshMs: 60000
 ```
 
 `socketPath` defaults to `/run/idsh-host/host.sock` and `timeoutMs` to 15 seconds — slightly longer
 than the broker's own 10-second operation deadline, so the broker's `timeout` is the one the agent
 sees. An operation that publishes its own `timeoutMs` (the build) uses that instead, for the tool
-call and the socket wait alike. The socket's directory is the deployment's to mount; this package names nothing else.
+call and the socket wait alike. `refreshMs` defaults to a minute: the interval at which the table is
+asked for again, clamped to the largest delay a Node timer can express. The socket's directory is
+the deployment's to mount; this package names nothing else.
 
 ## Shape
 
@@ -26,14 +29,17 @@ call and the socket wait alike. The socket's directory is the deployment's to mo
   pipelined, and the broker validates the arguments against the schema it published.
 - The broker owns the bounds and the audit log: output is capped, operations are rate-limited, and
   every call — refusals included — leaves a line before the answer.
-- The table is read **once**, when the plugin loads: an operation added to the broker afterwards
-  needs a container recreate to appear, and a new argument on an existing operation needs one too.
+- The table is read at load **and asked for again every minute**: an operation added to the broker
+  appears without a container recreate, and the tools are replaced only when the table changed — an
+  unchanged one registers nothing. A re-read that fails leaves the mounted tools in place.
   The plugin declares its own `protocol` when it asks, so a broker that speaks one answers with
   `{protocol, version, ops}` and an older one ignores the argument and sends the bare table. A
-  different protocol — or a bare table, which only means "older broker" — is named in one warning at
-  load; the tools still register, because the table is readable either way.
+  different protocol — or a bare table, which only means "older broker" — is named once per table
+  (its protocol and version), not once per poll; the tools still register, because the table is
+  readable either way.
 - A broker that is down does not fail the profile: the plugin logs a warning and registers no tools,
-  so the delegation still boots and the tools appear the next time the plugin loads.
+  so the delegation still boots. The poll starts only after a table has been read, so such a broker
+  is picked up on the next load, not by the timer.
 - An operation that names a `preview` (`deploy.build`/`deploy.main` → `deploy.source`) is resolved
   first: the broker's read-only answer — the branch tip and the `main` sha — goes into the question,
   so the person approves a commit rather than `{"pr": 82}`. A preview that fails is the error the

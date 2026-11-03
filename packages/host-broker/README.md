@@ -116,11 +116,11 @@ table it expects, and a newer one compares the protocol it receives with its own
 mismatch surface later as an unknown argument.
 
 What the negotiation cannot fix is staleness: the broker and the plugin have **two lifecycles** (the
-plugin is baked into the image, the broker runs from the deployment's checkout), and the table is
-read **once, at load**. A broker change therefore reaches a client only after the container is
-recreated, and a plugin change never reaches the broker. After either, do both: `deploy.recreate` for
-the plugin, a broker restart (`broker.update`, which exits and lets its supervisor start the new
-build) for the broker.
+plugin is baked into the image, the broker runs from the deployment's checkout). The plugin asks for
+the table at load and again every minute, so a broker change reaches it within a minute without a
+container recreate, while a plugin change still never reaches the broker. After a plugin change,
+`deploy.recreate`; after a broker change, `broker.update` (it exits and lets its supervisor start the
+new build).
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing

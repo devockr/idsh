@@ -5,6 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 
 import { apply, registerTools, type Config, type HostContext, type HostTool } from '../src/index.ts'
+import { type BrokerAnswer } from '../src/socket.ts'
 import { buildLogSource, startDeployJob, type JobSpec, type Jobs } from '../src/stream.ts'
 import { fakeBroker } from './server.ts'
 
@@ -14,6 +15,22 @@ const OP_TIMEOUT_MS = 900_000
 const TOOL_TIMEOUT_MS = OP_TIMEOUT_MS + SLACK_MS
 const SHORT_OP_TIMEOUT_MS = 200
 const SHORT_TOOL_TIMEOUT_MS = SHORT_OP_TIMEOUT_MS + SLACK_MS
+/** Bounded wait for a condition a timer will satisfy, so a slow machine does not fail the test. */
+async function waitFor(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + POLL_WINDOW_MS
+  while (!condition() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
+/** The most a timer-driven assertion waits before giving up. */
+const POLL_WINDOW_MS = 2_000
+
+/** A number that is not a whole number of milliseconds, for the interval validation. */
+const FRACTIONAL_MS = 1.5
+
+/** Long enough for the initial read, short enough that a stalled refresh fails within the test. */
+const STALL_TIMEOUT_MS = 200
 
 const TABLE = [
   {
@@ -59,8 +76,20 @@ function context(
     ctx: {
       tools: {
         register(tool) {
+          // dsh's registry is keyed by name and refuses a second registration with one, so the
+          // harness must too: a refresh that mounts before it disposes would pass here otherwise.
+          if (tools.some(one => one.name === tool.name)) {
+            throw new Error(`tool "${tool.name}" is already registered`)
+          }
           tools.push(tool)
-          return () => true
+          // Cordis hands back a disposer; the harness has to honour it, or a refresh looks like a
+          // duplicate registration.
+          return () => {
+            const at = tools.indexOf(tool)
+            if (at >= 0) {
+              tools.splice(at, 1)
+            }
+          }
         },
       },
       logger: {
@@ -1131,6 +1160,313 @@ void test('a build runs as a job without injecting the registry', async () => {
     // The job path, not the synchronous fallback: the registry was found where cordis put it.
     assert.match(answer.text, /started job-1: deploy\.build runs in the background/u)
     assert.deepEqual(started, ['job-1'])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a table that changes is picked up without a reload', async () => {
+  let table: unknown[] = [TABLE[0]]
+  const answer = (): string =>
+    `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }) })}\n`
+  const broker = await fakeBroker(request => (request.op === 'ops.describe' ? answer() : null))
+  try {
+    const { ctx, tools } = context()
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.deepEqual(
+      tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    // The same table again: nothing is re-registered and nothing is disposed.
+    assert.equal(await registered.refresh(), false)
+    assert.equal(tools.length, 1)
+
+    // A broker that grew an operation: the tools are replaced, so a call can reach it now.
+    table = [TABLE[0], { ...TABLE[1], name: 'run', summary: 'Run one declared binary.' }]
+    assert.equal(await registered.refresh(), true)
+    assert.deepEqual(
+      tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_run'],
+    )
+
+    registered.dispose()
+    assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a refreshMs that is not a positive integer is refused, not coerced', async () => {
+  for (const refreshMs of [true, '5', FRACTIONAL_MS, 0, -1] as unknown[]) {
+    const base = context()
+    // `apply` turns a rejected config into its one warning, so the message is the assertion.
+    await apply(base.ctx, { socketPath: '/nonexistent/host.sock', refreshMs } as never)
+    assert.match(base.warnings.at(0) ?? '', /refreshMs must be a positive integer/u)
+    assert.deepEqual(base.tools, [])
+  }
+})
+
+void test('the timer replaces the tools without a reload', async () => {
+  let table: unknown[] = [TABLE[0]]
+  const answer = (): string =>
+    `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }) })}\n`
+  const broker = await fakeBroker(request => (request.op === 'ops.describe' ? answer() : null))
+  try {
+    const base = context()
+    let stop: (() => void) | undefined
+    const ctx: HostContext = {
+      ...base.ctx,
+      effect(run) {
+        stop = run()
+      },
+    }
+    await apply(ctx, { socketPath: broker.socketPath, refreshMs: 5 })
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    table = [TABLE[0], TABLE[1]]
+    // The timer is the thing under test: wait for the outcome, not a fixed slice of time.
+    await waitFor(() => base.tools.length === 2)
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_disk_usage'],
+    )
+
+    // The effect's disposer is the plugin's own disposal: the tools go with it.
+    stop?.()
+    assert.deepEqual(base.tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a disposed registration ignores a refresh', async () => {
+  const broker = await fakeBroker(
+    () =>
+      `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    registered.dispose()
+    assert.deepEqual(tools, [])
+    assert.equal(await registered.refresh(), false)
+    assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a disposal during an in-flight read mounts nothing', async () => {
+  let calls = 0
+  let started!: () => void
+  let release!: (answer: BrokerAnswer) => void
+  const readStarted = new Promise<void>(resolve => {
+    started = resolve
+  })
+  // A caller whose second read stays pending until the test says otherwise, so the disposal lands
+  // between the request and its answer.
+  const call = async (): Promise<BrokerAnswer> => {
+    calls += 1
+    const table = calls === 1 ? [TABLE[0]] : TABLE
+    if (calls === 1) {
+      return {
+        text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }),
+        truncated: false,
+      }
+    }
+    return new Promise<BrokerAnswer>(resolve => {
+      release = resolve
+      started()
+    })
+  }
+  const { ctx, tools } = context()
+  const registered = await registerTools(ctx, { socketPath: '/unused' }, call)
+  const refresh = registered.refresh()
+  await readStarted
+  registered.dispose()
+  release({ text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }), truncated: false })
+  assert.equal(await refresh, false)
+  assert.deepEqual(tools, [])
+})
+
+void test('a stalled broker under a short interval sees one read and one warning', async () => {
+  // The first describe answers; everything after it hangs until the client's own timeout.
+  let answered = false
+  const broker = await fakeBroker(request => {
+    if (request.op !== 'ops.describe') {
+      return null
+    }
+    if (answered) {
+      return null
+    }
+    answered = true
+    return `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }) })}\n`
+  })
+  try {
+    const base = context()
+    let stop: (() => void) | undefined
+    const ctx: HostContext = {
+      ...base.ctx,
+      effect(run) {
+        stop = run()
+      },
+    }
+    // A millisecond interval against a timeout the initial read can also meet: without coalescing
+    // this is a storm, and the 200 ms leaves the first read room on a loaded worker.
+    await apply(ctx, { socketPath: broker.socketPath, refreshMs: 1, timeoutMs: STALL_TIMEOUT_MS })
+    // The initial read must have landed before the warning means anything; an initial timeout would
+    // otherwise satisfy the wait below without testing the refresh at all.
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_disk_usage'],
+    )
+    await waitFor(() => base.warnings.length > 0)
+    // Stop before the next stalled read can finish and warn again.
+    stop?.()
+    assert.equal(base.warnings.length, 1)
+    assert.match(base.warnings.at(0) ?? '', /re-reading the broker table failed/u)
+    // The initial load and the one stalled read; joined ticks add nothing.
+    assert.ok(broker.requests.length <= 3, String(broker.requests.length))
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a joined tick reports one failure, not one per tick', async () => {
+  let calls = 0
+  let started!: () => void
+  let fail!: (error: Error) => void
+  const readStarted = new Promise<void>(resolve => {
+    started = resolve
+  })
+  const call = async (): Promise<BrokerAnswer> => {
+    calls += 1
+    if (calls === 1) {
+      return {
+        text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: [TABLE[0]] }),
+        truncated: false,
+      }
+    }
+    return new Promise<BrokerAnswer>((_resolve, reject) => {
+      fail = reject
+      started()
+    })
+  }
+  const { ctx, tools, warnings } = context()
+  const registered = await registerTools(ctx, { socketPath: '/unused' }, call)
+  const first = registered.refresh()
+  await readStarted
+  // Both ticks wait on the same read; when it fails, only that read reports it.
+  const second = registered.refresh()
+  fail(new Error('the broker timed out'))
+  assert.deepEqual(await Promise.all([first, second]), [false, false])
+  assert.equal(warnings.length, 1)
+  assert.match(warnings.at(0) ?? '', /the broker timed out/u)
+  assert.deepEqual(
+    tools.map(tool => tool.name),
+    ['idsh_log_tail'],
+  )
+})
+
+void test('a tick that arrives during a read joins it instead of starting another', async () => {
+  let calls = 0
+  let started!: () => void
+  let release!: (answer: BrokerAnswer) => void
+  const readStarted = new Promise<void>(resolve => {
+    started = resolve
+  })
+  const call = async (): Promise<BrokerAnswer> => {
+    calls += 1
+    const table = calls === 1 ? [TABLE[0]] : TABLE
+    if (calls === 1) {
+      return {
+        text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }),
+        truncated: false,
+      }
+    }
+    return new Promise<BrokerAnswer>(resolve => {
+      release = resolve
+      started()
+    })
+  }
+  const { ctx, tools } = context()
+  const registered = await registerTools(ctx, { socketPath: '/unused' }, call)
+  const first = registered.refresh()
+  await readStarted
+  // A second tick while the read is pending must join it: same promise, no second read.
+  const second = registered.refresh()
+  assert.equal(second, first)
+  release({ text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }), truncated: false })
+  assert.equal(await first, true)
+  assert.equal(calls, 2)
+  assert.deepEqual(
+    tools.map(tool => tool.name),
+    ['idsh_log_tail', 'idsh_disk_usage'],
+  )
+})
+
+void test('an older broker is named once, not once per poll', async () => {
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`,
+  )
+  try {
+    const { ctx, warnings } = context()
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.equal(warnings.length, 1)
+    await registered.refresh()
+    await registered.refresh()
+    assert.equal(warnings.length, 1)
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a refresh that cannot mount puts the previous tools back', async () => {
+  let table: unknown[] = [TABLE[0]]
+  const answer = (): string =>
+    `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }) })}\n`
+  const broker = await fakeBroker(request => (request.op === 'ops.describe' ? answer() : null))
+  try {
+    const base = context()
+    let failOnce = false
+    const ctx: HostContext = {
+      ...base.ctx,
+      tools: {
+        register(tool) {
+          if (failOnce) {
+            failOnce = false
+            throw new Error('the registry refused it')
+          }
+          return base.ctx.tools.register(tool)
+        },
+      },
+    }
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    // The new table mounts, but the registry refuses the new name: the old tools come back.
+    table = [TABLE[0], TABLE[1]]
+    failOnce = true
+    assert.equal(await registered.refresh(), false)
+    assert.match(base.warnings.at(-1) ?? '', /registry refused it/u)
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    // Once the registry cooperates, the same table is applied.
+    assert.equal(await registered.refresh(), true)
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_disk_usage'],
+    )
   } finally {
     await broker.close()
   }
