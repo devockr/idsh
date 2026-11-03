@@ -9,4 +9,6 @@ followed by the target it names, and `..` is matched as a path segment rather th
 checkout reached through a symlink (the deployment's `/var/services/…` against a process that
 resolved to `/volume1/…`), or a rebuild that cleaned `lib/`, is therefore recognised as the checkout
 it is instead of refusing with "cannot tell which npm prefix … belongs to" — and a child directory
-named `..build` stays inside it.
+named `..build` stays inside it. The resolution is asynchronous: the broker answers every request
+from one event loop, so a synchronous lookup on a filesystem that stopped answering would stall all
+of them, not only this operation.

@@ -7,15 +7,17 @@
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
 import { spawn } from 'node:child_process'
-import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import {
   appendFile,
   chmod,
+  lstat,
   readdir,
   mkdir,
   mkdtemp,
   open,
   readFile,
+  readlink,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -665,13 +667,13 @@ const MAX_LINK_HOPS = 16
  * below it, because a cleaned `lib/` must not turn a symlinked checkout into "outside the
  * checkout".
  */
-function realOrResolved(value: string, hops = 0): string {
+async function realOrResolved(value: string, hops = 0): Promise<string> {
   const resolved = path.resolve(value)
   const missing: string[] = []
   let head = resolved
   for (;;) {
     try {
-      return path.join(realpathSync(head), ...missing.toReversed())
+      return path.join(await realpath(head), ...missing.toReversed())
     } catch (error) {
       const parent = path.dirname(head)
       // Only "this segment is missing" continues the walk; a loop or a permission error is a path
@@ -681,7 +683,7 @@ function realOrResolved(value: string, hops = 0): string {
       }
       // A dangling link still names where it pointed: follow that instead of treating the link's
       // own name as the missing segment, because the target may be the tree being looked for.
-      const target = hops < MAX_LINK_HOPS ? danglingTarget(head) : undefined
+      const target = hops < MAX_LINK_HOPS ? await danglingTarget(head) : undefined
       if (target !== undefined) {
         return realOrResolved(path.join(target, ...missing.toReversed()), hops + 1)
       }
@@ -695,12 +697,12 @@ function realOrResolved(value: string, hops = 0): string {
  * The target of a symlink whose target is gone, or `undefined` when the path is not a symlink (or
  * cannot be read at all, which is not this case to answer).
  */
-function danglingTarget(value: string): string | undefined {
+async function danglingTarget(value: string): Promise<string | undefined> {
   try {
-    if (!lstatSync(value).isSymbolicLink()) {
+    if (!(await lstat(value)).isSymbolicLink()) {
       return undefined
     }
-    const target = path.resolve(path.dirname(value), readlinkSync(value))
+    const target = path.resolve(path.dirname(value), await readlink(value))
     return target === value ? undefined : target
   } catch {
     return undefined
@@ -711,12 +713,12 @@ function danglingTarget(value: string): string | undefined {
  * How this broker was installed, read from the program it is running: inside the checkout it builds
  * there (the entry it is running from), otherwise the published package is what to update.
  */
-function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
+async function brokerUpdateSource(ctx: OpContext): Promise<'checkout' | 'npm'> {
   if (ctx.checkout === undefined) {
     return 'npm'
   }
-  const entry = realOrResolved(ctx.entryPath)
-  const relative = path.relative(realOrResolved(ctx.checkout), entry)
+  const entry = await realOrResolved(ctx.entryPath)
+  const relative = path.relative(await realOrResolved(ctx.checkout), entry)
   // `..` as a segment, not as a prefix: a child directory called `..build` is inside the checkout,
   // and a plain `startsWith('..')` would send it to the npm branch and the refusal there.
   const outside = relative === '..' || relative.startsWith(`..${path.sep}`)
@@ -1431,7 +1433,7 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, [])
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      const source = brokerUpdateSource(ctx)
+      const source = await brokerUpdateSource(ctx)
       // Synchronous on purpose: a failed step must be the answer, not a silent no-op behind it.
       // Each step gets what is left of the one budget, like the build.
       for (const step of brokerUpdate(ctx, source)) {
