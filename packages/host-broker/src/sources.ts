@@ -653,6 +653,9 @@ function remaining(deadline: number): number {
 
 const BROKER_PACKAGE = '@idsh/host-broker'
 
+/** Up to how many links one resolution follows, so a chain that loops cannot hang the operation. */
+const MAX_LINK_HOPS = 16
+
 /**
  * A path as the filesystem names it, so the two sides of the comparison agree when one is reached
  * through a symlink — a deployment whose checkout lives under `/var/services` and a process whose
@@ -687,9 +690,6 @@ function realOrResolved(value: string, hops = 0): string {
     }
   }
 }
-
-/** Up to how many links one resolution follows, so a chain that loops cannot hang the operation. */
-const MAX_LINK_HOPS = 16
 
 /**
  * The target of a symlink whose target is gone, or `undefined` when the path is not a symlink (or
