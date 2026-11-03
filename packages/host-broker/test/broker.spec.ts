@@ -2188,6 +2188,48 @@ echo "$PWD $*" >> '${gitLog}'
   }
 })
 
+void test('broker.update resolves a symlinked checkout when the entry is gone', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$PWD $*" >> '${gitLog}'
+`,
+    { mode: 0o755 },
+  )
+  const real = path.join(host.root, 'checkout')
+  const entryPath = path.join(real, 'packages', 'host-broker', 'lib', 'cli.js')
+  await mkdir(path.dirname(entryPath), { recursive: true })
+  await writeFile(entryPath, '\n')
+  // The entry is removed after the broker started from it — a rebuild that cleaned `lib/` looks
+  // like this — while the checkout is still reached through the symlink.
+  const linked = path.join(host.root, 'linked')
+  await symlink(real, linked, 'dir')
+  await rm(entryPath)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath,
+    pnpmPath: gitPath,
+    checkout: linked,
+    entryPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^updated from checkout/u)
+    assert.match(await readFile(gitLog, 'utf8'), /pull --ff-only$/mu)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('broker.update treats a directory whose name starts with dots as inside', async () => {
   const host = await fakeHost()
   const gitLog = path.join(host.root, 'git.log')

@@ -657,12 +657,26 @@ const BROKER_PACKAGE = '@idsh/host-broker'
  * A path as the filesystem names it, so the two sides of the comparison agree when one is reached
  * through a symlink — a deployment whose checkout lives under `/var/services` and a process whose
  * entry resolved to `/volume1` are the same tree, and a plain `resolve` cannot say so.
+ *
+ * A path that no longer exists is named through its nearest existing ancestor and the segments
+ * below it, because a cleaned `lib/` must not turn a symlinked checkout into "outside the
+ * checkout".
  */
 function realOrResolved(value: string): string {
-  try {
-    return realpathSync(value)
-  } catch {
-    return path.resolve(value)
+  const resolved = path.resolve(value)
+  const missing: string[] = []
+  let head = resolved
+  for (;;) {
+    try {
+      return path.join(realpathSync(head), ...missing.toReversed())
+    } catch {
+      const parent = path.dirname(head)
+      if (parent === head) {
+        return resolved
+      }
+      missing.push(path.basename(head))
+      head = parent
+    }
   }
 }
 
