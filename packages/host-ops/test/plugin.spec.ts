@@ -1290,6 +1290,46 @@ void test('a disposal during an in-flight read mounts nothing', async () => {
   assert.deepEqual(tools, [])
 })
 
+void test('a stalled broker under a short interval sees one read and one warning', async () => {
+  // The first describe answers; everything after it hangs until the client's own timeout.
+  let answered = false
+  const broker = await fakeBroker(request => {
+    if (request.op !== 'ops.describe') {
+      return null
+    }
+    if (answered) {
+      return null
+    }
+    answered = true
+    return `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }) })}\n`
+  })
+  try {
+    const base = context()
+    let stop: (() => void) | undefined
+    const ctx: HostContext = {
+      ...base.ctx,
+      effect(run) {
+        stop = run()
+      },
+    }
+    // A millisecond interval against a 40 ms timeout: without coalescing this is a storm.
+    await apply(ctx, { socketPath: broker.socketPath, refreshMs: 1, timeoutMs: 40 })
+    await waitFor(() => base.warnings.length > 0)
+    // The failed read kept what it had; reading the tools has to happen before the disposer runs.
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_disk_usage'],
+    )
+    // Stop before the next stalled read can finish and warn again.
+    stop?.()
+    assert.equal(base.warnings.length, 1)
+    // The initial load and the one stalled read; joined ticks add nothing.
+    assert.ok(broker.requests.length <= 3, String(broker.requests.length))
+  } finally {
+    await broker.close()
+  }
+})
+
 void test('a joined tick reports one failure, not one per tick', async () => {
   let calls = 0
   let started!: () => void
