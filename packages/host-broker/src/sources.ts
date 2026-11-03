@@ -7,6 +7,7 @@
  * arbitrary argument, so there is no path guard to get wrong yet.
  */
 import { spawn } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import {
   appendFile,
   chmod,
@@ -653,6 +654,19 @@ function remaining(deadline: number): number {
 const BROKER_PACKAGE = '@idsh/host-broker'
 
 /**
+ * A path as the filesystem names it, so the two sides of the comparison agree when one is reached
+ * through a symlink — a deployment whose checkout lives under `/var/services` and a process whose
+ * entry resolved to `/volume1` are the same tree, and a plain `resolve` cannot say so.
+ */
+function realOrResolved(value: string): string {
+  try {
+    return realpathSync(value)
+  } catch {
+    return path.resolve(value)
+  }
+}
+
+/**
  * How this broker was installed, read from the program it is running: inside the checkout it builds
  * there (the entry it is running from), otherwise the published package is what to update.
  */
@@ -660,8 +674,8 @@ function brokerUpdateSource(ctx: OpContext): 'checkout' | 'npm' {
   if (ctx.checkout === undefined) {
     return 'npm'
   }
-  const entry = path.resolve(ctx.entryPath)
-  const relative = path.relative(ctx.checkout, entry)
+  const entry = realOrResolved(ctx.entryPath)
+  const relative = path.relative(realOrResolved(ctx.checkout), entry)
   return relative !== '' && !relative.startsWith('..') ? 'checkout' : 'npm'
 }
 

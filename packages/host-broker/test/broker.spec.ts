@@ -5,6 +5,7 @@ import {
   chmod,
   mkdtemp,
   mkdir,
+  symlink,
   readFile,
   readdir,
   rm,
@@ -2133,6 +2134,52 @@ echo "$PWD $*" >> '${pnpmLog}'
     )
     await new Promise(resolve => setTimeout(resolve, FLUSH_MS))
     assert.equal(stopped, 1)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('broker.update follows a checkout reached through a symlink', async () => {
+  const host = await fakeHost()
+  const gitLog = path.join(host.root, 'git.log')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+echo "$PWD $*" >> '${gitLog}'
+`,
+    { mode: 0o755 },
+  )
+  const real = path.join(host.root, 'checkout')
+  await mkdir(path.join(real, 'packages', 'host-broker'), { recursive: true })
+  await writeFile(
+    path.join(real, 'packages', 'host-broker', 'package.json'),
+    '{"name":"@idsh/host-broker"}\n',
+  )
+  // The deployment's checkout is reached through a symlink; the process resolves to the real tree.
+  const linked = path.join(host.root, 'linked')
+  await symlink(real, linked, 'dir')
+  let stopped = 0
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath,
+    pnpmPath: gitPath,
+    checkout: linked,
+    entryPath: path.join(real, 'packages', 'host-broker', 'lib', 'cli.js'),
+    stop: () => {
+      stopped += 1
+    },
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^updated from checkout/u)
+    assert.match(await readFile(gitLog, 'utf8'), /pull --ff-only$/mu)
   } finally {
     connection.close()
     await broker.close()
