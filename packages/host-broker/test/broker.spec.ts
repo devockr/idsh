@@ -286,6 +286,8 @@ void test('run answers the policy verdict, and refuses what the declaration does
       ['ip', 'link', 'set', 'eth0', 'down'],
       // A flag that is not in the declaration.
       ['df', '-h;rm'],
+      // The declared spelling, not a second one: `--h` was never in the table.
+      ['df', '--h'],
       // A value flag without its value.
       ['ping', '-c'],
       // More positionals than the declaration allows.

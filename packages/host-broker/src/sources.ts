@@ -791,6 +791,16 @@ function brokerUpdate(ctx: OpContext, source: 'checkout' | 'npm'): UpdateStep[] 
 
 /* ------------------------------------------------------------------ run */
 
+/** Where the declared binaries are looked for, independent of the PATH the broker inherited. */
+const RUN_PATH = [
+  '/usr/local/sbin',
+  '/usr/local/bin',
+  '/usr/sbin',
+  '/usr/bin',
+  '/sbin',
+  '/bin',
+].join(':')
+
 /** The most tokens one `run` call may carry, and the longest a single token may be. */
 const MAX_RUN_TOKENS = 16
 const MAX_RUN_TOKEN_CHARS = 128
@@ -919,9 +929,18 @@ function parseRun(tokens: readonly string[]): RunVerdict {
       if (token === '--' || token === '-') {
         throw new BrokerFault('bad-argument', `${JSON.stringify(token)} is not a declared flag`)
       }
-      const name = token.startsWith('+') ? token : token.replace(/^--?/u, '')
+      // The declared spelling, exactly: one leading dash (or the plus dig uses). \`--h\` for a
+      // declared \`-h\` would be a second grammar the declaration never described.
+      const name = token.startsWith('+')
+        ? token
+        : token.startsWith('--')
+          ? undefined
+          : token.slice(1)
       const flags = declaration.flags
-      const kind = flags !== undefined && Object.hasOwn(flags, name) ? flags[name] : undefined
+      const kind =
+        name !== undefined && flags !== undefined && Object.hasOwn(flags, name)
+          ? flags[name]
+          : undefined
       if (kind === undefined) {
         throw new BrokerFault('bad-argument', `${program} does not accept ${JSON.stringify(token)}`)
       }
@@ -1705,7 +1724,12 @@ export const OPS: readonly OpDefinition[] = [
         return describeRun(verdict)
       }
       const [, ...rest] = verdict.argv
-      return runFixed(ctx, verdict.program, rest)
+      return runFixed(ctx, verdict.program, rest, {
+        // Not the broker's inherited PATH: a supervisor with a narrow one would make every declared
+        // binary unreachable (ENOENT) rather than refused, and these live in the sbin directories on
+        // most hosts. A fixed list is the same answer everywhere.
+        env: { PATH: RUN_PATH },
+      })
     },
   },
   {
