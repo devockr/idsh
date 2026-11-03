@@ -14,6 +14,8 @@ const OP_TIMEOUT_MS = 900_000
 const TOOL_TIMEOUT_MS = OP_TIMEOUT_MS + SLACK_MS
 const SHORT_OP_TIMEOUT_MS = 200
 const SHORT_TOOL_TIMEOUT_MS = SHORT_OP_TIMEOUT_MS + SLACK_MS
+/** Long enough for several polls of the 5 ms interval the timer test configures. */
+const POLL_WINDOW_MS = 40
 
 const TABLE = [
   {
@@ -1175,6 +1177,75 @@ void test('a table that changes is picked up without a reload', async () => {
 
     registered.dispose()
     assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('the timer replaces the tools without a reload', async () => {
+  let table: unknown[] = [TABLE[0]]
+  const answer = (): string =>
+    `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: table }) })}\n`
+  const broker = await fakeBroker(request => (request.op === 'ops.describe' ? answer() : null))
+  try {
+    const base = context()
+    let stop: (() => void) | undefined
+    const ctx: HostContext = {
+      ...base.ctx,
+      effect(run) {
+        stop = run()
+      },
+    }
+    await apply(ctx, { socketPath: broker.socketPath, refreshMs: 5 })
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail'],
+    )
+
+    table = [TABLE[0], TABLE[1]]
+    // The timer is the thing under test; eight polls of the 5 ms interval instead of a minute.
+    await new Promise(resolve => setTimeout(resolve, POLL_WINDOW_MS))
+    assert.deepEqual(
+      base.tools.map(tool => tool.name),
+      ['idsh_log_tail', 'idsh_disk_usage'],
+    )
+
+    // The effect's disposer is the plugin's own disposal: the tools go with it.
+    stop?.()
+    assert.deepEqual(base.tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a disposed registration ignores a refresh', async () => {
+  const broker = await fakeBroker(
+    () =>
+      `${JSON.stringify({ ok: true, result: JSON.stringify({ protocol: 1, version: '1.0.0', ops: TABLE }) })}\n`,
+  )
+  try {
+    const { ctx, tools } = context()
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    registered.dispose()
+    assert.deepEqual(tools, [])
+    assert.equal(await registered.refresh(), false)
+    assert.deepEqual(tools, [])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('an older broker is named once, not once per poll', async () => {
+  const broker = await fakeBroker(
+    () => `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`,
+  )
+  try {
+    const { ctx, warnings } = context()
+    const registered = await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.equal(warnings.length, 1)
+    await registered.refresh()
+    await registered.refresh()
+    assert.equal(warnings.length, 1)
   } finally {
     await broker.close()
   }

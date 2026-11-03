@@ -13,6 +13,8 @@ import { DEFAULT_TIMEOUT_MS, MAX_RESPONSE_BYTES, MAX_TIMER_MS, NEWLINE_BYTE } fr
 export interface BrokerEndpoint {
   readonly socketPath: string
   readonly timeoutMs?: number
+  /** How often the plugin asks for the table again; carried here so one config value reaches both. */
+  readonly refreshMs?: number
 }
 
 /** One answer: the broker's text, and whether it was capped on the way out. */

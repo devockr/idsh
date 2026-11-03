@@ -39,6 +39,8 @@ export interface Config {
   readonly timeoutMs?: number
   /** Where the broker's state directory is mounted, so a deploy job can follow its build log. */
   readonly statePath?: string
+  /** How often the broker's table is asked for again, in milliseconds; a minute by default. */
+  readonly refreshMs?: number
 }
 
 interface ContentBlock {
@@ -161,7 +163,7 @@ async function discover(ctx: HostContext, config: Config): Promise<void> {
           `host-ops: re-reading the broker table failed: ${error instanceof Error ? error.message : String(error)}; keeping the tools it registered`,
         )
       })
-    }, REFRESH_MS)
+    }, endpoint.refreshMs)
     // A timer must not hold the process open on its own.
     timer.unref()
     return () => {
@@ -236,7 +238,9 @@ export async function registerTools(
     return { catalogue, fingerprint: JSON.stringify(catalogue) }
   }
 
-  const mount = (catalogue: DescribedOp[]): Mounted[] => {
+  // Built and validated before anything is registered or dropped: a table with two operations on
+  // one tool name must fail while the old tools are still mounted.
+  const build = (catalogue: DescribedOp[]): HostTool[] => {
     const tools = catalogue.map(op => toolFor(ctx, endpoint, op, catalogue, call, statePath))
     const names = new Set<string>()
     for (const tool of tools) {
@@ -247,6 +251,10 @@ export async function registerTools(
       }
       names.add(tool.name)
     }
+    return tools
+  }
+
+  const register = (tools: readonly HostTool[]): Mounted[] => {
     const mounted: Mounted[] = []
     try {
       for (const tool of tools) {
@@ -260,6 +268,8 @@ export async function registerTools(
     }
     return mounted
   }
+
+  const mount = (catalogue: DescribedOp[]): Mounted[] => register(build(catalogue))
 
   let mounted: Mounted[] = []
   let fingerprint = ''
@@ -279,14 +289,16 @@ export async function registerTools(
     if (disposed || next.fingerprint === fingerprint) {
       return false
     }
+    // Validation happens before the old tools are touched, so a table that cannot even be built
+    // (two operations on one tool name) leaves them mounted.
+    const tools = build(next.catalogue)
     // The registry is keyed by tool name, so the new tools cannot be registered while the old
-    // ones hold their names. Drop them first, and put them back if the new mount fails: a table
-    // that cannot be mounted must leave what worked available.
+    // ones hold their names. Drop them first, and put them back if registering the new ones fails.
     for (const one of mounted) {
       one.dispose()
     }
     try {
-      mounted = mount(next.catalogue)
+      mounted = register(tools)
     } catch (error) {
       mounted = mount(previous)
       throw error
@@ -332,11 +344,15 @@ function endpointOf(config: Config): BrokerEndpoint {
   if (typeof socketPath !== 'string' || socketPath === '') {
     throw new Error('host-ops: socketPath must be a non-empty string')
   }
+  const refreshMs = config.refreshMs ?? REFRESH_MS
+  if (!Number.isInteger(refreshMs) || refreshMs < 1) {
+    throw new Error('host-ops: refreshMs must be a positive integer')
+  }
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error('host-ops: timeoutMs must be a positive integer')
   }
-  return { socketPath, timeoutMs }
+  return { socketPath, timeoutMs, refreshMs }
 }
 
 /**
