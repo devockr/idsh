@@ -827,7 +827,7 @@ interface RunDeclaration {
  * first character may be a colon because every compressed IPv6 literal starts with one (`::1`); a
  * bare colon run is still refused, since it names no host.
  */
-const RUN_TARGET = /^(?=.*[A-Za-z0-9])[A-Za-z0-9:](?:[A-Za-z0-9._:-]{0,252})$/u
+const RUN_TARGET = /^(?=.*[A-Za-z0-9])[A-Za-z0-9:](?:[A-Za-z0-9._:%-]{0,252})$/u
 
 /**
  * No declaration takes a filesystem path yet, on purpose: the ROADMAP's race-safe guard (resolve
@@ -937,13 +937,15 @@ function parseRun(tokens: readonly string[]): RunVerdict {
       if (token === '--' || token === '-') {
         throw new BrokerFault('bad-argument', `${JSON.stringify(token)} is not a declared flag`)
       }
-      // The declared spelling, exactly: one leading dash (or the plus dig uses). \`--h\` for a
-      // declared \`-h\` would be a second grammar the declaration never described.
+      // The declared spelling, exactly: one leading dash (or the plus dig uses). `--h` for a
+      // declared `-h` would be a second grammar the declaration never described.
       const name = token.startsWith('+')
         ? token
         : token.startsWith('--')
           ? undefined
-          : token.slice(1)
+          : token.slice(1).includes('+')
+            ? undefined
+            : token.slice(1)
       const flags = declaration.flags
       const kind =
         name !== undefined && flags !== undefined && Object.hasOwn(flags, name)
@@ -997,7 +999,10 @@ function parseRun(tokens: readonly string[]): RunVerdict {
   // probing anything, and a dry run that approves them answers a question nobody can execute.
   const minimum = declaration.minPositionals ?? 0
   if (positionals < minimum) {
-    throw new BrokerFault('bad-argument', `${program} needs ${String(minimum)} positional(s)`)
+    throw new BrokerFault(
+      'bad-argument',
+      `${program} needs at least ${String(minimum)} positional argument${minimum === 1 ? '' : 's'}`,
+    )
   }
   return { program, argv }
 }
@@ -1738,7 +1743,15 @@ export const OPS: readonly OpDefinition[] = [
         return describeRun(verdict)
       }
       const [, ...rest] = verdict.argv
-      return runFixed(ctx, verdict.program, rest, {
+      // The configured path wins where a source already owns the binary: `--ip`/`--ss` exist so a
+      // host can name the client it actually has.
+      const program =
+        verdict.program === 'ip'
+          ? ctx.ipPath
+          : verdict.program === 'ss'
+            ? ctx.ssPath
+            : verdict.program
+      return runFixed(ctx, program, rest, {
         // Not the broker's inherited PATH: a supervisor with a narrow one would make every declared
         // binary unreachable (ENOENT) rather than refused, and these live in the sbin directories on
         // most hosts. A fixed list is the same answer everywhere.

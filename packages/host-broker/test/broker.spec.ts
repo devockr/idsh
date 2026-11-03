@@ -277,6 +277,8 @@ void test('run answers the policy verdict, and refuses what the declaration does
       // A compressed IPv6 literal starts with a colon and is still a host.
       ['ping', '::1'],
       ['ping', 'fe80::1'],
+      // A link-local literal carries its zone.
+      ['ping', 'fe80::1%eth0'],
       // dig without a target is a valid default query, so it stays optional.
       ['dig'],
     ] as const) {
@@ -313,6 +315,8 @@ void test('run answers the policy verdict, and refuses what the declaration does
       ['df', '-toString'],
       // A flag the binary declares, on a binary that does not.
       ['dig', '-4', 'example.com'],
+      // The plus form only in the plus spelling: dig rejects `-+short` itself.
+      ['dig', '-+short', 'example.com'],
     ] as const) {
       const refused = await connection.request({ op: 'run', args: { argv } })
       assert.equal(refused.ok, false, argv.join(' '))
