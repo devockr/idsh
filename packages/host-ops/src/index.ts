@@ -464,11 +464,10 @@ async function confirmed(
   // Resolve before asking: a question about "PR 82" is not a question about a commit, and a source
   // that cannot be resolved is an error the person should see instead of a prompt.
   const resolved = await resolve()
-  // Blocks of text, not one formatted blob: an operation with no arguments has nothing to show for
-  // them, and `{}` in a question reads like a placeholder that failed to fill in.
+  // Blocks of text, not one formatted blob. `JSON.stringify` already answers whether there is
+  // anything to show — an argument-free call is exactly the string `{}`, which reads like a
+  // placeholder that failed to fill in — and a resolved source is a block of its own.
   const blocks = [`Run ${op.name} on the host?`]
-  // `JSON.stringify` already says whether there is anything to show: an empty argument object is
-  // exactly the string `{}`, and printing it looks like a placeholder that failed to fill in.
   const shown = JSON.stringify(args)
   if (shown !== '{}') {
     blocks.push(shown)
