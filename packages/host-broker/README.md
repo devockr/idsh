@@ -107,7 +107,19 @@ request.
 | `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `gcb.update`      | rebuilds the credential broker from `--gcb-checkout` (`git pull`, then `docker build --target host` with the image its compose names) and recreates only `--gcb-service` (default `gcb`) with `--no-build --pull never --wait`, then probes `--gcb-probe-repo` with `docker exec <--container> gcb probe`; `--gcb-compose` takes one or more files, comma-separated, so a base-plus-overlay deployment is handled; offered only when checkout, compose and repository are configured, confirmation required |
-| `ops.describe`    | the table itself: names, summaries and each operation's schema                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `ops.describe`    | the table itself — names, summaries, each operation's schema. A client that declares `{protocol}` gets the envelope (`{protocol, version, ops}`), so it can say when the two are out of step; a client that declares nothing gets the bare table, which is what an older plugin can read                                                                                                                                                                                                                    |
+
+The answer is negotiated, not changed: the envelope goes only to a client that declares a protocol,
+so updating either side alone cannot cost the other its tools — an old plugin keeps getting the bare
+table it expects, and a newer one compares the protocol it receives with its own instead of letting a
+mismatch surface later as an unknown argument.
+
+What the negotiation cannot fix is staleness: the broker and the plugin have **two lifecycles** (the
+plugin is baked into the image, the broker runs from the deployment's checkout), and the table is
+read **once, at load**. A broker change therefore reaches a client only after the container is
+recreated, and a plugin change never reaches the broker. After either, do both: `deploy.recreate` for
+the plugin, a broker restart (`broker.update`, which exits and lets its supervisor start the new
+build) for the broker.
 
 `log.tail` reads a bounded window from the end of the file and drops a partial first line, so it
 never returns half a row. Its `pattern` is a literal substring, not a regular expression: nothing

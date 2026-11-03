@@ -117,6 +117,9 @@ void test('the broker table becomes one tool per operation', async () => {
       ['idsh_log_tail', 'idsh_disk_usage'],
     )
     assert.deepEqual(tools[0]?.parameters, TABLE[0]?.input)
+    // The declaration that earns the envelope, and the only reason an old broker answers with the
+    // bare table instead: pin it, or a regression turns every boot into a false "older broker".
+    assert.deepEqual(broker.requests[0], { op: 'ops.describe', args: { protocol: 1 } })
     const result = await tools[0]?.execute(
       { file: 'messages' },
       { signal: new AbortController().signal },
@@ -1118,6 +1121,47 @@ void test('a build runs as a job without injecting the registry', async () => {
     // The job path, not the synchronous fallback: the registry was found where cordis put it.
     assert.match(answer.text, /started job-1: deploy\.build runs in the background/u)
     assert.deepEqual(started, ['job-1'])
+  } finally {
+    await broker.close()
+  }
+})
+
+void test('a broker speaking another protocol is named in a warning', async () => {
+  const legacy = `${JSON.stringify({ ok: true, result: JSON.stringify(TABLE) })}\n`
+  const current = `${JSON.stringify({
+    ok: true,
+    result: JSON.stringify({ protocol: 1, version: '9.9.9', ops: TABLE }),
+  })}\n`
+  const future = `${JSON.stringify({
+    ok: true,
+    result: JSON.stringify({ protocol: 2, version: '9.9.9', ops: TABLE }),
+  })}\n`
+
+  for (const [describe, expected] of [
+    [legacy, /describes no protocol, so it is older than this plugin/u],
+    [future, /broker 9\.9\.9 speaks protocol 2 but this plugin speaks 1/u],
+  ] as const) {
+    const broker = await fakeBroker(() => describe)
+    try {
+      const { ctx, tools, warnings } = context()
+      await registerTools(ctx, { socketPath: broker.socketPath })
+      assert.match(warnings.join('\n'), expected)
+      // The warning is not a refusal: the table is readable, so the tools exist.
+      assert.deepEqual(
+        tools.map(tool => tool.name),
+        ['idsh_log_tail', 'idsh_disk_usage'],
+      )
+    } finally {
+      await broker.close()
+    }
+  }
+
+  // The same protocol is silent: a warning on every boot would be noise.
+  const broker = await fakeBroker(() => current)
+  try {
+    const { ctx, warnings } = context()
+    await registerTools(ctx, { socketPath: broker.socketPath })
+    assert.deepEqual(warnings, [])
   } finally {
     await broker.close()
   }

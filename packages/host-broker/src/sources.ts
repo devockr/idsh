@@ -1431,17 +1431,48 @@ export function findOp(name: string, context?: OpContext): OpDefinition | undefi
   return available(context).find(op => op.name === name)
 }
 
-/** The table as the plugin sees it: names, summaries and the parameter schema of each. */
-export function describeOps(context?: OpContext): string {
+/** The protocol `ops.describe` is shaped for: the number a client compares with its own. */
+export const DESCRIBE_PROTOCOL = 1
+
+function describeTable(context?: OpContext): unknown[] {
+  return available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
+    name,
+    summary,
+    input,
+    ...(confirm === true ? { confirm: true } : {}),
+    ...(preview === undefined ? {} : { preview }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  }))
+}
+
+/**
+ * What `ops.describe` answers — the table as the plugin sees it: names, summaries and each
+ * operation's parameter schema.
+ *
+ * The negotiation is one-sided on purpose: a client that declares `{protocol}` gets the envelope —
+ * the table, that protocol and this broker's version — and a client that sends nothing gets the
+ * bare table. An older plugin throws on anything but an array, so answering it with the envelope
+ * would cost it every host tool; a newer plugin reads both, so the bare table only means "older
+ * broker".
+ */
+export function describeOps(context?: OpContext, args?: Record<string, unknown>): string {
+  // Unknown keys are ignored on purpose: this request is versioned too. A newer plugin may send a
+  // field this broker has never heard of, and answering the part it knows — with the protocol it
+  // speaks — lets the client decide; refusing would turn skew into a hard failure here, which is
+  // exactly what the negotiation exists to avoid.
+  const declared = args?.['protocol']
+  if (declared === undefined) {
+    return JSON.stringify(describeTable(context), null, 2)
+  }
+  if (typeof declared !== 'number' || !Number.isInteger(declared)) {
+    throw new BrokerFault('bad-argument', 'protocol must be an integer')
+  }
   return JSON.stringify(
-    available(context).map(({ name, summary, input, confirm, preview, timeoutMs }) => ({
-      name,
-      summary,
-      input,
-      ...(confirm === true ? { confirm: true } : {}),
-      ...(preview === undefined ? {} : { preview }),
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    })),
+    {
+      protocol: DESCRIBE_PROTOCOL,
+      version: context?.brokerVersion ?? 'unknown',
+      ops: describeTable(context),
+    },
     null,
     2,
   )

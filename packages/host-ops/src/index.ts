@@ -154,14 +154,20 @@ export async function registerTools(
   call: BrokerCaller = callBroker,
   statePath: string | undefined = DEFAULT_STATE_PATH,
 ): Promise<void> {
-  const described = await call(endpoint, 'ops.describe', {})
+  // The argument is the negotiation: a broker new enough to answer with `{protocol, …}` does so
+  // only for a client that declares one, and an older broker ignores it and sends the bare table.
+  const described = await call(endpoint, 'ops.describe', { protocol: PROTOCOL })
   const parsed: unknown = JSON.parse(described.text)
-  if (!Array.isArray(parsed)) {
+  // A broker older than this plugin answers with the bare table: usable, but it cannot say which
+  // arguments it takes beyond the ones in the entry, so the mismatch is worth one line in the log.
+  const describedTable = isRecord(parsed) ? parsed : undefined
+  const table: unknown = describedTable === undefined ? parsed : describedTable['ops']
+  if (!Array.isArray(table)) {
     throw new TypeError('the broker did not describe a table of operations')
   }
-  const ops: unknown[] = parsed
+  warnProtocol(ctx, describedTable)
   // Build and validate the whole table first, then register: a bad entry leaves nothing behind.
-  const catalogue = ops.map(value => asOp(value))
+  const catalogue = (table as unknown[]).map(value => asOp(value))
   // The preview is called before the confirmation gate, so an unknown name would fail the deploy
   // with an operation fault and a destructive one would run unasked.
   for (const op of catalogue) {
@@ -408,6 +414,34 @@ function previewArgs(
     args['for'] = op.name
   }
   return args
+}
+
+/** The protocol this plugin builds its tools from, and declares when it asks for the table. */
+const PROTOCOL = 1
+
+/**
+ * Say so when the broker and this plugin are out of step.
+ *
+ * Two lifecycles produce the two sides — the plugin is baked into the image, the broker runs from
+ * the deployment's checkout — so neither update drags the other along. A mismatch is not fatal (the
+ * table is still readable), but silence is how a stale pair is discovered by its symptoms instead
+ * of by its cause.
+ */
+function warnProtocol(ctx: HostContext, table: Record<string, unknown> | undefined): void {
+  const protocol = table?.['protocol']
+  const version = table?.['version']
+  const broker = typeof version === 'string' && version !== '' ? `broker ${version}` : 'the broker'
+  if (typeof protocol !== 'number') {
+    ctx.logger.warn(
+      `host-ops: ${broker} describes no protocol, so it is older than this plugin (protocol ${String(PROTOCOL)}); update it (broker.update) and recreate the container`,
+    )
+    return
+  }
+  if (protocol !== PROTOCOL) {
+    ctx.logger.warn(
+      `host-ops: ${broker} speaks protocol ${String(protocol)} but this plugin speaks ${String(PROTOCOL)}; the lower number is the older side — update it and recreate the container`,
+    )
+  }
 }
 
 /** The person's answer: Run, or the reply they typed instead of choosing. */

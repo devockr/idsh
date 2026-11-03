@@ -613,7 +613,7 @@ async function execute(
   }
   const raw =
     definition === undefined
-      ? describeOps(context)
+      ? describeOps(context, request.args)
       : await runOp(definition, request.args, context, deadline, controller)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
