@@ -258,6 +258,7 @@ void test('the rate limiter opens a window per key and refills', () => {
 
 interface DescribedOp {
   name: string
+  summary: string
   input: { required?: string[] }
   confirm?: boolean
   preview?: string
@@ -336,6 +337,12 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'disk.usage',
       ],
     )
+    // The plugin refuses an operation without a summary, so a describeTable that dropped it would
+    // stay green on names alone while every tool vanished.
+    for (const op of ops) {
+      assert.equal(typeof op.summary, 'string')
+      assert.notEqual(op.summary.trim(), '')
+    }
     const table = describedTable(described.result)
     // The answer says which protocol it is shaped for, and which broker produced it: that is what a
     // client compares with its own build.
