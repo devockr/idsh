@@ -162,12 +162,10 @@ async function discover(ctx: HostContext, config: Config): Promise<void> {
   // The table is small, the call is one socket roundtrip, and an unchanged fingerprint registers
   // nothing, so the cost of the poll is a comparison.
   ctx.effect(() => {
+    // No `.catch` here: ticks share one in-flight read, so a per-tick handler would repeat one
+    // failure once per tick. The refresh logs it, once, and answers `false`.
     const timer = setInterval(() => {
-      table.refresh().catch((error: unknown) => {
-        ctx.logger.warn(
-          `host-ops: re-reading the broker table failed: ${error instanceof Error ? error.message : String(error)}; keeping the tools it registered`,
-        )
-      })
+      void table.refresh()
     }, endpoint.refreshMs)
     // A timer must not hold the process open on its own.
     timer.unref()
@@ -290,10 +288,22 @@ export async function registerTools(
   fingerprint = first.fingerprint
 
   const refreshOnce = async (): Promise<boolean> => {
-    // Disposed, including while this call waited in the queue: no broker call, nothing to mount.
+    // Disposed, including while this call was waiting on an in-flight read: no broker call, no mount.
     if (disposed) {
       return false
     }
+    try {
+      return await replace()
+    } catch (error) {
+      // One read, one warning: ticks that joined this read must not each report the same failure.
+      ctx.logger.warn(
+        `host-ops: re-reading the broker table failed: ${error instanceof Error ? error.message : String(error)}; keeping the tools it registered`,
+      )
+      return false
+    }
+  }
+
+  const replace = async (): Promise<boolean> => {
     const next = await load()
     // A disposal that happened while the read was in flight must not be undone by a mount.
     if (disposed || next.fingerprint === fingerprint) {

@@ -1290,6 +1290,42 @@ void test('a disposal during an in-flight read mounts nothing', async () => {
   assert.deepEqual(tools, [])
 })
 
+void test('a joined tick reports one failure, not one per tick', async () => {
+  let calls = 0
+  let started!: () => void
+  let fail!: (error: Error) => void
+  const readStarted = new Promise<void>(resolve => {
+    started = resolve
+  })
+  const call = async (): Promise<BrokerAnswer> => {
+    calls += 1
+    if (calls === 1) {
+      return {
+        text: JSON.stringify({ protocol: 1, version: '1.0.0', ops: [TABLE[0]] }),
+        truncated: false,
+      }
+    }
+    return new Promise<BrokerAnswer>((_resolve, reject) => {
+      fail = reject
+      started()
+    })
+  }
+  const { ctx, tools, warnings } = context()
+  const registered = await registerTools(ctx, { socketPath: '/unused' }, call)
+  const first = registered.refresh()
+  await readStarted
+  // Both ticks wait on the same read; when it fails, only that read reports it.
+  const second = registered.refresh()
+  fail(new Error('the broker timed out'))
+  assert.deepEqual(await Promise.all([first, second]), [false, false])
+  assert.equal(warnings.length, 1)
+  assert.match(warnings.at(0) ?? '', /the broker timed out/u)
+  assert.deepEqual(
+    tools.map(tool => tool.name),
+    ['idsh_log_tail'],
+  )
+})
+
 void test('a tick that arrives during a read joins it instead of starting another', async () => {
   let calls = 0
   let started!: () => void
@@ -1372,7 +1408,8 @@ void test('a refresh that cannot mount puts the previous tools back', async () =
     // The new table mounts, but the registry refuses the new name: the old tools come back.
     table = [TABLE[0], TABLE[1]]
     failOnce = true
-    await assert.rejects(registered.refresh(), /registry refused it/u)
+    assert.equal(await registered.refresh(), false)
+    assert.match(base.warnings.at(-1) ?? '', /registry refused it/u)
     assert.deepEqual(
       base.tools.map(tool => tool.name),
       ['idsh_log_tail'],
