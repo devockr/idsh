@@ -1451,7 +1451,7 @@ export const OPS: readonly OpDefinition[] = [
           id,
         ],
         'head',
-        { timeoutMs: budget() },
+        { stdoutOnly: true, timeoutMs: budget() },
       )
       // Sequential on purpose: concurrent `docker exec` calls that fail in the runtime can report
       // each other's error text (measured), and a read that names the wrong binary as missing is
@@ -1465,6 +1465,7 @@ export const OPS: readonly OpDefinition[] = [
       ] as const) {
         try {
           const answer = await docker(ctx, ['exec', id, ...command], 'head', {
+            stdoutOnly: true,
             timeoutMs: budget(),
           })
           probes.push(`${name}: ${answer.trim()}`)

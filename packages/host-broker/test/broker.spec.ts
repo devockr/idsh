@@ -906,7 +906,7 @@ void test('deploy.versions reads the state and the versions inside the container
       '#!/bin/sh',
       'case "$*" in',
       '  "inspect --type container --format {{.Id}} web") echo abc ;;',
-      '  "exec abc dsh --version") echo 0.2.1-rc.5 ;;',
+      '  "exec abc dsh --version") echo "WARNING: platform mismatch" >&2; echo 0.2.1-rc.5 ;;',
       '  "exec abc gcb --version") echo 0.4.0 ;;',
       '  *) printf "%s\n" "$*" ;;',
       'esac',
@@ -931,6 +931,8 @@ void test('deploy.versions reads the state and the versions inside the container
       /^web: inspect --type container --format .*image-id=\{\{\.Image\}\}.* abc$/mu,
     )
     assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
+    // stdout only: a warning on stderr is not part of the parsed value.
+    assert.doesNotMatch(answer.result ?? '', /WARNING/u)
     assert.match(answer.result ?? '', /^gcb: 0\.4\.0$/mu)
     // No argument is accepted; a missing binary is covered by the test below.
     const args = await connection.request({ op: 'deploy.versions', args: { container: 'x' } })
