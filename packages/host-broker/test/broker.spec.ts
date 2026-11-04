@@ -1612,6 +1612,7 @@ void test('a no-op up that leaves the container alone is not a failure', async (
       `case "$*" in
   "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
     echo "compose up" >> "${calls}" ;;
+  "image inspect "*) echo "${RUNNING_IMAGE}" ;;
   *"{{.Id}}"*) echo "same-id" ;;
   *"--format status="*) echo "status=running health=healthy image=${RUNNING_IMAGE}" ;;
   "tag "*) echo "tag $*" >> "${calls}" ;;

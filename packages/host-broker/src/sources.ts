@@ -1892,13 +1892,14 @@ export const OPS: readonly OpDefinition[] = [
       const source = await resolveMainSource(ctx, deadline)
       const { previous, failed } = await buildInto(ctx, source, deadline, log)
       const before = await existingContainerId(ctx)
+      const expectImage = (await imageId(ctx, BUILD_IMAGE, remaining(deadline))) || undefined
       return {
         text:
           `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}` +
           reapNote(failed),
         after: async () => {
           const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout, { before, composeExit })
+          await verifyRecreate(ctx, checkout, { before, composeExit }, { expectImage })
         },
       }
     },
@@ -1939,7 +1940,7 @@ export const OPS: readonly OpDefinition[] = [
             ctx,
             checkout,
             { before, composeExit },
-            { rollback: false, expectImage: targetId },
+            { rollback: false, expectImage: targetId === '' ? undefined : targetId },
           )
         },
       }
@@ -1958,6 +1959,7 @@ export const OPS: readonly OpDefinition[] = [
       // The recorded rollback file belongs to the last build, not to what runs now: a recreate
       // restores the image it found, and only falls back to the file on a first deploy.
       const restoreTo = await existingContainerImage(ctx)
+      const expectImage = (await imageId(ctx, BUILD_IMAGE, ctx.execTimeoutMs)) || undefined
       return {
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: async () => {
@@ -1966,7 +1968,7 @@ export const OPS: readonly OpDefinition[] = [
             ctx,
             checkout,
             { before, restoreTo, composeExit },
-            { skipNoopRestore: true },
+            { skipNoopRestore: true, expectImage },
           )
         },
       }
