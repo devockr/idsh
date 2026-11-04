@@ -1410,6 +1410,37 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
   {
+    name: 'deploy.versions',
+    summary:
+      'Read-only: what the deployment is running — its state and image, and the dsh and gcb versions inside it.',
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      const state = await docker(ctx, [
+        'inspect',
+        '--format',
+        '{{.State.Status}} {{.Config.Image}} {{.Image}} {{.Created}}',
+        ctx.container,
+      ])
+      const lines = [`${ctx.container}: ${state.trim()}`]
+      // Fixed probes only: the broker exposes no arbitrary exec, so what can be asked is what is
+      // declared here.
+      for (const [name, command] of [
+        ['dsh', ['dsh', '--version']],
+        ['gcb', ['gcb', '--version']],
+      ] as const) {
+        try {
+          const answer = await docker(ctx, ['exec', ctx.container, ...command])
+          lines.push(`${name}: ${answer.trim()}`)
+        } catch (error) {
+          // An image without gcb is ordinary; the answer says so instead of failing the whole read.
+          lines.push(`${name}: unavailable — ${messageOf(error).split('\n')[0]}`)
+        }
+      }
+      return lines.join('\n')
+    },
+  },
+  {
     name: 'deploy.source',
     summary:
       'Check a build request and resolve what it would build — the branch tip and main, or main alone — without building.',

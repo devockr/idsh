@@ -493,6 +493,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'proc.read',
         'deploy.status',
         'deploy.log',
+        'deploy.versions',
         'deploy.source',
         'deploy.build',
         'deploy.main',
@@ -890,6 +891,47 @@ void test('deploy.status and deploy.log drive the docker client', async () => {
       args: { lines: 0 },
     })
     assert.equal(bad.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.versions reads the state and the versions inside the container', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  "exec web dsh --version") echo 0.2.1-rc.5 ;;',
+      '  "exec web gcb --version") echo 0.4.0 ;;',
+      '  "exec web broken --version") exit 7 ;;',
+      '  *) printf "%s\n" "$*" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    container: 'web',
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.versions', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^web: inspect --format .*web$/mu)
+    assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
+    assert.match(answer.result ?? '', /^gcb: 0\.4\.0$/mu)
+    // Read-only: no argument is accepted, and a missing binary is named rather than fatal.
+    const args = await connection.request({ op: 'deploy.versions', args: { container: 'x' } })
+    assert.equal(args.error?.code, 'bad-argument')
   } finally {
     connection.close()
     await broker.close()
