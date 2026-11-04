@@ -1412,32 +1412,38 @@ export const OPS: readonly OpDefinition[] = [
   {
     name: 'deploy.versions',
     summary:
-      'Read-only: what the deployment is running — its state and image, and the dsh and gcb versions inside it.',
+      'What the deployment is running — its state and image, and the dsh and gcb versions inside it.',
     input: { type: 'object', properties: {}, additionalProperties: false },
     async run(args, ctx) {
       rejectUnknown(args, [])
+      // Labelled like deploy.status, so the two reads of the same container read alike.
       const state = await docker(ctx, [
         'inspect',
         '--format',
-        '{{.State.Status}} {{.Config.Image}} {{.Image}} {{.Created}}',
+        'status={{.State.Status}} image={{.Config.Image}} id={{.Image}} created={{.Created}}',
         ctx.container,
       ])
-      const lines = [`${ctx.container}: ${state.trim()}`]
       // Fixed probes only: the broker exposes no arbitrary exec, so what can be asked is what is
-      // declared here.
-      for (const [name, command] of [
-        ['dsh', ['dsh', '--version']],
-        ['gcb', ['gcb', '--version']],
-      ] as const) {
-        try {
-          const answer = await docker(ctx, ['exec', ctx.container, ...command])
-          lines.push(`${name}: ${answer.trim()}`)
-        } catch (error) {
-          // An image without gcb is ordinary; the answer says so instead of failing the whole read.
-          lines.push(`${name}: unavailable — ${messageOf(error).split('\n')[0]}`)
-        }
-      }
-      return lines.join('\n')
+      // declared here. They are independent, so they run together — the op's deadline is shared.
+      const probes = await Promise.all(
+        (
+          [
+            ['dsh', ['dsh', '--version']],
+            ['gcb', ['gcb', '--version']],
+          ] as const
+        ).map(async ([name, command]) => {
+          try {
+            return `${name}: ${(await docker(ctx, ['exec', ctx.container, ...command])).trim()}`
+          } catch (error) {
+            // An image without gcb is ordinary; the answer says so instead of failing the whole
+            // read. The tail is the line that says why — the rule runFixed keeps for docker.
+            const message = messageOf(error).trim()
+            const last = message.split('\n').at(-1) ?? message
+            return `${name}: unavailable — ${last}`
+          }
+        }),
+      )
+      return [`${ctx.container}: ${state.trim()}`, ...probes].join('\n')
     },
   },
   {

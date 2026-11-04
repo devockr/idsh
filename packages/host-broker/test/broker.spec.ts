@@ -938,6 +938,43 @@ void test('deploy.versions reads the state and the versions inside the container
   }
 })
 
+void test('deploy.versions names an unavailable probe and still answers', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  "exec web dsh --version") echo 0.2.1-rc.5 ;;',
+      '  "exec web gcb --version") printf "no such file\nthe cause is here\n" >&2; exit 7 ;;',
+      '  *) printf "%s\n" "$*" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    container: 'web',
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.versions', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
+    // The cause is the last line of the failure, as runFixed keeps it for docker.
+    assert.match(answer.result ?? '', /^gcb: unavailable — the cause is here$/mu)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('a docker call that exceeds the deadline answers timeout', async () => {
   const host = await fakeHost()
   const dockerPath = path.join(host.root, 'docker')
