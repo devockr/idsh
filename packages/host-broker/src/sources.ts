@@ -778,11 +778,17 @@ async function verifyRecreate(
     await note(`no rollback target (${messageOf(error)}); leaving the deployment as it is`)
     return
   }
+  let rollbackExit: number | undefined
   try {
     await docker(ctx, ['tag', previous, BUILD_IMAGE])
-    await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+    rollbackExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
   } catch (error) {
     await note(`the rollback itself failed (${messageOf(error)}); the deployment needs a person`)
+    return
+  }
+  if (rollbackExit !== 0) {
+    // The rescue did not run: reporting the container as restored would be a lie.
+    await note(`the rollback's compose exited with ${String(rollbackExit ?? 'no status')}`)
     return
   }
   // A new container, so a new id — and the same wait: the rollback is starting, not failed.

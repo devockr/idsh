@@ -1535,13 +1535,15 @@ void test('a compose that fails is not a successful recreate, even if the contai
   const dockerPath = path.join(host.root, 'docker')
   const calls = path.join(host.root, 'calls.log')
   const composed = path.join(host.root, 'composed')
+  const tried = path.join(host.root, 'tried')
   await writeFile(
     dockerPath,
     [
       '#!/bin/sh',
       `case "$*" in
   "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
-    : > "${composed}"; echo "compose up" >> "${calls}"; exit 1 ;;
+    : > "${composed}"; echo "compose up" >> "${calls}"
+    if [ -f "${tried}" ]; then exit 0; else : > "${tried}"; exit 1; fi ;;
   *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*) echo "status=running health=healthy" ;;
   "tag "*) echo "tag $*" >> "${calls}" ;;
@@ -1574,7 +1576,12 @@ esac`,
     // No direct-success line: the healthy container did not make the failed compose a success.
     assert.doesNotMatch(log, /^verify: dsh is up /mu)
     await waitFor(async () =>
-      (await readFile(calls, 'utf8').catch(() => '')).includes(`tag ${ROLLBACK_TARGET}`),
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    // The rollback's own compose succeeded, and its outcome is what gets reported.
+    assert.match(
+      await readFile(logPath, 'utf8'),
+      new RegExp(`rolled back to ${ROLLBACK_TARGET}; dsh is up`, 'u'),
     )
     assert.match(await readFile(calls, 'utf8'), new RegExp(`tag tag ${ROLLBACK_TARGET}`, 'u'))
   } finally {
@@ -1627,6 +1634,54 @@ esac`,
     assert.match(log, /compose left dsh in place \(the container is unchanged\); it is up/u)
     assert.doesNotMatch(log, /rolling back/u)
     assert.doesNotMatch(await readFile(calls, 'utf8').catch(() => ''), /tag /u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a rollback whose compose fails is reported as a failure', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}"; exit 1 ;;
+  *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*) echo "status=exited health=none" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes("rollback's compose exited"),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /the rollback's compose exited with 1/u)
+    assert.doesNotMatch(log, /rolled back to .* is up/u)
   } finally {
     connection.close()
     await broker.close()
