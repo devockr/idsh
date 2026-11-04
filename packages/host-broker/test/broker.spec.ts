@@ -1424,7 +1424,7 @@ void test('a recreate that is still starting is waited for, not failed', async (
     echo "compose up" >> "${calls}" ;;
   *"{{.Id}}"*) echo "runner-id" ;;
   *"--format status="*)
-    if [ -f "${up}" ]; then echo "status=running health=healthy"; else echo "status=starting health=starting"; : > "${up}"; fi ;;
+    if [ -f "${up}" ]; then echo "status=running health=healthy"; else echo "status=running health=starting"; : > "${up}"; fi ;;
 esac`,
       '',
     ].join('\n'),
@@ -1482,7 +1482,7 @@ exit 0
       `case "$*" in
   "run "*) exit 0 ;;
   *"--format {{.Image}}"*) echo "${previousImage}" ;;
-  *"{{.Id}}"*) echo "runner-id" ;;
+  *"{{.Id}}"*) echo "WARNING: Error loading config file" >&2; echo "runner-id" ;;
   *"--format status="*)
     if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
   "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
@@ -2203,8 +2203,9 @@ esac
     dockerPath,
     `#!/bin/sh
 echo "$*" >> '${dockerLog}'
-case "$1" in
-  inspect) echo '${ROLLBACK_TARGET}' ;;
+case "$*" in
+  *"--format status="*) echo 'status=running health=healthy' ;;
+  inspect*) echo '${ROLLBACK_TARGET}' ;;
 esac
 `,
     { mode: 0o755 },

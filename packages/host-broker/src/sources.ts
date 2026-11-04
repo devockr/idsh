@@ -616,28 +616,41 @@ async function composeDetached(
 /** Whether the container is up, and what docker says about it. */
 interface RecreateState {
   readonly ok: boolean
-  /** Waiting longer cannot help: exited, dead, or a container that declares no healthcheck. */
+  /** Waiting longer cannot help: exited, dead, restarting, unhealthy, or no healthcheck. */
   readonly terminal: boolean
+  readonly status: string
+  readonly health: string
   readonly text: string
 }
 
 /** Ask docker about one container by id; a container mid-swap is not an error yet. */
 async function deploymentState(ctx: OpContext, id: string): Promise<RecreateState | undefined> {
   try {
-    const text = await docker(ctx, [
-      'inspect',
-      '--format',
-      'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}',
-      id,
-    ])
+    const text = await docker(
+      ctx,
+      [
+        'inspect',
+        '--format',
+        'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}',
+        id,
+      ],
+      'head',
+      // Parsed, so a docker warning on stderr must not become part of the state.
+      { stdoutOnly: true },
+    )
     const status = /status=(\S+)/u.exec(text)?.[1]
     const health = /health=(\S+)/u.exec(text)?.[1] ?? 'none'
     // A boot line proves nothing on its own — a container can print it and exit — so the check the
     // compose file declares is what counts, and a container that declares none is not healthy.
     const ok = status === 'running' && health === 'healthy'
+    // Docker's own verdict is the fastest signal there is: a crash loop or a failed check is not
+    // going to fix itself inside the window.
     const terminal =
-      status === 'exited' || status === 'dead' || (status === 'running' && health === 'none')
-    return { ok, terminal, text: text.trim() }
+      status === 'exited' ||
+      status === 'dead' ||
+      status === 'restarting' ||
+      (status === 'running' && (health === 'none' || health === 'unhealthy'))
+    return { ok, terminal, status: status ?? '', health, text: text.trim() }
   } catch {
     return undefined
   }
@@ -688,7 +701,7 @@ async function waitForState(
  * The read is pinned to the id compose created: a container replaced under us is not the one we
  * were asked to watch, so it counts as a failure to come up, not as a success.
  */
-async function verifyRecreate(ctx: OpContext, checkout: string): Promise<void> {
+async function verifyRecreate(ctx: OpContext, checkout: string, rollback = true): Promise<void> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const note = async (line: string): Promise<void> => {
     await appendFile(logPath, `verify: ${line}\n`, { mode: FILE_MODE }).catch(() => null)
@@ -712,6 +725,11 @@ async function verifyRecreate(ctx: OpContext, checkout: string): Promise<void> {
         : missingHealth
           ? `${state.text} — no healthcheck is declared in the compose file`
           : state.text
+  if (!rollback) {
+    // A rollback has nothing newer to return to; say whether the rescue worked instead.
+    await note(`${ctx.container} did not come up (${why}); not rolling back any further`)
+    return
+  }
   await note(`${ctx.container} did not come up (${why}); rolling back`)
   let previous: string
   try {
@@ -1761,6 +1779,7 @@ export const OPS: readonly OpDefinition[] = [
             throw error
           }
           await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(ctx, checkout, false)
         },
       }
     },
