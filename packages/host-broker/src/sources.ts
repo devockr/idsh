@@ -791,9 +791,14 @@ async function verifyRecreate(
     await note(`the rollback's compose exited with ${String(rollbackExit ?? 'no status')}`)
     return
   }
-  // A new container, so a new id — and the same wait: the rollback is starting, not failed.
+  // A rollback only counts if it put a different container in front of us; the same id means the
+  // tag moved to the image that was already running, so nothing was restored.
   const rolledBackDeadline = Date.now() + RECREATE_WAIT_MS
   const rolledBack = await recreatedContainerId(ctx, rolledBackDeadline)
+  if (rolledBack === undefined || rolledBack === id) {
+    await note(`rolled back to ${previous}, but compose did not replace the container`)
+    return
+  }
   const after =
     rolledBack === undefined ? undefined : await waitForState(ctx, rolledBack, rolledBackDeadline)
   await note(

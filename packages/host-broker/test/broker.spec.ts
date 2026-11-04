@@ -1492,7 +1492,7 @@ exit 0
   *"--format {{.Image}}"*) echo "${previousImage}" ;;
   *"{{.Id}}"*)
     echo "WARNING: Error loading config file" >&2
-    if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+    if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
     if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
   "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
@@ -1535,6 +1535,7 @@ void test('a compose that fails is not a successful recreate, even if the contai
   const dockerPath = path.join(host.root, 'docker')
   const calls = path.join(host.root, 'calls.log')
   const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
   const tried = path.join(host.root, 'tried')
   await writeFile(
     dockerPath,
@@ -1544,9 +1545,9 @@ void test('a compose that fails is not a successful recreate, even if the contai
   "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
     : > "${composed}"; echo "compose up" >> "${calls}"
     if [ -f "${tried}" ]; then exit 0; else : > "${tried}"; exit 1; fi ;;
-  *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*) echo "status=running health=healthy" ;;
-  "tag "*) echo "tag $*" >> "${calls}" ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
 esac`,
       '',
     ].join('\n'),
@@ -1681,6 +1682,61 @@ esac`,
     )
     const log = await readFile(logPath, 'utf8')
     assert.match(log, /the rollback's compose exited with 1/u)
+    assert.doesNotMatch(log, /rolled back to .* is up/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a rollback that leaves the same container did not restore anything', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  // The container is unhealthy, the tag goes through, and compose still leaves the same id: the
+  // tag moved to the image already running, so nothing was restored.
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}" ;;
+  *"{{.Id}}"*) echo "same-id" ;;
+  *"--format status="*) echo "status=running health=unhealthy" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('did not replace'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      new RegExp(
+        `rolled back to ${ROLLBACK_TARGET}, but compose did not replace the container`,
+        'u',
+      ),
+    )
     assert.doesNotMatch(log, /rolled back to .* is up/u)
   } finally {
     connection.close()
