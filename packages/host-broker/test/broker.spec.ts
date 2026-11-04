@@ -1323,7 +1323,7 @@ void test('a recreate that comes up dead is rolled back and logged', async () =>
     echo "compose up" >> "$LOG"; : > "${composed}" ;;
   *"{{.Id}}"*)
     echo "WARNING: Error loading config file" >&2
-    if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+    if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
     echo "WARNING: daemon deprecated flag" >&2
     if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
@@ -1371,6 +1371,7 @@ void test('a recreate with no healthcheck is not healthy, so it rolls back', asy
   const dockerPath = path.join(host.root, 'docker')
   const calls = path.join(host.root, 'calls.log')
   const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
   // Running, but the compose file declares no healthcheck: per the contract that is a failure.
   const script = [
     '#!/bin/sh',
@@ -1378,9 +1379,9 @@ void test('a recreate with no healthcheck is not healthy, so it rolls back', asy
     `case "$*" in
   "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
     echo "compose up" >> "$LOG"; : > "${composed}" ;;
-  *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*) echo "status=running health=none" ;;
-  "tag "*) echo "tag $*" >> "$LOG" ;;
+  "tag "*) echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
 esac`,
   ].join('\n')
   await writeFile(dockerPath, script, { mode: 0o755 })
@@ -1572,7 +1573,60 @@ esac`,
     assert.match(log, /did not come up \(compose exited with 1\); rolling back/u)
     // No direct-success line: the healthy container did not make the failed compose a success.
     assert.doesNotMatch(log, /^verify: dsh is up /mu)
+    await waitFor(async () =>
+      (await readFile(calls, 'utf8').catch(() => '')).includes(`tag ${ROLLBACK_TARGET}`),
+    )
     assert.match(await readFile(calls, 'utf8'), new RegExp(`tag tag ${ROLLBACK_TARGET}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a no-op up that leaves the container alone is not a failure', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}" ;;
+  *"{{.Id}}"*) echo "same-id" ;;
+  *"--format status="*) echo "status=running health=healthy" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    // A bind-mount-only change (a profile) leaves the container alone and compose says Running:
+    // that is the documented reason to recreate, and it must not be answered with a rollback.
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('compose left'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /compose left dsh in place \(the container is unchanged\); it is up/u)
+    assert.doesNotMatch(log, /rolling back/u)
+    assert.doesNotMatch(await readFile(calls, 'utf8').catch(() => ''), /tag /u)
   } finally {
     connection.close()
     await broker.close()

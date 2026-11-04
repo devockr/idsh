@@ -737,11 +737,17 @@ async function verifyRecreate(
   const deadline = Date.now() + RECREATE_WAIT_MS
   const id = await recreatedContainerId(ctx, deadline)
   const state = id === undefined ? undefined : await waitForState(ctx, id, deadline)
-  // Success needs all three: compose said yes, a new container exists, and that container is
-  // healthy. A no-op "up" that left the old container running is not a recreate.
-  const replaced = id !== undefined && id !== before
-  if (composeExit === 0 && replaced && state?.ok === true) {
-    await note(`${ctx.container} is up (${state.text})`)
+  // Compose exiting 0 and a healthy container is the whole success condition. `id === before` is
+  // not a failure: a profile-only change, or shipping an unchanged main, leaves a bind-mounted
+  // container alone and compose says "Running" without doing anything — that is a no-op, and the
+  // container it left behind is exactly the one that should be reported as up.
+  if (composeExit === 0 && state?.ok === true) {
+    const unchanged = id !== undefined && id === before
+    await note(
+      unchanged
+        ? `compose left ${ctx.container} in place (the container is unchanged); it is up (${state.text})`
+        : `${ctx.container} is up (${state.text})`,
+    )
     return
   }
   const missingHealth = state?.status === 'running' && state.health === 'none'
@@ -749,8 +755,6 @@ async function verifyRecreate(
   if (composeExit === 0) {
     if (id === undefined) {
       why = 'no container appeared'
-    } else if (replaced === false) {
-      why = 'compose reported success but the container was not replaced'
     } else if (state === undefined) {
       why = 'the container disappeared while it was watched'
     } else if (missingHealth) {
