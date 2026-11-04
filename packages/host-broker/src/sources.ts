@@ -787,11 +787,8 @@ async function verifyRecreate(
     return
   }
   if (rollbackExit !== 0) {
-    // The rescue did not run: `devockr/idsh:dev` has moved to the recorded image, but what is
-    // running is still the container that failed. Say both, because that is the state a person
-    // has to reason about next.
-    // Only what is known: compose failed and the tag moved. What the container did next is not
-    // verified here, so the line does not claim it.
+    // The rescue failed: compose's answer and the moved tag are what is known. What the container
+    // did after a failed `up` is not verified here, so the line does not claim it.
     await note(
       `the rollback's compose exited with ${String(rollbackExit ?? 'no status')}; ${BUILD_IMAGE} now names ${previous}`,
     )
