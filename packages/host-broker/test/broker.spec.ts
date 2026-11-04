@@ -493,6 +493,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'proc.read',
         'deploy.status',
         'deploy.log',
+        'deploy.versions',
         'deploy.source',
         'deploy.build',
         'deploy.main',
@@ -890,6 +891,90 @@ void test('deploy.status and deploy.log drive the docker client', async () => {
       args: { lines: 0 },
     })
     assert.equal(bad.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.versions reads the state and the versions inside the container', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  "inspect --type container --format {{.Id}} web") echo "WARNING: id read" >&2; echo abc ;;',
+      '  "exec abc dsh --version") echo "WARNING: platform mismatch" >&2; echo 0.2.1-rc.5 ;;',
+      '  "exec abc gcb --version") echo 0.4.0 ;;',
+      '  *) printf "%s\n" "$*" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    container: 'web',
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.versions', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(
+      answer.result ?? '',
+      /^web: inspect --type container --format .*image-id=\{\{\.Image\}\}.* abc$/mu,
+    )
+    assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
+    // stdout only: a warning on stderr is not part of the parsed value.
+    assert.doesNotMatch(answer.result ?? '', /WARNING/u)
+    assert.match(answer.result ?? '', /^gcb: 0\.4\.0$/mu)
+    // No argument is accepted; a missing binary is covered by the test below.
+    const args = await connection.request({ op: 'deploy.versions', args: { container: 'x' } })
+    assert.equal(args.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.versions names an unavailable probe and still answers', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  "inspect --type container --format {{.Id}} web") echo "WARNING: id read" >&2; echo abc ;;',
+      '  "exec abc dsh --version") echo 0.2.1-rc.5 ;;',
+      '  "exec abc gcb --version") printf "no such file\nthe cause is here\n" >&2; exit 7 ;;',
+      '  *) printf "%s\n" "$*" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    container: 'web',
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.versions', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
+    // The cause is the last line of the failure, as runFixed keeps it for docker.
+    assert.match(answer.result ?? '', /^gcb: unavailable — the cause is here$/mu)
   } finally {
     connection.close()
     await broker.close()

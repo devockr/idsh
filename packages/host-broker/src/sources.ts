@@ -35,6 +35,7 @@ import {
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
+  VERSIONS_TIMEOUT_MS,
 } from './constants.ts'
 import type { DeployLock } from './deploy-lock.ts'
 import type { Keep } from './limits.ts'
@@ -1407,6 +1408,78 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['lines'])
       const lines = integer(args, 'lines', 1, MAX_LOG_LINES, DEFAULT_LOG_LINES)
       return docker(ctx, ['logs', '--tail', String(lines), ctx.container], 'tail')
+    },
+  },
+  {
+    name: 'deploy.versions',
+    summary:
+      'What the deployment is running — its state and image, and the dsh and gcb versions inside it.',
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    // Four docker calls in sequence, so they get their own budget rather than the 10 s default.
+    timeoutMs: VERSIONS_TIMEOUT_MS,
+    async run(args, ctx) {
+      rejectUnknown(args, [])
+      // One deadline for the whole read, and each call may take only what is left of it: a raised
+      // per-program default must not let the op outlive the timeout its client was promised.
+      const deadline = Date.now() + VERSIONS_TIMEOUT_MS
+      // `remaining` already floors at one millisecond.
+      const budget = (): number => Math.min(ctx.execTimeoutMs, remaining(deadline))
+      // The id, not the name: a recreate between these calls would otherwise answer with one
+      // deployment's state and the next one's versions. Exec against the old id fails instead.
+      const id =
+        // `--type container`, like deploy.status: `docker inspect` otherwise resolves a name
+        // across object types, and an image or volume that shares it would answer instead.
+        (
+          await docker(
+            ctx,
+            ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container],
+            'head',
+            {
+              // Parsed, so a docker warning on stderr must not become part of the id.
+              stdoutOnly: true,
+              timeoutMs: budget(),
+            },
+          )
+        ).trim()
+      // Labelled like deploy.status, so the two reads of the same container read alike.
+      const state = await docker(
+        ctx,
+        [
+          'inspect',
+          '--type',
+          'container',
+          '--format',
+          'status={{.State.Status}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}}',
+          id,
+        ],
+        'head',
+        { stdoutOnly: true, timeoutMs: budget() },
+      )
+      // Sequential on purpose: concurrent `docker exec` calls that fail in the runtime can report
+      // each other's error text (measured), and a read that names the wrong binary as missing is
+      // worse than the second it saves.
+      const probes: string[] = []
+      // Fixed probes only: the broker exposes no arbitrary exec, so what can be asked is what is
+      // declared here.
+      for (const [name, command] of [
+        ['dsh', ['dsh', '--version']],
+        ['gcb', ['gcb', '--version']],
+      ] as const) {
+        try {
+          const answer = await docker(ctx, ['exec', id, ...command], 'head', {
+            stdoutOnly: true,
+            timeoutMs: budget(),
+          })
+          probes.push(`${name}: ${answer.trim()}`)
+        } catch (error) {
+          // An image without gcb is ordinary; the answer says so instead of failing the whole read.
+          // The tail is the line that says why — the rule runFixed keeps for docker.
+          const message = messageOf(error).trim()
+          const last = message.split('\n').at(-1) ?? message
+          probes.push(`${name}: unavailable — ${last}`)
+        }
+      }
+      return [`${ctx.container}: ${state.trim()}`, ...probes].join('\n')
     },
   },
   {
