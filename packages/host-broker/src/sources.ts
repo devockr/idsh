@@ -1419,13 +1419,29 @@ export const OPS: readonly OpDefinition[] = [
     timeoutMs: VERSIONS_TIMEOUT_MS,
     async run(args, ctx) {
       rejectUnknown(args, [])
+      // One deadline for the whole read, and each call may take only what is left of it: a raised
+      // per-program default must not let the op outlive the timeout its client was promised.
+      const deadline = Date.now() + VERSIONS_TIMEOUT_MS
+      const budget = (): number => Math.max(1, Math.min(ctx.execTimeoutMs, remaining(deadline)))
+      // The id, not the name: a recreate between these calls would otherwise answer with one
+      // deployment's state and the next one's versions. Exec against the old id fails instead.
+      const id = (
+        await docker(ctx, ['inspect', '--format', '{{.Id}}', ctx.container], 'head', {
+          timeoutMs: budget(),
+        })
+      ).trim()
       // Labelled like deploy.status, so the two reads of the same container read alike.
-      const state = await docker(ctx, [
-        'inspect',
-        '--format',
-        'status={{.State.Status}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}}',
-        ctx.container,
-      ])
+      const state = await docker(
+        ctx,
+        [
+          'inspect',
+          '--format',
+          'status={{.State.Status}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}}',
+          id,
+        ],
+        'head',
+        { timeoutMs: budget() },
+      )
       // Sequential on purpose: concurrent `docker exec` calls that fail in the runtime can report
       // each other's error text (measured), and a read that names the wrong binary as missing is
       // worse than the second it saves.
@@ -1437,7 +1453,9 @@ export const OPS: readonly OpDefinition[] = [
         ['gcb', ['gcb', '--version']],
       ] as const) {
         try {
-          const answer = await docker(ctx, ['exec', ctx.container, ...command])
+          const answer = await docker(ctx, ['exec', id, ...command], 'head', {
+            timeoutMs: budget(),
+          })
           probes.push(`${name}: ${answer.trim()}`)
         } catch (error) {
           // An image without gcb is ordinary; the answer says so instead of failing the whole read.
