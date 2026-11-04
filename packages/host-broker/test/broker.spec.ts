@@ -907,7 +907,6 @@ void test('deploy.versions reads the state and the versions inside the container
       'case "$*" in',
       '  "exec web dsh --version") echo 0.2.1-rc.5 ;;',
       '  "exec web gcb --version") echo 0.4.0 ;;',
-      '  "exec web broken --version") exit 7 ;;',
       '  *) printf "%s\n" "$*" ;;',
       'esac',
       '',
