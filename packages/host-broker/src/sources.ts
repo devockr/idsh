@@ -846,25 +846,30 @@ async function verifyRecreate(
     )
     return
   }
-  // A rollback only counts if it put a different container in front of us; the same id means the
-  // tag moved to the image that was already running, so nothing was restored.
+  // The rescue worked when the deployment runs the target image again and is healthy. Whether that
+  // needed a new container is docker's business: a tag moved back to the image already running
+  // (a failed build-based deploy, or a recreate restoring what it found) restores the deployment
+  // without replacing anything.
   const rolledBackDeadline = Date.now() + RECREATE_WAIT_MS
   const rolledBack = await recreatedContainerId(ctx, rolledBackDeadline)
   if (rolledBack === undefined) {
     await note(`rolled back to ${previous}, but no container appeared`)
     return
   }
-  if (rolledBack === id) {
+  const after = await waitForState(ctx, rolledBack, rolledBackDeadline)
+  const image = await existingContainerImage(ctx)
+  if (after?.ok === true && image === previous) {
+    await note(`rolled back to ${previous}; ${ctx.container} is up (${after.text})`)
+    return
+  }
+  if (image === previous) {
     await note(
-      `rolled back to ${previous}, but compose did not replace the container (${state?.text ?? 'the container could not be asked'})`,
+      `rolled back to ${previous}, but ${ctx.container} still is not up (${after?.text ?? 'docker could not be asked'})`,
     )
     return
   }
-  const after = await waitForState(ctx, rolledBack, rolledBackDeadline)
   await note(
-    after?.ok === true
-      ? `rolled back to ${previous}; ${ctx.container} is up (${after.text})`
-      : `rolled back to ${previous}, but ${ctx.container} still is not up (${after?.text ?? 'docker could not be asked'})`,
+    `rolled back to ${previous}, but the deployment runs ${image ?? 'an image docker could not name'}`,
   )
 }
 
