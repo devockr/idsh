@@ -787,20 +787,29 @@ async function verifyRecreate(
     return
   }
   if (rollbackExit !== 0) {
-    // The rescue did not run: reporting the container as restored would be a lie.
-    await note(`the rollback's compose exited with ${String(rollbackExit ?? 'no status')}`)
+    // The rescue did not run: `devockr/idsh:dev` has moved to the recorded image, but what is
+    // running is still the container that failed. Say both, because that is the state a person
+    // has to reason about next.
+    await note(
+      `the rollback's compose exited with ${String(rollbackExit ?? 'no status')}; ${BUILD_IMAGE} now names ${previous}, while the deployment still runs the failed container`,
+    )
     return
   }
   // A rollback only counts if it put a different container in front of us; the same id means the
   // tag moved to the image that was already running, so nothing was restored.
   const rolledBackDeadline = Date.now() + RECREATE_WAIT_MS
   const rolledBack = await recreatedContainerId(ctx, rolledBackDeadline)
-  if (rolledBack === undefined || rolledBack === id) {
-    await note(`rolled back to ${previous}, but compose did not replace the container`)
+  if (rolledBack === undefined) {
+    await note(`rolled back to ${previous}, but no container appeared`)
     return
   }
-  const after =
-    rolledBack === undefined ? undefined : await waitForState(ctx, rolledBack, rolledBackDeadline)
+  if (rolledBack === id) {
+    await note(
+      `rolled back to ${previous}, but compose did not replace the container (${state?.text ?? 'the container could not be asked'})`,
+    )
+    return
+  }
+  const after = await waitForState(ctx, rolledBack, rolledBackDeadline)
   await note(
     after?.ok === true
       ? `rolled back to ${previous}; ${ctx.container} is up (${after.text})`
