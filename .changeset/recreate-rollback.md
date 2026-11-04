@@ -17,7 +17,9 @@ recorded file — and the rescue counts when the deployment runs that image agai
 A tag moved back to the image already running therefore restores it without replacing the container.
 The one case deliberately left alone is a failed `up` that did not touch a healthy container:
 restoring the image already running could only reproduce it. `deploy.rollback` verifies its own
-result the same way but cannot roll back further, and says so.
+result the same way but cannot roll back further, and it also checks that the deployment actually
+runs the image it was asked to restore — a compose file that starts something else is reported, not
+counted as a rescue.
 
 None of it can be reported to the caller (the session's container is what was replaced), so each
 outcome is written to `compose.log`, with parsed docker reads answering from stdout only so a

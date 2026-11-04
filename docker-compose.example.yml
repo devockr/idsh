@@ -80,7 +80,9 @@ services:
       test:
         - CMD-SHELL
         - |-
-          curl -fsS --noproxy "*" -o /dev/null "http://$${DSH_BIND_HOST:-$$(node -p "require('os').hostname()")}:3080/" || [ $$? -eq 22 ]
+          host="$${DSH_BIND_HOST:-$$(node -p "require('os').hostname()")}"
+          case "$$host" in *:*) host="[$$host]" ;; esac
+          curl -fsS --noproxy "*" -o /dev/null "http://$$host:3080/" || [ $$? -eq 22 ]
       interval: 10s
       timeout: 5s
       retries: 3

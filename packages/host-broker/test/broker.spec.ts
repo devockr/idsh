@@ -1919,6 +1919,64 @@ esac`,
   }
 })
 
+void test('a rollback that leaves another image running is not called a success', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  // The compose file starts its own image: the tag moves, compose brings that image up healthy,
+  // and the deployment is not the target — which must not read as "rolled back".
+  const other = `sha256:${'f'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}" ;;
+  "image inspect "*) echo "${ROLLBACK_TARGET}" ;;
+  *"--format {{.Image}}"*) echo "${other}" ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*) echo "status=running health=healthy image=${other}" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('but runs'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      new RegExp(
+        `is up \\(status=running health=healthy\\) but runs ${other}, not ${ROLLBACK_TARGET}`,
+        'u',
+      ),
+    )
+    assert.doesNotMatch(log, /rolled back to .*; dsh is up/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('deploy.recreate without a checkout is refused', async () => {
   const host = await fakeHost()
   const broker = await startBroker({

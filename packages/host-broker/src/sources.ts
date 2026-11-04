@@ -765,6 +765,8 @@ interface VerifyOptions {
   readonly rollback?: boolean
   /** A recreate restores the image already running, so a tag-and-up could only be a no-op. */
   readonly skipNoopRestore?: boolean
+  /** The image id the deployment must run for this swap to count (a rollback's target). */
+  readonly expectImage?: string
 }
 
 async function verifyRecreate(
@@ -782,16 +784,29 @@ async function verifyRecreate(
   const deadline = Date.now() + RECREATE_WAIT_MS
   const id = await recreatedContainerId(ctx, deadline)
   const state = id === undefined ? undefined : await waitForState(ctx, id, deadline)
+  const image = state?.image === '' ? undefined : state?.image
   // Compose exiting 0 and a healthy container is the whole success condition. `id === before` is
   // not a failure: a profile-only change, or shipping an unchanged main, leaves a bind-mounted
   // container alone and compose says "Running" without doing anything — that is a no-op, and the
   // container it left behind is exactly the one that should be reported as up.
-  if (composeExit === 0 && state?.ok === true) {
+  if (
+    composeExit === 0 &&
+    state?.ok === true &&
+    (options.expectImage === undefined || image === options.expectImage)
+  ) {
     const unchanged = id !== undefined && id === before
     await note(
       unchanged
         ? `compose left ${ctx.container} in place (the container is unchanged); it is up (${state.text})`
         : `${ctx.container} is up (${state.text})`,
+    )
+    return
+  }
+  if (composeExit === 0 && state?.ok === true && options.expectImage !== undefined) {
+    // Healthy, but not the image the tag was supposed to put in front of us: the tag did not take
+    // effect (the compose file starts something else), and saying "is up" would hide that.
+    await note(
+      `${ctx.container} is up (${state.text}) but runs ${image ?? 'an image docker could not name'}, not ${options.expectImage}`,
     )
     return
   }
@@ -876,19 +891,19 @@ async function verifyRecreate(
       previous,
       Math.min(ctx.execTimeoutMs, Math.max(1, rolledBackDeadline - Date.now())),
     )) || previous
-  const image = after?.image === '' ? undefined : after?.image
-  if (after?.ok === true && (image === previous || image === targetId)) {
+  const afterImage = after?.image === '' ? undefined : after?.image
+  if (after?.ok === true && (afterImage === previous || afterImage === targetId)) {
     await note(`rolled back to ${previous}; ${ctx.container} is up (${after.text})`)
     return
   }
-  if (image === previous || image === targetId) {
+  if (afterImage === previous || afterImage === targetId) {
     await note(
       `rolled back to ${previous}, but ${ctx.container} still is not up (${after?.text ?? 'docker could not be asked'})`,
     )
     return
   }
   await note(
-    `rolled back to ${previous}, but the deployment runs ${image ?? 'an image docker could not name'}`,
+    `rolled back to ${previous}, but the deployment runs ${afterImage ?? 'an image docker could not name'}`,
   )
 }
 
@@ -1899,7 +1914,11 @@ export const OPS: readonly OpDefinition[] = [
       const checkout = requireCheckout(ctx)
       const target = await rollbackTarget(ctx)
       // Read-only: a target docker no longer has must fail before anything is acknowledged.
-      await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target])
+      const targetId = (
+        await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target], 'head', {
+          stdoutOnly: true,
+        })
+      ).trim()
       const before = await existingContainerId(ctx)
       return {
         text: `rollback queued to ${target}; the session drops when the container is replaced`,
@@ -1916,7 +1935,12 @@ export const OPS: readonly OpDefinition[] = [
             throw error
           }
           const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout, { before, composeExit }, { rollback: false })
+          await verifyRecreate(
+            ctx,
+            checkout,
+            { before, composeExit },
+            { rollback: false, expectImage: targetId },
+          )
         },
       }
     },
