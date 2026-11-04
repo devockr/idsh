@@ -663,6 +663,23 @@ async function recreatedContainerId(ctx: OpContext, deadline: number): Promise<s
   }
 }
 
+/** Poll one container until it is healthy, terminal, or out of time. */
+async function waitForState(
+  ctx: OpContext,
+  id: string,
+  deadline: number,
+): Promise<RecreateState | undefined> {
+  let state = await deploymentState(ctx, id)
+  while (!(state?.ok ?? false) && state?.terminal !== true) {
+    if (Date.now() >= deadline) {
+      break
+    }
+    await new Promise(resolve => setTimeout(resolve, RECREATE_POLL_MS))
+    state = await deploymentState(ctx, id)
+  }
+  return state
+}
+
 /**
  * Wait for the recreated deployment to prove itself, and roll it back when it does not.
  *
@@ -678,14 +695,7 @@ async function verifyRecreate(ctx: OpContext, checkout: string): Promise<void> {
   }
   const deadline = Date.now() + RECREATE_WAIT_MS
   const id = await recreatedContainerId(ctx, deadline)
-  let state = id === undefined ? undefined : await deploymentState(ctx, id)
-  while (id !== undefined && !(state?.ok ?? false) && state?.terminal !== true) {
-    if (Date.now() >= deadline) {
-      break
-    }
-    await new Promise(resolve => setTimeout(resolve, RECREATE_POLL_MS))
-    state = await deploymentState(ctx, id)
-  }
+  const state = id === undefined ? undefined : await waitForState(ctx, id, deadline)
   if (state?.ok === true) {
     await note(`${ctx.container} is up (${state.text})`)
     return
@@ -717,9 +727,11 @@ async function verifyRecreate(ctx: OpContext, checkout: string): Promise<void> {
     await note(`the rollback itself failed (${messageOf(error)}); the deployment needs a person`)
     return
   }
-  // A new container, so a new id: ask docker which one the rollback created.
-  const rolledBack = await recreatedContainerId(ctx, Date.now() + RECREATE_WAIT_MS)
-  const after = rolledBack === undefined ? undefined : await deploymentState(ctx, rolledBack)
+  // A new container, so a new id — and the same wait: the rollback is starting, not failed.
+  const rolledBackDeadline = Date.now() + RECREATE_WAIT_MS
+  const rolledBack = await recreatedContainerId(ctx, rolledBackDeadline)
+  const after =
+    rolledBack === undefined ? undefined : await waitForState(ctx, rolledBack, rolledBackDeadline)
   await note(
     after?.ok === true
       ? `rolled back to ${previous}; ${ctx.container} is up (${after.text})`
@@ -1715,7 +1727,10 @@ export const OPS: readonly OpDefinition[] = [
         text:
           `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}` +
           reapNote(failed),
-        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
+        after: async () => {
+          await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(ctx, checkout)
+        },
       }
     },
   },

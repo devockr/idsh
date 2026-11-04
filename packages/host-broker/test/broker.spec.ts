@@ -72,6 +72,10 @@ async function waitFor(attempt: () => Promise<boolean>, deadlineMs = LOCK_WAIT_M
 // oxlint-disable-next-line no-magic-numbers -- a sha256 is 64 hex characters
 const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
 
+/** A commit id is 40 hex characters; a sha256 digest is 64. */
+const SHA_LENGTH = 40
+const DIGEST_LENGTH = 64
+
 const roots: string[] = []
 
 after(async () => {
@@ -1400,6 +1404,116 @@ esac`,
       /did not come up \(status=running health=none — no healthcheck is declared in the compose file\); rolling back/u,
     )
     assert.match(await readFile(calls, 'utf8'), new RegExp(`tag tag ${ROLLBACK_TARGET}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a recreate that is still starting is waited for, not failed', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const up = path.join(host.root, 'up')
+  const calls = path.join(host.root, 'calls.log')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}" ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*)
+    if [ -f "${up}" ]; then echo "status=running health=healthy"; else echo "status=starting health=starting"; : > "${up}"; fi ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () => (await readFile(logPath, 'utf8').catch(() => '')).includes('is up'))
+    const log = await readFile(logPath, 'utf8')
+    // The first answer was "starting": the poller waited, it did not fail or roll back.
+    assert.match(log, /is up \(status=running health=healthy\)/u)
+    assert.doesNotMatch(log, /rolling back/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.main verifies what it recreates and rolls back when it is dead', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  const calls = path.join(host.root, 'calls.log')
+  const recovered = path.join(host.root, 'recovered')
+  const sha = 'a'.repeat(SHA_LENGTH)
+  const previousImage = `sha256:${'b'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *ls-remote*) echo "${sha} refs/heads/main" ;;
+esac
+exit 0
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "run "*) exit 0 ;;
+  *"--format {{.Image}}"*) echo "${previousImage}" ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+  "compose "*) echo "compose up" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.main', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /did not come up \(status=exited health=none\); rolling back/u)
+    assert.match(log, new RegExp(`rolled back to ${previousImage}; dsh is up`, 'u'))
   } finally {
     connection.close()
     await broker.close()
