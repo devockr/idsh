@@ -625,6 +625,8 @@ interface RecreateState {
   readonly terminal: boolean
   readonly status: string
   readonly health: string
+  /** The image id docker reports for the container. */
+  readonly image: string
   readonly text: string
 }
 
@@ -636,7 +638,7 @@ async function deploymentState(ctx: OpContext, id: string): Promise<RecreateStat
       [
         'inspect',
         '--format',
-        'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}',
+        'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Image}}',
         id,
       ],
       'head',
@@ -645,6 +647,7 @@ async function deploymentState(ctx: OpContext, id: string): Promise<RecreateStat
     )
     const status = /status=(\S+)/u.exec(text)?.[1]
     const health = /health=(\S+)/u.exec(text)?.[1] ?? 'none'
+    const image = /image=(\S+)/u.exec(text)?.[1] ?? ''
     // A boot line proves nothing on its own — a container can print it and exit — so the check the
     // compose file declares is what counts, and a container that declares none is not healthy.
     const ok = status === 'running' && health === 'healthy'
@@ -655,7 +658,15 @@ async function deploymentState(ctx: OpContext, id: string): Promise<RecreateStat
       status === 'dead' ||
       status === 'restarting' ||
       (status === 'running' && (health === 'none' || health === 'unhealthy'))
-    return { ok, terminal, status: status ?? '', health, text: text.trim() }
+    // The log line keeps the two facts a person reads; the image is carried as a field.
+    return {
+      ok,
+      terminal,
+      status: status ?? '',
+      health,
+      image,
+      text: `status=${status ?? 'unknown'} health=${health}`,
+    }
   } catch {
     return undefined
   }
@@ -857,12 +868,20 @@ async function verifyRecreate(
     return
   }
   const after = await waitForState(ctx, rolledBack, rolledBackDeadline)
-  const image = await existingContainerImage(ctx)
-  if (after?.ok === true && image === previous) {
+  // `previous` can be a registry digest while the container reports its image id, so resolve the
+  // target once and compare ids; no answer means fall back to what the file names.
+  const targetId =
+    (await imageId(
+      ctx,
+      previous,
+      Math.min(ctx.execTimeoutMs, Math.max(1, rolledBackDeadline - Date.now())),
+    )) || previous
+  const image = after?.image === '' ? undefined : after?.image
+  if (after?.ok === true && (image === previous || image === targetId)) {
     await note(`rolled back to ${previous}; ${ctx.container} is up (${after.text})`)
     return
   }
-  if (image === previous) {
+  if (image === previous || image === targetId) {
     await note(
       `rolled back to ${previous}, but ${ctx.container} still is not up (${after?.text ?? 'docker could not be asked'})`,
     )

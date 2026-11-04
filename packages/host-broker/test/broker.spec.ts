@@ -1329,8 +1329,7 @@ void test('a recreate that comes up dead is rolled back and logged', async () =>
     echo "WARNING: Error loading config file" >&2
     if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
-    echo "WARNING: daemon deprecated flag" >&2
-    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=exited health=none image=${RUNNING_IMAGE}"; fi ;;
   "tag "*)
     echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
   *) echo "other $*" >> "$LOG" ;;
@@ -1386,7 +1385,7 @@ void test('a recreate with no healthcheck is not healthy, so it rolls back', asy
   *"--format {{.Image}}"*) echo "${RUNNING_IMAGE}" ;;
   *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
-    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=running health=none"; fi ;;
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=running health=none image=${RUNNING_IMAGE}"; fi ;;
   "tag "*) echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
 esac`,
   ].join('\n')
@@ -1437,7 +1436,7 @@ void test('a recreate that is still starting is waited for, not failed', async (
     echo "compose up" >> "${calls}"; : > "${composed}" ;;
   *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
-    if [ -f "${up}" ]; then echo "status=running health=healthy"; else echo "status=running health=starting"; : > "${up}"; fi ;;
+    if [ -f "${up}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=running health=starting image=${RUNNING_IMAGE}"; : > "${up}"; fi ;;
 esac`,
       '',
     ].join('\n'),
@@ -1502,7 +1501,7 @@ exit 0
     echo "WARNING: Error loading config file" >&2
     if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
-    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${previousImage}"; else echo "status=exited health=none image=${previousImage}"; fi ;;
   "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
   "compose "*) echo "compose up" >> "${calls}"; : > "${composed}" ;;
 esac`,
@@ -1555,7 +1554,7 @@ void test('a compose that fails is not a successful recreate, even if the contai
     if [ -f "${tried}" ]; then exit 0; else : > "${tried}"; exit 1; fi ;;
   *"--format {{.Image}}"*) echo "${RUNNING_IMAGE}" ;;
   *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
-  *"--format status="*) echo "status=running health=healthy" ;;
+  *"--format status="*) echo "status=running health=healthy image=${RUNNING_IMAGE}" ;;
   "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
 esac`,
       '',
@@ -1613,7 +1612,7 @@ void test('a no-op up that leaves the container alone is not a failure', async (
   "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
     echo "compose up" >> "${calls}" ;;
   *"{{.Id}}"*) echo "same-id" ;;
-  *"--format status="*) echo "status=running health=healthy" ;;
+  *"--format status="*) echo "status=running health=healthy image=${RUNNING_IMAGE}" ;;
   "tag "*) echo "tag $*" >> "${calls}" ;;
 esac`,
       '',
@@ -1664,7 +1663,7 @@ void test('a rollback whose compose fails is reported as a failure', async () =>
   "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
     : > "${composed}"; echo "compose up" >> "${calls}"; exit 1 ;;
   *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
-  *"--format status="*) echo "status=exited health=none" ;;
+  *"--format status="*) echo "status=exited health=none image=${RUNNING_IMAGE}" ;;
   "tag "*) echo "tag $*" >> "${calls}" ;;
 esac`,
       '',
@@ -1718,7 +1717,7 @@ void test('a recreate that ends on another image says so', async () => {
   *"--format {{.Image}}"*) if [ -f "${composed}" ]; then echo "${other}"; fi ;;
   *"{{.Id}}"*) echo "runner-id" ;;
   *"--format status="*)
-    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=running health=unhealthy"; fi ;;
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${other}"; else echo "status=running health=unhealthy image=${other}"; fi ;;
   "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
 esac`,
       '',
@@ -1768,7 +1767,7 @@ void test('a failed compose that left the running container alone restores nothi
   "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
     echo "compose up" >> "${calls}"; exit 1 ;;
   *"{{.Id}}"*) echo "same-id" ;;
-  *"--format status="*) echo "status=running health=healthy" ;;
+  *"--format status="*) echo "status=running health=healthy image=${ROLLBACK_TARGET}" ;;
   "tag "*) echo "tag $*" >> "${calls}" ;;
 esac`,
       '',
@@ -1825,7 +1824,7 @@ void test('a recreate restores the image that was running, not the older recorde
   *"--format {{.Image}}"*) echo "${running}" ;;
   *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
-    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${running}"; else echo "status=exited health=none image=${running}"; fi ;;
   "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
 esac`,
       '',
@@ -1857,6 +1856,62 @@ esac`,
     const recorded = await readFile(calls, 'utf8')
     assert.match(recorded, new RegExp(`tag tag ${running} devockr/idsh:dev`, 'u'))
     assert.doesNotMatch(recorded, new RegExp(`tag tag ${older}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a rescue to a registry digest is a success, not a mismatch', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
+  // A pulled deployment records a registry digest, while the container reports its image id.
+  const digest = `ghcr.io/devockr/idsh@sha256:${'d'.repeat(DIGEST_LENGTH)}`
+  const imageId = `sha256:${'c'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}" ;;
+  "image inspect "*) echo "${imageId}" ;;
+  *"--format {{.Image}}"*) if [ -f "${composed}" ]; then echo "${imageId}"; fi ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${imageId}"; else echo "status=exited health=none image=${imageId}"; fi ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${digest}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    assert.match(
+      await readFile(logPath, 'utf8'),
+      new RegExp(`rolled back to ${digest}; dsh is up`, 'u'),
+    )
   } finally {
     connection.close()
     await broker.close()
