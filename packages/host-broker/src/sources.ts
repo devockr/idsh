@@ -556,7 +556,7 @@ async function composeDetached(
   ctx: OpContext,
   checkout: string,
   args: readonly string[],
-): Promise<void> {
+): Promise<number | undefined> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const log = await open(logPath, 'a', FILE_MODE)
   try {
@@ -600,14 +600,19 @@ async function composeDetached(
         mode: FILE_MODE,
       }).catch(() => null)
     }, COMPOSE_TIMEOUT_MS)
+    let exited: number | undefined
     try {
       await new Promise<void>(resolve => {
         child.once('error', () => resolve())
-        child.once('exit', () => resolve())
+        child.once('exit', code => {
+          exited = code ?? undefined
+          resolve()
+        })
       })
     } finally {
       clearTimeout(timer)
     }
+    return exited
   } finally {
     await log.close()
   }
@@ -651,6 +656,23 @@ async function deploymentState(ctx: OpContext, id: string): Promise<RecreateStat
       status === 'restarting' ||
       (status === 'running' && (health === 'none' || health === 'unhealthy'))
     return { ok, terminal, status: status ?? '', health, text: text.trim() }
+  } catch {
+    return undefined
+  }
+}
+
+/** The id of the running container, when there is one; a first deploy has none. */
+async function existingContainerId(ctx: OpContext): Promise<string | undefined> {
+  try {
+    const id = (
+      await docker(
+        ctx,
+        ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container],
+        'head',
+        { stdoutOnly: true },
+      )
+    ).trim()
+    return id === '' ? undefined : id
   } catch {
     return undefined
   }
@@ -701,7 +723,13 @@ async function waitForState(
  * The read is pinned to the id compose created: a container replaced under us is not the one we
  * were asked to watch, so it counts as a failure to come up, not as a success.
  */
-async function verifyRecreate(ctx: OpContext, checkout: string, rollback = true): Promise<void> {
+async function verifyRecreate(
+  ctx: OpContext,
+  checkout: string,
+  before: string | undefined,
+  composeExit: number | undefined,
+  rollback = true,
+): Promise<void> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const note = async (line: string): Promise<void> => {
     await appendFile(logPath, `verify: ${line}\n`, { mode: FILE_MODE }).catch(() => null)
@@ -709,22 +737,30 @@ async function verifyRecreate(ctx: OpContext, checkout: string, rollback = true)
   const deadline = Date.now() + RECREATE_WAIT_MS
   const id = await recreatedContainerId(ctx, deadline)
   const state = id === undefined ? undefined : await waitForState(ctx, id, deadline)
-  if (state?.ok === true) {
+  // Success needs all three: compose said yes, a new container exists, and that container is
+  // healthy. A no-op "up" that left the old container running is not a recreate.
+  const replaced = id !== undefined && id !== before
+  if (composeExit === 0 && replaced && state?.ok === true) {
     await note(`${ctx.container} is up (${state.text})`)
     return
   }
-  const missingHealth =
-    state !== undefined &&
-    state.text.includes('status=running') &&
-    state.text.includes('health=none')
-  const why =
-    id === undefined
-      ? 'no container appeared'
-      : state === undefined
-        ? 'the container disappeared while it was watched'
-        : missingHealth
-          ? `${state.text} — no healthcheck is declared in the compose file`
-          : state.text
+  const missingHealth = state?.status === 'running' && state.health === 'none'
+  let why: string
+  if (composeExit === 0) {
+    if (id === undefined) {
+      why = 'no container appeared'
+    } else if (replaced === false) {
+      why = 'compose reported success but the container was not replaced'
+    } else if (state === undefined) {
+      why = 'the container disappeared while it was watched'
+    } else if (missingHealth) {
+      why = `${state.text} — no healthcheck is declared in the compose file`
+    } else {
+      why = state.text
+    }
+  } else {
+    why = `compose exited with ${String(composeExit ?? 'no status')}`
+  }
   if (!rollback) {
     // A rollback has nothing newer to return to; say whether the rescue worked instead.
     await note(`${ctx.container} did not come up (${why}); not rolling back any further`)
@@ -1741,13 +1777,14 @@ export const OPS: readonly OpDefinition[] = [
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveMainSource(ctx, deadline)
       const { previous, failed } = await buildInto(ctx, source, deadline, log)
+      const before = await existingContainerId(ctx)
       return {
         text:
           `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}` +
           reapNote(failed),
         after: async () => {
-          await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout)
+          const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(ctx, checkout, before, composeExit)
         },
       }
     },
@@ -1764,6 +1801,7 @@ export const OPS: readonly OpDefinition[] = [
       const target = await rollbackTarget(ctx)
       // Read-only: a target docker no longer has must fail before anything is acknowledged.
       await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target])
+      const before = await existingContainerId(ctx)
       return {
         text: `rollback queued to ${target}; the session drops when the container is replaced`,
         after: async () => {
@@ -1778,8 +1816,8 @@ export const OPS: readonly OpDefinition[] = [
             ).catch(() => null)
             throw error
           }
-          await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout, false)
+          const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(ctx, checkout, before, composeExit, false)
         },
       }
     },
@@ -1790,16 +1828,17 @@ export const OPS: readonly OpDefinition[] = [
     confirm: true,
     serial: true,
     input: { type: 'object', properties: {}, additionalProperties: false },
-    run(args, ctx) {
+    async run(args, ctx) {
       rejectUnknown(args, [])
       const checkout = requireCheckout(ctx)
-      return Promise.resolve({
+      const before = await existingContainerId(ctx)
+      return {
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: async () => {
-          await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout)
+          const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(ctx, checkout, before, composeExit)
         },
-      })
+      }
     },
   },
 
