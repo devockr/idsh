@@ -905,7 +905,7 @@ void test('deploy.versions reads the state and the versions inside the container
     [
       '#!/bin/sh',
       'case "$*" in',
-      '  "inspect --type container --format {{.Id}} web") echo abc ;;',
+      '  "inspect --type container --format {{.Id}} web") echo "WARNING: id read" >&2; echo abc ;;',
       '  "exec abc dsh --version") echo "WARNING: platform mismatch" >&2; echo 0.2.1-rc.5 ;;',
       '  "exec abc gcb --version") echo 0.4.0 ;;',
       '  *) printf "%s\n" "$*" ;;',
@@ -951,7 +951,7 @@ void test('deploy.versions names an unavailable probe and still answers', async 
     [
       '#!/bin/sh',
       'case "$*" in',
-      '  "inspect --type container --format {{.Id}} web") echo abc ;;',
+      '  "inspect --type container --format {{.Id}} web") echo "WARNING: id read" >&2; echo abc ;;',
       '  "exec abc dsh --version") echo 0.2.1-rc.5 ;;',
       '  "exec abc gcb --version") printf "no such file\nthe cause is here\n" >&2; exit 7 ;;',
       '  *) printf "%s\n" "$*" ;;',

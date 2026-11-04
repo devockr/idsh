@@ -1435,6 +1435,8 @@ export const OPS: readonly OpDefinition[] = [
             ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container],
             'head',
             {
+              // Parsed, so a docker warning on stderr must not become part of the id.
+              stdoutOnly: true,
               timeoutMs: budget(),
             },
           )
