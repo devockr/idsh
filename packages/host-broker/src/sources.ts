@@ -1415,14 +1415,15 @@ export const OPS: readonly OpDefinition[] = [
     summary:
       'What the deployment is running — its state and image, and the dsh and gcb versions inside it.',
     input: { type: 'object', properties: {}, additionalProperties: false },
-    // Three docker calls in sequence, so they get their own budget rather than the 10 s default.
+    // Four docker calls in sequence, so they get their own budget rather than the 10 s default.
     timeoutMs: VERSIONS_TIMEOUT_MS,
     async run(args, ctx) {
       rejectUnknown(args, [])
       // One deadline for the whole read, and each call may take only what is left of it: a raised
       // per-program default must not let the op outlive the timeout its client was promised.
       const deadline = Date.now() + VERSIONS_TIMEOUT_MS
-      const budget = (): number => Math.max(1, Math.min(ctx.execTimeoutMs, remaining(deadline)))
+      // `remaining` already floors at one millisecond.
+      const budget = (): number => Math.min(ctx.execTimeoutMs, remaining(deadline))
       // The id, not the name: a recreate between these calls would otherwise answer with one
       // deployment's state and the next one's versions. Exec against the old id fails instead.
       const id =
