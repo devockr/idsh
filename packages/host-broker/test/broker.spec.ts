@@ -1329,6 +1329,7 @@ void test('a recreate that comes up dead is rolled back and logged', async () =>
     echo "WARNING: Error loading config file" >&2
     if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
+    echo "WARNING: daemon deprecated flag" >&2
     if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=exited health=none image=${RUNNING_IMAGE}"; fi ;;
   "tag "*)
     echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
