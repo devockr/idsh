@@ -1746,6 +1746,58 @@ esac`,
   }
 })
 
+void test('a failed compose that left the running container alone restores nothing', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  // The recorded target predates the running container; compose fails without touching it.
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}"; exit 1 ;;
+  *"{{.Id}}"*) echo "same-id" ;;
+  *"--format status="*) echo "status=running health=healthy" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('nothing is rolled back'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      /dsh is unchanged and healthy after compose exited with 1; the recorded image predates it, so nothing is rolled back/u,
+    )
+    // The healthy deployment was not replaced by the older recorded image.
+    assert.doesNotMatch(await readFile(calls, 'utf8').catch(() => ''), /tag /u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('deploy.recreate without a checkout is refused', async () => {
   const host = await fakeHost()
   const broker = await startBroker({

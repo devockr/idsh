@@ -729,6 +729,7 @@ async function verifyRecreate(
   before: string | undefined,
   composeExit: number | undefined,
   rollback = true,
+  recordedTargetMayBeStale = false,
 ): Promise<void> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const note = async (line: string): Promise<void> => {
@@ -764,6 +765,23 @@ async function verifyRecreate(
     }
   } else {
     why = `compose exited with ${String(composeExit ?? 'no status')}`
+  }
+  // A recreate deploys whatever `:dev` holds now; the recorded target can predate the container
+  // that is already running. When compose failed and left that container untouched and healthy,
+  // restoring the older image would replace a working deployment with an older one — so there is
+  // nothing to rescue and nothing is touched. `deploy.main` records its target immediately before
+  // its own build, so its restoration stays as it was.
+  if (
+    recordedTargetMayBeStale &&
+    composeExit !== 0 &&
+    state?.ok === true &&
+    id !== undefined &&
+    id === before
+  ) {
+    await note(
+      `${ctx.container} is unchanged and healthy after ${why}; the recorded image predates it, so nothing is rolled back`,
+    )
+    return
   }
   if (!rollback) {
     // A rollback has nothing newer to return to; say whether the rescue worked instead.
@@ -1859,7 +1877,7 @@ export const OPS: readonly OpDefinition[] = [
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: async () => {
           const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout, before, composeExit)
+          await verifyRecreate(ctx, checkout, before, composeExit, true, true)
         },
       }
     },
