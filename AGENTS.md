@@ -142,7 +142,7 @@ live in the state directory, so the conversation survives, the process does not)
   unchanged and healthy — then nothing is restored, since a rescue would only reproduce it.
   `docker-compose.example.yml` carries the working probe, including its three traps: the address
   must be the one dsh bound (never `127.0.0.1`), `--noproxy` is required because the proxy
-  variables are in the container's environment, and the HTTP status is checked explicitly — 200/401
+  variables are in the container's environment, and the HTTP status is checked explicitly — 200/401/3xx
   are answers, a 5xx is not.
 
 - A restart is enough when only the _profile_ changed: it re-runs the entrypoint and re-resolves
