@@ -1489,7 +1489,9 @@ exit 0
       '#!/bin/sh',
       `case "$*" in
   "run "*) exit 0 ;;
-  *"--format {{.Image}}"*) echo "${previousImage}" ;;
+  *"--format {{.Image}}"*)
+    echo "WARNING: Error loading config file" >&2
+    echo "${previousImage}" ;;
   *"{{.Id}}"*)
     echo "WARNING: Error loading config file" >&2
     if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;

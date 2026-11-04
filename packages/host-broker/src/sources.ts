@@ -2286,28 +2286,25 @@ async function prepareBuildSource(
 /** Remember the image the container runs now, before a build retags `:dev`. */
 async function recordRollback(ctx: OpContext): Promise<string> {
   // RepoDigests lives on the image, not on the container: read the id first, then the image.
-  const idText = await docker(ctx, [
-    'inspect',
-    '--type',
-    'container',
-    '--format',
-    '{{.Image}}',
-    ctx.container,
-  ])
+  const idText = await docker(
+    ctx,
+    ['inspect', '--type', 'container', '--format', '{{.Image}}', ctx.container],
+    'head',
+    // Parsed into the rollback target: a docker warning on stderr must not become part of it.
+    { stdoutOnly: true },
+  )
   const id = idText.trim().split('\n')[0] ?? ''
   if (id === '') {
     throw new BrokerFault('unavailable', 'the container has no image to roll back to')
   }
   let previous = id
   try {
-    const digestsText = await docker(ctx, [
-      'inspect',
-      '--type',
-      'image',
-      '--format',
-      '{{json .RepoDigests}}',
-      id,
-    ])
+    const digestsText = await docker(
+      ctx,
+      ['inspect', '--type', 'image', '--format', '{{json .RepoDigests}}', id],
+      'head',
+      { stdoutOnly: true },
+    )
     const parsed: unknown = JSON.parse(digestsText.trim().split('\n')[0] ?? '[]')
     // A pulled image is one pull away; a local one only exists as its id.
     if (Array.isArray(parsed)) {
