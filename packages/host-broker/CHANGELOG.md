@@ -1,5 +1,30 @@
 # @idsh/host-broker
 
+## 0.3.0
+
+### Minor Changes
+
+- [#99](https://github.com/devockr/idsh/pull/99) [`dd432be`](https://github.com/devockr/idsh/commit/dd432be781a9cc15f76cbb9eaead231cb1ec7cdf) Thanks [@JounQin](https://github.com/JounQin)! - `run` joins the table: one declared, read-only binary per call — `ping`, `dig`, `traceroute`,
+  `ip addr/route/neigh`, `ss`, `df`, `free`, `uptime` — with an argv parsed against the declaration
+  instead of a shell, so an undeclared binary, an undeclared flag, a missing flag value or an extra
+  positional is `bad-argument` rather than something the host runs. `dryRun: true` answers the verdict
+  without executing, and the operation is `confirm: true`: a person is asked before a program starts on
+  the host. No declaration takes a filesystem path yet, so the race-safe path guard arrives with the
+  first one that does.
+
+### Patch Changes
+
+- [#94](https://github.com/devockr/idsh/pull/94) [`8b5773b`](https://github.com/devockr/idsh/commit/8b5773b919f707ca1897f92e1cf6c305d7594226) Thanks [@JounQin](https://github.com/JounQin)! - `broker.update` decides how it was installed by comparing the running entry with `--checkout`, and
+  that comparison is now made on resolved paths: both sides go through `realpath`, a path that no
+  longer exists is named through its nearest existing ancestor, a symlink whose target is gone is
+  followed by the target it names, and `..` is matched as a path segment rather than a string prefix. A
+  checkout reached through a symlink (the deployment's `/var/services/…` against a process that
+  resolved to `/volume1/…`), or a rebuild that cleaned `lib/`, is therefore recognised as the checkout
+  it is instead of refusing with "cannot tell which npm prefix … belongs to" — and a child directory
+  named `..build` stays inside it. The resolution is asynchronous: the broker answers every request
+  from one event loop, so a synchronous lookup on a filesystem that stopped answering would stall all
+  of them, not only this operation.
+
 ## 0.2.0
 
 ### Minor Changes

@@ -1,5 +1,20 @@
 # @idsh/image
 
+## 0.1.2
+
+### Patch Changes
+
+- [#102](https://github.com/devockr/idsh/pull/102) [`fe71843`](https://github.com/devockr/idsh/commit/fe718433ea90027a58c6a86f42d5fa5dc51cd104) Thanks [@JounQin](https://github.com/JounQin)! - The published image installs `gcb-client@0.4.0` instead of `0.2.0`. The dev image already takes the
+  client from its own checkout, so it was dogfooding this version before the pin moved.
+
+- [#100](https://github.com/devockr/idsh/pull/100) [`d2176ab`](https://github.com/devockr/idsh/commit/d2176abcb900adc0fcc69d82bd16b8b4088af8f8) Thanks [@JounQin](https://github.com/JounQin)! - The broker's table is asked for again every minute, and the tools are replaced when it changed. A
+  broker upgrade used to need a container recreate even when the plugin itself had not changed — the
+  table was read once at load — so a new operation stayed invisible until the whole container was
+  replaced. The re-read is one socket roundtrip and an unchanged table registers nothing; the new tools
+  are mounted after the old ones are disposed (the registry is keyed by name, so both cannot be visible
+  at once) and the old ones are put back if the new mount fails, so a bad table leaves what worked in
+  place. The plugin's own disposal clears the timer, and `refreshMs` (a minute by default) sets the interval.
+
 ## 0.1.1
 
 ### Patch Changes
