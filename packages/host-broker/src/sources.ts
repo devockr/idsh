@@ -28,7 +28,6 @@ import path from 'node:path'
 
 import {
   BUILD_TIMEOUT_MS,
-  VERSIONS_TIMEOUT_MS,
   COMPOSE_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
@@ -36,6 +35,7 @@ import {
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
   TAIL_WINDOW_BYTES,
+  VERSIONS_TIMEOUT_MS,
 } from './constants.ts'
 import type { DeployLock } from './deploy-lock.ts'
 import type { Keep } from './limits.ts'
