@@ -132,9 +132,12 @@ live in the state directory, so the conversation survives, the process does not)
   `:dev` (built from `:base`, plugins from `packages/`) — which is also what "dogfood the source"
   means here.
 - **A deployment must declare a health check.** After `compose up -d` the broker watches the
-  container it created and rolls back to the image it found (the recorded one when nothing was
-  running) when that container is not `healthy`;
-  a container with no health status at all counts as failed, because a boot line proves nothing.
+  container it created: success is compose exiting zero **and** that container `running` with
+  `health=healthy`; a non-zero compose fails the recreate even when a container looks fine, and a
+  container with no health status at all counts as failed, because a boot line proves nothing. On
+  failure it restores the image it found (the recorded one when nothing was running; `deploy.main`
+  uses the image recorded before its build), except when a failed compose left the container
+  unchanged and healthy — then nothing is restored, since a rescue would only reproduce it.
   `docker-compose.example.yml` carries the working probe, including its two traps: the address must
   be the one dsh bound (never `127.0.0.1`), and `--noproxy` is required because the proxy
   variables are in the container's environment.
