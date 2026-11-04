@@ -28,6 +28,7 @@ import path from 'node:path'
 
 import {
   BUILD_TIMEOUT_MS,
+  VERSIONS_TIMEOUT_MS,
   COMPOSE_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
@@ -1414,35 +1415,38 @@ export const OPS: readonly OpDefinition[] = [
     summary:
       'What the deployment is running — its state and image, and the dsh and gcb versions inside it.',
     input: { type: 'object', properties: {}, additionalProperties: false },
+    // Three docker calls in sequence, so they get their own budget rather than the 10 s default.
+    timeoutMs: VERSIONS_TIMEOUT_MS,
     async run(args, ctx) {
       rejectUnknown(args, [])
       // Labelled like deploy.status, so the two reads of the same container read alike.
       const state = await docker(ctx, [
         'inspect',
         '--format',
-        'status={{.State.Status}} image={{.Config.Image}} id={{.Image}} created={{.Created}}',
+        'status={{.State.Status}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}}',
         ctx.container,
       ])
+      // Sequential on purpose: concurrent `docker exec` calls that fail in the runtime can report
+      // each other's error text (measured), and a read that names the wrong binary as missing is
+      // worse than the second it saves.
+      const probes: string[] = []
       // Fixed probes only: the broker exposes no arbitrary exec, so what can be asked is what is
-      // declared here. They are independent, so they run together — the op's deadline is shared.
-      const probes = await Promise.all(
-        (
-          [
-            ['dsh', ['dsh', '--version']],
-            ['gcb', ['gcb', '--version']],
-          ] as const
-        ).map(async ([name, command]) => {
-          try {
-            return `${name}: ${(await docker(ctx, ['exec', ctx.container, ...command])).trim()}`
-          } catch (error) {
-            // An image without gcb is ordinary; the answer says so instead of failing the whole
-            // read. The tail is the line that says why — the rule runFixed keeps for docker.
-            const message = messageOf(error).trim()
-            const last = message.split('\n').at(-1) ?? message
-            return `${name}: unavailable — ${last}`
-          }
-        }),
-      )
+      // declared here.
+      for (const [name, command] of [
+        ['dsh', ['dsh', '--version']],
+        ['gcb', ['gcb', '--version']],
+      ] as const) {
+        try {
+          const answer = await docker(ctx, ['exec', ctx.container, ...command])
+          probes.push(`${name}: ${answer.trim()}`)
+        } catch (error) {
+          // An image without gcb is ordinary; the answer says so instead of failing the whole read.
+          // The tail is the line that says why — the rule runFixed keeps for docker.
+          const message = messageOf(error).trim()
+          const last = message.split('\n').at(-1) ?? message
+          probes.push(`${name}: unavailable — ${last}`)
+        }
+      }
       return [`${ctx.container}: ${state.trim()}`, ...probes].join('\n')
     },
   },

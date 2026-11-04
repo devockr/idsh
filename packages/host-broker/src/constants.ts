@@ -89,6 +89,8 @@ export const AFTER_RESPONSE_DELAY_MS = 500
 
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
+/** Three sequential docker reads get more room than one; a slow daemon is not a hang. */
+export const VERSIONS_TIMEOUT_MS = 30_000
 
 /** UTF-8 continuation byte: the top two bits are `10`. */
 export const UTF8_CONTINUATION_MASK = 0b1100_0000

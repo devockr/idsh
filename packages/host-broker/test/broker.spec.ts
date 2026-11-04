@@ -926,10 +926,10 @@ void test('deploy.versions reads the state and the versions inside the container
   try {
     const answer = await connection.request({ op: 'deploy.versions', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    assert.match(answer.result ?? '', /^web: inspect --format .*web$/mu)
+    assert.match(answer.result ?? '', /^web: inspect --format .*image-id=\{\{\.Image\}\}.*web$/mu)
     assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
     assert.match(answer.result ?? '', /^gcb: 0\.4\.0$/mu)
-    // Read-only: no argument is accepted, and a missing binary is named rather than fatal.
+    // No argument is accepted; a missing binary is covered by the test below.
     const args = await connection.request({ op: 'deploy.versions', args: { container: 'x' } })
     assert.equal(args.error?.code, 'bad-argument')
   } finally {
