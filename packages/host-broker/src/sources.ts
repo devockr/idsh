@@ -34,6 +34,8 @@ import {
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
+  RECREATE_POLL_MS,
+  RECREATE_WAIT_MS,
   TAIL_WINDOW_BYTES,
   VERSIONS_TIMEOUT_MS,
 } from './constants.ts'
@@ -609,6 +611,120 @@ async function composeDetached(
   } finally {
     await log.close()
   }
+}
+
+/** Whether the container is up, and what docker says about it. */
+interface RecreateState {
+  readonly ok: boolean
+  /** Waiting longer cannot help: exited, dead, or a container that declares no healthcheck. */
+  readonly terminal: boolean
+  readonly text: string
+}
+
+/** Ask docker about one container by id; a container mid-swap is not an error yet. */
+async function deploymentState(ctx: OpContext, id: string): Promise<RecreateState | undefined> {
+  try {
+    const text = await docker(ctx, [
+      'inspect',
+      '--format',
+      'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}',
+      id,
+    ])
+    const status = /status=(\S+)/u.exec(text)?.[1]
+    const health = /health=(\S+)/u.exec(text)?.[1] ?? 'none'
+    // A boot line proves nothing on its own — a container can print it and exit — so the check the
+    // compose file declares is what counts, and a container that declares none is not healthy.
+    const ok = status === 'running' && health === 'healthy'
+    const terminal =
+      status === 'exited' || status === 'dead' || (status === 'running' && health === 'none')
+    return { ok, terminal, text: text.trim() }
+  } catch {
+    return undefined
+  }
+}
+
+/** The id of the container compose just created, retried while it may still be appearing. */
+async function recreatedContainerId(ctx: OpContext, deadline: number): Promise<string | undefined> {
+  for (;;) {
+    try {
+      const id = (
+        await docker(ctx, ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container])
+      ).trim()
+      if (id !== '') {
+        return id
+      }
+    } catch {
+      // Not there yet, or not there at all; the deadline decides which.
+    }
+    if (Date.now() >= deadline) {
+      return undefined
+    }
+    await new Promise(resolve => setTimeout(resolve, RECREATE_POLL_MS))
+  }
+}
+
+/**
+ * Wait for the recreated deployment to prove itself, and roll it back when it does not.
+ *
+ * The caller's connection is already gone — the container it lives in was replaced — so the answer
+ * cannot report this: what happened goes to the compose log, where an operator looks after a swap.
+ * The read is pinned to the id compose created: a container replaced under us is not the one we
+ * were asked to watch, so it counts as a failure to come up, not as a success.
+ */
+async function verifyRecreate(ctx: OpContext, checkout: string): Promise<void> {
+  const logPath = path.join(ctx.stateDir, 'compose.log')
+  const note = async (line: string): Promise<void> => {
+    await appendFile(logPath, `verify: ${line}\n`, { mode: FILE_MODE }).catch(() => null)
+  }
+  const deadline = Date.now() + RECREATE_WAIT_MS
+  const id = await recreatedContainerId(ctx, deadline)
+  let state = id === undefined ? undefined : await deploymentState(ctx, id)
+  while (id !== undefined && !(state?.ok ?? false) && state?.terminal !== true) {
+    if (Date.now() >= deadline) {
+      break
+    }
+    await new Promise(resolve => setTimeout(resolve, RECREATE_POLL_MS))
+    state = await deploymentState(ctx, id)
+  }
+  if (state?.ok === true) {
+    await note(`${ctx.container} is up (${state.text})`)
+    return
+  }
+  const missingHealth =
+    state !== undefined &&
+    state.text.includes('status=running') &&
+    state.text.includes('health=none')
+  const why =
+    id === undefined
+      ? 'no container appeared'
+      : state === undefined
+        ? 'the container disappeared while it was watched'
+        : missingHealth
+          ? `${state.text} — no healthcheck is declared in the compose file`
+          : state.text
+  await note(`${ctx.container} did not come up (${why}); rolling back`)
+  let previous: string
+  try {
+    previous = await rollbackTarget(ctx)
+  } catch (error) {
+    await note(`no rollback target (${messageOf(error)}); leaving the deployment as it is`)
+    return
+  }
+  try {
+    await docker(ctx, ['tag', previous, BUILD_IMAGE])
+    await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+  } catch (error) {
+    await note(`the rollback itself failed (${messageOf(error)}); the deployment needs a person`)
+    return
+  }
+  // A new container, so a new id: ask docker which one the rollback created.
+  const rolledBack = await recreatedContainerId(ctx, Date.now() + RECREATE_WAIT_MS)
+  const after = rolledBack === undefined ? undefined : await deploymentState(ctx, rolledBack)
+  await note(
+    after?.ok === true
+      ? `rolled back to ${previous}; ${ctx.container} is up (${after.text})`
+      : `rolled back to ${previous}, but ${ctx.container} still is not up (${after?.text ?? 'docker could not be asked'})`,
+  )
 }
 
 /** The files a build takes from main: everything that runs as root before the uid drops. */
@@ -1645,7 +1761,10 @@ export const OPS: readonly OpDefinition[] = [
       const checkout = requireCheckout(ctx)
       return Promise.resolve({
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
-        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
+        after: async () => {
+          await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(ctx, checkout)
+        },
       })
     },
   },

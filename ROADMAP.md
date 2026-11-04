@@ -23,9 +23,10 @@ not resolve, or a sweep that ran out of the build's time — and the next build 
 `run` is in the table with its first declarations — ping, dig, traceroute, `ip addr/route/neigh`,
 `ss`, `df`, `free`, `uptime` — each an argument table rather than code, with `dryRun` answering the
 policy verdict before anything executes; the race-safe path guard the section below describes lands
-with the first declaration that takes a filesystem path, and none of these does. The rest of the
-phase list (a deployment that rolls itself back when it will not come up) is still the plan. This file is the contract the
-implementation is judged against.
+with the first declaration that takes a filesystem path, and none of these does. A recreate now
+watches the container it created and rolls back to the recorded image when that container is not
+healthy, as the section below describes — the compose file has to declare the check, and a container
+with none counts as failed. This file is the contract the implementation is judged against.
 
 ## The problem
 

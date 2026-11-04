@@ -87,6 +87,12 @@ export const BUILD_TIMEOUT_MS = 15 * 60_000
 /** How long a deferred action waits after its answer is written, so the client can read it. */
 export const AFTER_RESPONSE_DELAY_MS = 500
 
+/** How long a recreate has to show a healthy container before it is rolled back. */
+export const RECREATE_WAIT_MS = 180_000
+
+/** How often that question is asked while waiting. */
+export const RECREATE_POLL_MS = 2_000
+
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
 

@@ -203,6 +203,12 @@ The socket is owned by the broker's user and is not world-writable, so `PUID`/`P
 uid/gid the broker runs as — a directory ACL does not help, since access is checked on the socket
 itself.
 
+A recreate through the broker verifies what it created: it watches that container and rolls back to
+the recorded image when it is not healthy. The compose file therefore has to declare a health check
+— `docker-compose.example.yml` carries the one this deployment uses (curl, the address dsh bound,
+`--noproxy`, and 401 accepted as proof the server answered). A container with no health status at
+all counts as failed, and the reason is written to the broker's `compose.log`.
+
 `docker exec -u app dsh gcb probe --repo owner/repo` answers the
 broker's decision — exit 0 allowed, 1 denied, 3 unreachable — with the credential reduced to a
 fingerprint, so its output is safe to share.

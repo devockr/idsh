@@ -1301,6 +1301,111 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
   }
 })
 
+void test('a recreate that comes up dead is rolled back and logged', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const recovered = path.join(host.root, 'recovered')
+  // Compose "succeeds"; the first inspect says the container exited, and the tag flips a marker so
+  // the inspect after the rollback sees a running container.
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `LOG="${calls}"`,
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "$LOG" ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
+  "tag "*)
+    echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
+  *) echo "other $*" >> "$LOG" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /did not come up \(status=exited health=none\); rolling back/u)
+    assert.match(log, new RegExp(`rolled back to ${ROLLBACK_TARGET}; dsh is up`, 'u'))
+    const recorded = await readFile(calls, 'utf8')
+    assert.equal(recorded.match(/compose up/gu)?.length, 2)
+    assert.match(recorded, new RegExp(`tag tag ${ROLLBACK_TARGET} devockr/idsh:dev`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a recreate with no healthcheck is not healthy, so it rolls back', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  // Running, but the compose file declares no healthcheck: per the contract that is a failure.
+  const script = [
+    '#!/bin/sh',
+    `LOG="${calls}"`,
+    `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "$LOG" ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*) echo "status=running health=none" ;;
+  "tag "*) echo "tag $*" >> "$LOG" ;;
+esac`,
+  ].join('\n')
+  await writeFile(dockerPath, script, { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('no healthcheck'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      /did not come up \(status=running health=none — no healthcheck is declared in the compose file\); rolling back/u,
+    )
+    assert.match(await readFile(calls, 'utf8'), new RegExp(`tag tag ${ROLLBACK_TARGET}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('deploy.recreate without a checkout is refused', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
@@ -2777,8 +2882,9 @@ void test('a deployment in flight refuses a broker update', async () => {
   await writeFile(
     dockerPath,
     `#!/bin/sh
-case "$1" in
-  inspect) echo 'sha256:pre vious' ;;
+case "$*" in
+  *"--format status="*) echo 'status=running health=healthy' ;;
+  inspect*) echo 'sha256:pre vious' ;;
 esac
 `,
     { mode: 0o755 },
