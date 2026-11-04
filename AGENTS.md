@@ -140,9 +140,10 @@ live in the state directory, so the conversation survives, the process does not)
   failure it restores the image it found (the recorded one when nothing was running; `deploy.main`
   uses the image recorded before its build), except when a failed compose left the container
   unchanged and healthy — then nothing is restored, since a rescue would only reproduce it.
-  `docker-compose.example.yml` carries the working probe, including its two traps: the address must
-  be the one dsh bound (never `127.0.0.1`), and `--noproxy` is required because the proxy
-  variables are in the container's environment.
+  `docker-compose.example.yml` carries the working probe, including its three traps: the address
+  must be the one dsh bound (never `127.0.0.1`), `--noproxy` is required because the proxy
+  variables are in the container's environment, and the HTTP status is checked explicitly — 200/401
+  are answers, a 5xx is not.
 
 - A restart is enough when only the _profile_ changed: it re-runs the entrypoint and re-resolves
   bundles. **Hot reload does not re-resolve bundles.**

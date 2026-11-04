@@ -1330,6 +1330,7 @@ void test('a recreate that comes up dead is rolled back and logged', async () =>
     if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
   *"--format status="*)
     echo "WARNING: daemon deprecated flag" >&2
+    echo "state $*" >> "$LOG"
     if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=exited health=none image=${RUNNING_IMAGE}"; fi ;;
   "tag "*)
     echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
@@ -1362,6 +1363,12 @@ esac`,
     assert.match(log, /did not come up \(status=exited health=none\); rolling back/u)
     assert.match(log, new RegExp(`rolled back to ${RUNNING_IMAGE}; dsh is up`, 'u'))
     const recorded = await readFile(calls, 'utf8')
+    const reads = recorded.split(/\r?\n/u).filter(line => line.startsWith('state '))
+    assert.ok(reads.length > 0, 'the state was read')
+    for (const line of reads) {
+      assert.doesNotMatch(line, /WARNING/u)
+      assert.match(line, / (runner-id|rolled-back-id)$/u)
+    }
     assert.equal(recorded.match(/compose up/gu)?.length, 2)
     assert.match(recorded, new RegExp(`tag tag ${RUNNING_IMAGE} devockr/idsh:dev`, 'u'))
   } finally {

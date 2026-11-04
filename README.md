@@ -212,7 +212,7 @@ deliberately left alone: when compose fails but the container is unchanged and h
 restored, because the image already running is the one a rescue would use — a tag-and-up could only
 reproduce the same container. The compose file therefore has to declare a health check —
 `docker-compose.example.yml` carries the one this deployment uses (curl, the address dsh bound,
-`--noproxy`, and 401 accepted as proof the server answered). A container with no health status at
+`--noproxy`, and 200/401 accepted — a 5xx is not an answer that proves it is up). A container with no health status at
 all counts as failed, and the reason is written to the broker's `compose.log`.
 
 `docker exec -u app dsh gcb probe --repo owner/repo` answers the

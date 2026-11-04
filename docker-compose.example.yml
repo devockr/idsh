@@ -74,15 +74,17 @@ services:
     # handed the entrypoint loopback. It asks the address dsh bound (`DSH_BIND_HOST`), falling back
     # to the container's own hostname, which Docker resolves to its address. `--noproxy` is
     # load-bearing: the proxy variables above are in this environment, and without it the probe
-    # asks the proxy instead (a measured 502). `curl -f` fails on the boot page's 401, so 22 is
-    # accepted: an answer, token or not, is what proves the server is up.
+    # asks the proxy instead (a measured 502). The status is checked explicitly: 200 (an authorized
+    # page) and 401 (the boot page without a token) are answers, while a 5xx or no answer at all is
+    # not — `curl -f` would accept any 4xx/5xx, including a broken deployment's 500.
     healthcheck:
       test:
         - CMD-SHELL
         - |-
           host="$${DSH_BIND_HOST:-$$(node -p "require('os').hostname()")}"
           case "$$host" in *:*) host="[$$host]" ;; esac
-          curl -fsS --noproxy "*" -o /dev/null "http://$$host:3080/" || [ $$? -eq 22 ]
+          code="$$(curl -sS --noproxy "*" -o /dev/null -w '%{http_code}' "http://$$host:3080/")" || exit 1
+          case "$$code" in 200|401) exit 0 ;; *) exit 1 ;; esac
       interval: 10s
       timeout: 5s
       retries: 3

@@ -711,7 +711,13 @@ async function recreatedContainerId(ctx: OpContext, deadline: number): Promise<s
   for (;;) {
     try {
       const id = (
-        await docker(ctx, ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container])
+        await docker(
+          ctx,
+          ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container],
+          'head',
+          // Parsed: a warning on stderr must not become part of the id it is used as.
+          { stdoutOnly: true },
+        )
       ).trim()
       if (id !== '') {
         return id
