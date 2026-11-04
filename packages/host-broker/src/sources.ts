@@ -752,8 +752,8 @@ interface SwapResult {
 interface VerifyOptions {
   /** A rescue has nothing newer to return to; it reports instead of rolling back. */
   readonly rollback?: boolean
-  /** The recorded target can predate the running container, so a failed no-op restores nothing. */
-  readonly recordedTargetMayBeStale?: boolean
+  /** A recreate restores the image already running, so a tag-and-up could only be a no-op. */
+  readonly skipNoopRestore?: boolean
 }
 
 async function verifyRecreate(
@@ -799,20 +799,19 @@ async function verifyRecreate(
   } else {
     why = `compose exited with ${String(composeExit ?? 'no status')}`
   }
-  // A recreate deploys whatever `:dev` holds now; the recorded target can predate the container
-  // that is already running. When compose failed and left that container untouched and healthy,
-  // restoring the older image would replace a working deployment with an older one — so there is
-  // nothing to rescue and nothing is touched. `deploy.main` records its target immediately before
-  // its own build, so its restoration stays as it was.
+  // `deploy.recreate` restores the image it found running, so when compose failed and left that
+  // container untouched and healthy, a tag-and-up could only re-create the same container: skip it
+  // and say so, rather than spend the rescue path on a no-op. `deploy.main` keeps the path: its
+  // target is recorded immediately before its own build, so restoring it is a real retag.
   if (
-    options.recordedTargetMayBeStale === true &&
+    options.skipNoopRestore === true &&
     composeExit !== 0 &&
     state?.ok === true &&
     id !== undefined &&
     id === before
   ) {
     await note(
-      `${ctx.container} is unchanged and healthy after ${why}; the recorded image predates it, so nothing is rolled back`,
+      `${ctx.container} is unchanged and healthy after ${why}; restoring the image already running would change nothing, so nothing is rolled back`,
     )
     return
   }
@@ -1919,7 +1918,7 @@ export const OPS: readonly OpDefinition[] = [
             ctx,
             checkout,
             { before, restoreTo, composeExit },
-            { recordedTargetMayBeStale: true },
+            { skipNoopRestore: true },
           )
         },
       }

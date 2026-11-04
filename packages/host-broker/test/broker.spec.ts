@@ -1788,7 +1788,7 @@ esac`,
     const log = await readFile(logPath, 'utf8')
     assert.match(
       log,
-      /dsh is unchanged and healthy after compose exited with 1; the recorded image predates it, so nothing is rolled back/u,
+      /dsh is unchanged and healthy after compose exited with 1; restoring the image already running would change nothing, so nothing is rolled back/u,
     )
     // The healthy deployment was not replaced by the older recorded image.
     assert.doesNotMatch(await readFile(calls, 'utf8').catch(() => ''), /tag /u)
