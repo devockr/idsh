@@ -1363,6 +1363,8 @@ esac`,
     assert.match(log, /did not come up \(status=exited health=none\); rolling back/u)
     assert.match(log, new RegExp(`rolled back to ${RUNNING_IMAGE}; dsh is up`, 'u'))
     const recorded = await readFile(calls, 'utf8')
+    // The whole log, not just the state lines: a warning that leaked anywhere is the bug.
+    assert.doesNotMatch(recorded, /WARNING/u)
     const reads = recorded.split(/\r?\n/u).filter(line => line.startsWith('state '))
     assert.ok(reads.length > 0, 'the state was read')
     for (const line of reads) {
