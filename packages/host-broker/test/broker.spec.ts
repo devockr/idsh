@@ -905,7 +905,7 @@ void test('deploy.versions reads the state and the versions inside the container
     [
       '#!/bin/sh',
       'case "$*" in',
-      '  "inspect --format {{.Id}} web") echo abc ;;',
+      '  "inspect --type container --format {{.Id}} web") echo abc ;;',
       '  "exec abc dsh --version") echo 0.2.1-rc.5 ;;',
       '  "exec abc gcb --version") echo 0.4.0 ;;',
       '  *) printf "%s\n" "$*" ;;',
@@ -926,7 +926,10 @@ void test('deploy.versions reads the state and the versions inside the container
   try {
     const answer = await connection.request({ op: 'deploy.versions', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    assert.match(answer.result ?? '', /^web: inspect --format .*image-id=\{\{\.Image\}\}.* abc$/mu)
+    assert.match(
+      answer.result ?? '',
+      /^web: inspect --type container --format .*image-id=\{\{\.Image\}\}.* abc$/mu,
+    )
     assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
     assert.match(answer.result ?? '', /^gcb: 0\.4\.0$/mu)
     // No argument is accepted; a missing binary is covered by the test below.
@@ -946,7 +949,7 @@ void test('deploy.versions names an unavailable probe and still answers', async 
     [
       '#!/bin/sh',
       'case "$*" in',
-      '  "inspect --format {{.Id}} web") echo abc ;;',
+      '  "inspect --type container --format {{.Id}} web") echo abc ;;',
       '  "exec abc dsh --version") echo 0.2.1-rc.5 ;;',
       '  "exec abc gcb --version") printf "no such file\nthe cause is here\n" >&2; exit 7 ;;',
       '  *) printf "%s\n" "$*" ;;',

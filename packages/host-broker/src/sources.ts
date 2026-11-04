@@ -1425,16 +1425,26 @@ export const OPS: readonly OpDefinition[] = [
       const budget = (): number => Math.max(1, Math.min(ctx.execTimeoutMs, remaining(deadline)))
       // The id, not the name: a recreate between these calls would otherwise answer with one
       // deployment's state and the next one's versions. Exec against the old id fails instead.
-      const id = (
-        await docker(ctx, ['inspect', '--format', '{{.Id}}', ctx.container], 'head', {
-          timeoutMs: budget(),
-        })
-      ).trim()
+      const id =
+        // `--type container`, like deploy.status: `docker inspect` otherwise resolves a name
+        // across object types, and an image or volume that shares it would answer instead.
+        (
+          await docker(
+            ctx,
+            ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container],
+            'head',
+            {
+              timeoutMs: budget(),
+            },
+          )
+        ).trim()
       // Labelled like deploy.status, so the two reads of the same container read alike.
       const state = await docker(
         ctx,
         [
           'inspect',
+          '--type',
+          'container',
           '--format',
           'status={{.State.Status}} image={{.Config.Image}} image-id={{.Image}} created={{.Created}}',
           id,
