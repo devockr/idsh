@@ -785,28 +785,23 @@ async function verifyRecreate(
   const id = await recreatedContainerId(ctx, deadline)
   const state = id === undefined ? undefined : await waitForState(ctx, id, deadline)
   const image = state?.image === '' ? undefined : state?.image
-  // Compose exiting 0 and a healthy container is the whole success condition. `id === before` is
-  // not a failure: a profile-only change, or shipping an unchanged main, leaves a bind-mounted
-  // container alone and compose says "Running" without doing anything — that is a no-op, and the
-  // container it left behind is exactly the one that should be reported as up.
-  if (
-    composeExit === 0 &&
-    state?.ok === true &&
-    (options.expectImage === undefined || image === options.expectImage)
-  ) {
+  // Compose exiting 0 and a healthy container is the success condition; `id === before` is not a
+  // failure, because a profile-only change (or re-shipping an unchanged main) leaves a bind-mounted
+  // container alone and compose says "Running" — the container it left behind is the one to report.
+  if (composeExit === 0 && state?.ok === true) {
+    if (options.expectImage !== undefined && image !== options.expectImage) {
+      // Healthy, but not the image the tag was supposed to put in front of us: the tag did not take
+      // effect (the compose file starts something else), and "is up" would hide that.
+      await note(
+        `${ctx.container} is up (${state.text}) but runs ${image ?? 'an image docker could not name'}, not ${options.expectImage}`,
+      )
+      return
+    }
     const unchanged = id !== undefined && id === before
     await note(
       unchanged
         ? `compose left ${ctx.container} in place (the container is unchanged); it is up (${state.text})`
         : `${ctx.container} is up (${state.text})`,
-    )
-    return
-  }
-  if (composeExit === 0 && state?.ok === true && options.expectImage !== undefined) {
-    // Healthy, but not the image the tag was supposed to put in front of us: the tag did not take
-    // effect (the compose file starts something else), and saying "is up" would hide that.
-    await note(
-      `${ctx.container} is up (${state.text}) but runs ${image ?? 'an image docker could not name'}, not ${options.expectImage}`,
     )
     return
   }
@@ -1892,7 +1887,7 @@ export const OPS: readonly OpDefinition[] = [
       const source = await resolveMainSource(ctx, deadline)
       const { previous, failed } = await buildInto(ctx, source, deadline, log)
       const before = await existingContainerId(ctx)
-      const expectImage = (await imageId(ctx, BUILD_IMAGE, remaining(deadline))) || undefined
+      const expectImage = (await imageId(ctx, BUILD_IMAGE, ctx.execTimeoutMs)) || undefined
       return {
         text:
           `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}` +
