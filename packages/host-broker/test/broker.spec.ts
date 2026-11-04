@@ -1798,6 +1798,62 @@ esac`,
   }
 })
 
+void test('a recreate restores the image that was running, not the older recorded one', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
+  const running = `sha256:${'c'.repeat(DIGEST_LENGTH)}`
+  const older = `sha256:${'d'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}" ;;
+  *"--format {{.Image}}"*) echo "${running}" ;;
+  *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy"; else echo "status=exited health=none"; fi ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  // The recorded file points at an image older than the one running now.
+  await writeFile(path.join(host.root, 'rollback'), `${older}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, new RegExp(`rolled back to ${running}; dsh is up`, 'u'))
+    const recorded = await readFile(calls, 'utf8')
+    assert.match(recorded, new RegExp(`tag tag ${running} devockr/idsh:dev`, 'u'))
+    assert.doesNotMatch(recorded, new RegExp(`tag tag ${older}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('deploy.recreate without a checkout is refused', async () => {
   const host = await fakeHost()
   const broker = await startBroker({

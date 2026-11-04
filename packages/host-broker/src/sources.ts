@@ -678,6 +678,23 @@ async function existingContainerId(ctx: OpContext): Promise<string | undefined> 
   }
 }
 
+/** The image the running container uses, when there is one. */
+async function existingContainerImage(ctx: OpContext): Promise<string | undefined> {
+  try {
+    const image = (
+      await docker(
+        ctx,
+        ['inspect', '--type', 'container', '--format', '{{.Image}}', ctx.container],
+        'head',
+        { stdoutOnly: true },
+      )
+    ).trim()
+    return IMAGE_REFERENCE.test(image) ? image : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** The id of the container compose just created, retried while it may still be appearing. */
 async function recreatedContainerId(ctx: OpContext, deadline: number): Promise<string | undefined> {
   for (;;) {
@@ -723,14 +740,30 @@ async function waitForState(
  * The read is pinned to the id compose created: a container replaced under us is not the one we
  * were asked to watch, so it counts as a failure to come up, not as a success.
  */
+interface SwapResult {
+  /** The container id before the swap, when there was one. */
+  readonly before?: string
+  /** The image that was running before the swap; a recreate restores exactly that. */
+  readonly restoreTo?: string
+  /** Compose's exit code, or undefined when the spawn itself failed. */
+  readonly composeExit?: number
+}
+
+interface VerifyOptions {
+  /** A rescue has nothing newer to return to; it reports instead of rolling back. */
+  readonly rollback?: boolean
+  /** The recorded target can predate the running container, so a failed no-op restores nothing. */
+  readonly recordedTargetMayBeStale?: boolean
+}
+
 async function verifyRecreate(
   ctx: OpContext,
   checkout: string,
-  before: string | undefined,
-  composeExit: number | undefined,
-  rollback = true,
-  recordedTargetMayBeStale = false,
+  swap: SwapResult,
+  options: VerifyOptions = {},
 ): Promise<void> {
+  const { before, restoreTo, composeExit } = swap
+  const rollback = options.rollback ?? true
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const note = async (line: string): Promise<void> => {
     await appendFile(logPath, `verify: ${line}\n`, { mode: FILE_MODE }).catch(() => null)
@@ -772,7 +805,7 @@ async function verifyRecreate(
   // nothing to rescue and nothing is touched. `deploy.main` records its target immediately before
   // its own build, so its restoration stays as it was.
   if (
-    recordedTargetMayBeStale &&
+    options.recordedTargetMayBeStale === true &&
     composeExit !== 0 &&
     state?.ok === true &&
     id !== undefined &&
@@ -789,12 +822,14 @@ async function verifyRecreate(
     return
   }
   await note(`${ctx.container} did not come up (${why}); rolling back`)
-  let previous: string
-  try {
-    previous = await rollbackTarget(ctx)
-  } catch (error) {
-    await note(`no rollback target (${messageOf(error)}); leaving the deployment as it is`)
-    return
+  let previous: string | undefined = restoreTo
+  if (previous === undefined) {
+    try {
+      previous = await rollbackTarget(ctx)
+    } catch (error) {
+      await note(`no rollback target (${messageOf(error)}); leaving the deployment as it is`)
+      return
+    }
   }
   let rollbackExit: number | undefined
   try {
@@ -1825,7 +1860,7 @@ export const OPS: readonly OpDefinition[] = [
           reapNote(failed),
         after: async () => {
           const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout, before, composeExit)
+          await verifyRecreate(ctx, checkout, { before, composeExit })
         },
       }
     },
@@ -1858,7 +1893,7 @@ export const OPS: readonly OpDefinition[] = [
             throw error
           }
           const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout, before, composeExit, false)
+          await verifyRecreate(ctx, checkout, { before, composeExit }, { rollback: false })
         },
       }
     },
@@ -1873,11 +1908,19 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, [])
       const checkout = requireCheckout(ctx)
       const before = await existingContainerId(ctx)
+      // The recorded rollback file belongs to the last build, not to what runs now: a recreate
+      // restores the image it found, and only falls back to the file on a first deploy.
+      const restoreTo = await existingContainerImage(ctx)
       return {
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
         after: async () => {
           const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
-          await verifyRecreate(ctx, checkout, before, composeExit, true, true)
+          await verifyRecreate(
+            ctx,
+            checkout,
+            { before, restoreTo, composeExit },
+            { recordedTargetMayBeStale: true },
+          )
         },
       }
     },
