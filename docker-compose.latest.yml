@@ -1,0 +1,17 @@
+# The deployment, from the long-lived `:latest` image instead of a locally built `:dev`. Merged
+# over `docker-compose.yml`, never instead of it: the base file carries the binds and the
+# environment, and this one only says which image to run and that nothing here builds.
+#
+# `!reset null` drops the base file's build stanza, so `compose up` cannot quietly build a
+# different thing than the image just built. Compose 2.24.4+ is required for `!reset`.
+#
+# `docker-compose.dev.yml` is where the credential broker's image lives, so a `:latest` deployment
+# has to name one too: the local `code-vaults/gcb-host:dev` this checkout builds is what has no
+# published counterpart. Override it when the broker runs elsewhere.
+services:
+  dsh:
+    image: devockr/idsh:latest
+    build: !reset null
+  gcb:
+    image: code-vaults/gcb-host:dev
+    pull_policy: never

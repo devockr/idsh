@@ -130,7 +130,9 @@ live in the state directory, so the conversation survives, the process does not)
   image layers and logs what it did — read the log, don't assume.
 - Until the plugins are published the published image cannot be built at all, so local runs use
   `:dev` (built from `:base`, plugins from `packages/`) — which is also what "dogfood the source"
-  means here.
+  means here. `pnpm deploy:latest` builds the published image and recreates the deployment from
+  `docker-compose.latest.yml` — no dev overlay, so it cannot quietly deploy `:dev`; `--dry` stops
+  after resolving the config.
 - **A deployment must declare a health check.** After `compose up -d` the broker watches the
   container it created: success is compose exiting zero, that container `running` with
   `health=healthy`, and — when the operation knows it — running the image it was supposed to (the
@@ -240,9 +242,9 @@ Observe the running thing; do not reason from source.
   `image-pins.mts` and `types.d.ts`, and
   `sync-companions.mts` — the one script `entrypoint.sh` runs at boot, which the `Dockerfile`
   copies by name so that everything else here stays out of the image.
-- **`tools/dev/` is for local development only** — `deploy-dev.ts`, `ui-probe.mts` — nothing in
-  there runs in CI or ships. A directory of its own, rather than a per-file convention, because the
-  rule is who runs it, and that is a property of the whole set.
+- **`tools/dev/` is for local development only** — `deploy-dev.ts`, `deploy-latest.ts`,
+  `ui-probe.mts` — nothing in there runs in CI or ships. A directory of its own, rather than a
+  per-file convention, because the rule is who runs it, and that is a property of the whole set.
 
 ## Docs site
 

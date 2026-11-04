@@ -250,7 +250,10 @@ own in [`image/`](image/), a private package that only carries it, and a release
 the image bakes bumps it in one of its changesets — CI refuses a release where none does. When that
 version moves, the workflow builds the image and pushes it to `ghcr.io/devockr/idsh` and to
 `devockr/idsh` on Docker Hub as `:latest`, `:sha-<commit>` and `:<version>`, so a deployment can pull
-it instead of building. GHCR creates every new package **private**: it inherits the linked
+it instead of building. Building it locally is `pnpm deploy:latest` (`pnpm deploy:latest:dry` first): it
+builds the published image from `Dockerfile` and recreates the deployment from
+[`docker-compose.latest.yml`](docker-compose.latest.yml), which selects `:latest` and never builds;
+the build is strict, so it fails while a plugin it ships is unpublished. GHCR creates every new package **private**: it inherits the linked
 repository's _permissions_, not its visibility. So flip `idsh` to public once (package settings, then
 Danger Zone — it cannot be made private again), or pull with a token. Docker Hub needs neither: a
 repository there is public by default.
