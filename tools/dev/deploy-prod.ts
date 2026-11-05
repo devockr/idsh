@@ -140,14 +140,15 @@ for (const file of files) {
 }
 const hasBroker = files.includes('docker-compose.broker.yml')
 
-const pinned = process.env.IDSH_IMAGE ?? ''
-if (!build) {
-  if (pinned === '') {
-    die('IDSH_IMAGE is not set — pin it (e.g. ghcr.io/devockr/idsh:sha-<commit>) or pass --build')
+// `IDSH_IMAGE` is resolved through compose as well, so `.env` can hold it; `--build` is the one
+// mode where this tool owns the tag and the value has to be given to compose.
+let builtTag = ''
+if (build) {
+  const short = (await run('git', ['rev-parse', '--short', 'HEAD'])).trim()
+  if (short === '') {
+    die('git could not name the commit this checkout is at')
   }
-  if (!pinnedRef(pinned)) {
-    die(`IDSH_IMAGE ${pinned} names no immutable tag — use a tag other than :latest, or a digest`)
-  }
+  builtTag = `devockr/idsh:${short}`
 }
 
 const env = {
@@ -155,22 +156,11 @@ const env = {
   GID: String(process.getgid?.() ?? ''),
 }
 
-// `--build` tags by commit, so the run still names something immutable rather than `:latest`;
-// the deployment's own `IDSH_IMAGE` is replaced for this invocation only.
-let image = pinned
-if (build) {
-  const short = (await run('git', ['rev-parse', '--short', 'HEAD'])).trim()
-  if (short === '') {
-    die('git could not name the commit this checkout is at')
-  }
-  image = `devockr/idsh:${short}`
-}
-
 const composeEnv = {
   ...env,
-  IDSH_IMAGE: image,
-  // Passed only when the shell has it: leaving it out lets compose read the deployment's own
-  // `.env`, where the pin lives for the manual command and the broker's recreate alike.
+  // Only `--build` hands the image over: otherwise compose reads `.env`/`the shell`, so the pin is
+  // the deployment's rather than a value this tool copied into the environment.
+  ...(build ? { IDSH_IMAGE: builtTag } : {}),
   ...(process.env.GCB_IMAGE === undefined ? {} : { GCB_IMAGE: process.env.GCB_IMAGE }),
 }
 const composeWith = (list: readonly string[], args: string[]) =>
@@ -193,6 +183,13 @@ const raw = await compose(['config', '--format', 'json']).catch((error: unknown)
 )
 const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
+const image = build ? builtTag : (service.image ?? '')
+if (image === '') {
+  die('the dsh service names no image; set IDSH_IMAGE in the shell or in .env')
+}
+if (!pinnedRef(image)) {
+  die(`IDSH_IMAGE ${image} names no immutable tag — use a tag other than :latest, or a digest`)
+}
 // Resolved through compose, so the pin can live in the shell or in the deployment's `.env`.
 const brokerImage = resolved.services?.gcb?.image ?? ''
 if (hasBroker) {
@@ -204,11 +201,6 @@ if (hasBroker) {
       `GCB_IMAGE ${brokerImage} names no immutable tag — use a tag other than :latest, or a digest`,
     )
   }
-}
-if (service.image !== image) {
-  die(
-    `docker-compose.prod.yml must run IDSH_IMAGE; the resolved config says ${JSON.stringify(service.image)}`,
-  )
 }
 if (service.healthcheck?.test === undefined) {
   die('the deployment declares no health check; the verification after up would fail on it')

@@ -65,20 +65,23 @@ Markdown files are the source — there is nothing to keep in sync.
    (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
      && docker build --target host -t code-vaults/gcb-host:dev .)
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
-   echo 'GCB_IMAGE=code-vaults/gcb-host:dev' >> .env   # the broker image, pinned once
-   docker compose -f docker-compose.yml -f docker-compose.broker.yml \
-     -f docker-compose.dev.yml up -d --no-build
+   GCB_IMAGE=code-vaults/gcb-host:dev docker compose -f docker-compose.yml \
+     -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
    ```
 
    The copy is the base; `docker-compose.broker.yml` defines the credential broker
    (its config, key and `user.refresh` come from `~/.broker-host`, see the broker's
-   own README), and the channel overlay picks the images (`:dev` and
-   `code-vaults/gcb-host:dev` here; `docker-compose.prod.yml` is the pinned
-   production pair). **Running the broker in its container is the recommended
-   shape** — one definition, one lifecycle with the deployment, and the socket
-   shared through the state directory. A host-supervised broker is still supported:
-   drop the broker file — and with it the IPv6 network settings it carries — and
-   set `GIT_BROKER_SOCKET` at its socket instead.
+   own README), and the channel overlay picks the images (`:dev` here;
+   `docker-compose.prod.yml` is the pinned production pair). **Running the broker in
+   its container is the recommended shape** — one definition, one lifecycle with the
+   deployment, and the socket shared through the state directory. A host-supervised
+   broker is still supported: drop the broker file — and with it the IPv6 network
+   settings it carries — and set `GIT_BROKER_SOCKET` at its socket instead.
+
+   The dev command passes its broker image inline on purpose: **`.env` is where a
+   production deployment keeps both pins** (`IDSH_IMAGE` and `GCB_IMAGE`, see
+   `docker-compose.prod.yml`), and a production pin must not be mistaken for the dev
+   channel's image. `pnpm deploy:dev` supplies `code-vaults/gcb-host:dev` itself.
 
    `docker-compose.yml` itself is gitignored: it is the copy that carries your
    own hostnames, LAN addresses and proxy settings, which do not belong in a
@@ -268,10 +271,12 @@ own in [`image/`](image/), a private package that only carries it, and a release
 the image bakes bumps it in one of its changesets — CI refuses a release where none does. When that
 version moves, the workflow builds the image and pushes it to `ghcr.io/devockr/idsh` and to
 `devockr/idsh` on Docker Hub as `:latest`, `:sha-<commit>` and `:<version>`, so a deployment can pull
-it instead of building. Building it locally is `pnpm deploy:latest` (`pnpm deploy:latest:dry` first): it
-builds the published image from `Dockerfile` and recreates the deployment from
-[`docker-compose.prod.yml`](docker-compose.prod.yml), which selects the pinned images and never builds;
-the build is strict, so it fails while a plugin it ships is unpublished. GHCR creates every new package **private**: it inherits the linked
+it instead of building. `pnpm deploy:prod` (`pnpm deploy:prod:dry` first) deploys the pins from
+[`docker-compose.prod.yml`](docker-compose.prod.yml) — `IDSH_IMAGE` and `GCB_IMAGE`, read from
+the shell or the deployment's `.env` — pulling them and verifying the container it created runs
+that image and is healthy. `pnpm deploy:prod --build` builds `Dockerfile`'s final stage from this
+checkout instead, tags it by commit, and deploys that tag; the build is strict, so it fails while a
+plugin it ships is unpublished. GHCR creates every new package **private**: it inherits the linked
 repository's _permissions_, not its visibility. So flip `idsh` to public once (package settings, then
 Danger Zone — it cannot be made private again), or pull with a token. Docker Hub needs neither: a
 repository there is public by default.

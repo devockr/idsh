@@ -164,8 +164,9 @@ so that file is read for the manual command, for `pnpm deploy:prod` and for the 
 recreate alike, and it moves when the pin moves. A value in the broker's own environment wins over
 `.env`, so pinning it only there would let a bump in `.env` leave the broker's recreate on the
 older image; without a value at all the recreate fails at interpolation, with compose's own
-message in `compose.log`), and the plugin
-asks the person before calling it. `deploy.build` records the rollback target, and `deploy.rollback`
+message in `compose.log`). The broker's recreate always merges `docker-compose.dev.yml`, so it
+brings a deployment back to `:dev`: a production deployment is deployed by `pnpm deploy:prod`,
+not by this operation), and the plugin asks the person before calling it. `deploy.build` records the rollback target, and `deploy.rollback`
 uses the recreate path with that image; one deployment lock serializes the four. A recreate is
 acknowledged first and launched detached, so the answer arrives before the container is replaced;
 `<stateDir>/compose.log` records the outcome.
