@@ -64,9 +64,12 @@ Markdown files are the source — there is nothing to keep in sync.
    (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
      && docker build --target host -t code-vaults/gcb-host:dev .)
    pnpm dev    # builds :base and then :dev from this checkout
-   # no broker checkout? point the dev image at the published client instead, and skip the above:
+   # no broker checkout? use the published pair instead of building either image:
    #   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
    #     -t devockr/idsh:dev .
+   #   and below, deploy the broker from its release rather than the local build:
+   #   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:<tag> docker compose ... up -d --no-build
+   #   (its config/key still come from ~/.broker-host, see the broker's README)
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
    # the broker container needs its config and key in ~/.broker-host first:
    #   gcb init --mode sidecar --dir ~/.broker-host ...   (see the broker's README)
