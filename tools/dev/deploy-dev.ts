@@ -90,7 +90,18 @@ const docker = async (args: string[], extraEnv?: Record<string, string>): Promis
   return run(bin, args, extraEnv)
 }
 
-const files = ['docker-compose.yml', 'docker-compose.broker.yml', 'docker-compose.dev.yml']
+// A deployment that supervises the broker on the host has no broker overlay; the base and the
+// channel are the whole config then.
+const files = ['docker-compose.yml']
+if (
+  await fs.access(path.join(repo, 'docker-compose.broker.yml')).then(
+    () => true,
+    () => false,
+  )
+) {
+  files.push('docker-compose.broker.yml')
+}
+files.push('docker-compose.dev.yml')
 for (const file of files) {
   try {
     await fs.access(path.join(repo, file))

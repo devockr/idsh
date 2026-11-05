@@ -103,7 +103,8 @@ every service the config names. The broker's definition lives in `docker-compose
 by both channels; `docker-compose.dev.yml` and `docker-compose.prod.yml` only pick its image
 (`:dev` from that checkout; a pinned `sha-<commit>`/`<version>` for the production channel). It is one process per socket,
 so it replaces a standalone deployment rather than joining it — drop the overlay and `dsh`'s
-`depends_on` entry when the broker is supervised elsewhere. The socket directory is the state directory's
+`depends_on` entry when the broker is supervised elsewhere; that also drops the IPv6
+`networks:` settings the overlay carries, so such a deployment keeps IPv4 or supplies its own. The socket directory is the state directory's
 `git-broker`; the deployment directory is `~/.broker-host` unless `GCB_DEPLOY_DIR` says otherwise.
 
 A cached layer once left a browser-dependency set inside `:latest` that the Dockerfile no longer

@@ -38,7 +38,7 @@ Markdown files are the source — there is nothing to keep in sync.
 
 ## Requirements
 
-- Docker with BuildKit + Docker Compose v2
+- Docker with BuildKit, and Docker Compose **2.24.4+** — the channel overlays use `!reset`
 
 ## Getting started
 
@@ -61,14 +61,20 @@ Markdown files are the source — there is nothing to keep in sync.
    ```sh
    cp docker-compose.example.yml docker-compose.yml
    pnpm dev    # builds :base and then :dev from this checkout
+   # the broker's own images, from its checkout (client for the dev image, host for gcb)
+   (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
+     && docker build --target host -t code-vaults/gcb-host:dev .)
+   mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
    docker compose -f docker-compose.yml -f docker-compose.broker.yml \
      -f docker-compose.dev.yml up -d --no-build
    ```
 
-   The copy is the base: `docker-compose.broker.yml` defines the credential broker,
-   and the channel overlay picks the images (`:dev` + `code-vaults/gcb-host:dev`
-   here; `docker-compose.prod.yml` is the pinned production pair). A deployment that
-   supervises the broker on the host drops the broker file instead.
+   The copy is the base; `docker-compose.broker.yml` defines the credential broker
+   (its config, key and `user.refresh` come from `~/.broker-host`, see the broker's
+   own README), and the channel overlay picks the images (`:dev` and
+   `code-vaults/gcb-host:dev` here; `docker-compose.prod.yml` is the pinned
+   production pair). A deployment that supervises the broker on the host drops the
+   broker file — and with it the IPv6 network settings it carries — instead.
 
    `docker-compose.yml` itself is gitignored: it is the copy that carries your
    own hostnames, LAN addresses and proxy settings, which do not belong in a

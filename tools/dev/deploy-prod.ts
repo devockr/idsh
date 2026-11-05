@@ -115,7 +115,18 @@ if (!build && pinned === '') {
   die('IDSH_IMAGE is not set — pin it (e.g. ghcr.io/devockr/idsh:sha-<commit>) or pass --build')
 }
 
-const files = ['docker-compose.yml', 'docker-compose.broker.yml', 'docker-compose.prod.yml']
+// A deployment that supervises the broker on the host has no broker overlay; the base and the
+// channel are the whole config then.
+const files = ['docker-compose.yml']
+if (
+  await fs.access(path.join(repo, 'docker-compose.broker.yml')).then(
+    () => true,
+    () => false,
+  )
+) {
+  files.push('docker-compose.broker.yml')
+}
+files.push('docker-compose.prod.yml')
 for (const file of files) {
   try {
     await fs.access(path.join(repo, file))

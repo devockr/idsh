@@ -6,7 +6,9 @@
 # `ghcr.io/code-vaults/gcb-host:<tag>`. One broker serves the host, so this service replaces a
 # standalone one rather than joining it — two processes cannot bind the same socket path. The
 # deployment directory defaults to `~/.broker-host`; override `GCB_DEPLOY_DIR` when the config and
-# key live elsewhere, and drop this file when the broker is supervised somewhere else.
+# key live elsewhere. A deployment that supervises the broker on the host drops this file — and
+# with it the default network's IPv6 settings below, so such a deployment keeps IPv4 or supplies
+# its own `networks:` block.
 services:
   dsh:
     environment:
