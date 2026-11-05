@@ -10,9 +10,10 @@
 # with it the default network's IPv6 settings below, so such a deployment keeps IPv4 or supplies
 # its own `networks:` block.
 # A deployment that ran `gcb authorize` has a person token, and the broker reads it at
-# `/etc/git-cred-broker/user.refresh`; add this to the `gcb` service, beside the config and key
-# mounts, because the mount is per-deployment and an app-only one (tokens minted from the app) must
-# not have it:
+# `/etc/git-cred-broker/user.refresh`. Add this to the `gcb` service in the deployment's **own,
+# gitignored `docker-compose.yml`**, beside its config and key mounts — not here: this overlay is
+# shared, and the mount is per-deployment. An app-only deployment (tokens minted from the app) must
+# not have it at all:
 #
 #   - type: bind
 #     source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/user.refresh

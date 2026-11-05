@@ -70,7 +70,8 @@ Markdown files are the source — there is nothing to keep in sync.
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
    # the broker container needs its config and key in ~/.broker-host first:
    #   gcb init --mode sidecar --dir ~/.broker-host ...   (see the broker's README)
-   # after `gcb authorize`, add the user.refresh mount the broker overlay documents
+   # after `gcb authorize`, add the user.refresh mount to your own docker-compose.yml
+   # (the stanza is in the broker overlay's header)
    GCB_IMAGE=code-vaults/gcb-host:dev docker compose -f docker-compose.yml \
      -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
    ```
