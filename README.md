@@ -65,8 +65,8 @@ Markdown files are the source — there is nothing to keep in sync.
    (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
      && docker build --target host -t code-vaults/gcb-host:dev .)
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
-   docker compose -f docker-compose.yml -f docker-compose.broker.yml \
-     -f docker-compose.dev.yml up -d --no-build
+   GCB_IMAGE=code-vaults/gcb-host:dev docker compose -f docker-compose.yml \
+     -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
    ```
 
    The copy is the base; `docker-compose.broker.yml` defines the credential broker

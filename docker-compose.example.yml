@@ -13,8 +13,8 @@
 # `docker-compose.prod.yml` for pinned production tags. Merge base,
 # broker and one channel, in that order:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.broker.yml \
-#     -f docker-compose.dev.yml up -d --no-build
+#   GCB_IMAGE=code-vaults/gcb-host:dev docker compose -f docker-compose.yml \
+#     -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
 #
 # Running the broker in its container is the recommended shape; a deployment that
 # supervises it on the host skips the broker file and `dsh`'s socket variable, as

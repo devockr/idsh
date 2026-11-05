@@ -102,6 +102,7 @@ if (
   files.push('docker-compose.broker.yml')
 }
 files.push('docker-compose.dev.yml')
+const hasBroker = files.includes('docker-compose.broker.yml')
 for (const file of files) {
   try {
     await fs.access(path.join(repo, file))
@@ -158,6 +159,18 @@ const raw = await compose(['config', '--format', 'json']).catch((error: unknown)
 const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
 const image = service.image ?? 'devockr/idsh:dev'
+// The broker service lives in `docker-compose.broker.yml` now, so its image is not in this
+// channel's config to be checked by the generic loop below; dev still expects the local build.
+if (hasBroker) {
+  const broker = resolved.services?.gcb?.image ?? ''
+  if (broker !== '') {
+    try {
+      await docker(['image', 'inspect', broker])
+    } catch {
+      die(`service gcb: image ${broker} is not in this daemon; nothing was touched`)
+    }
+  }
+}
 console.log(`deploy:dev: image ${image}`)
 
 // 2) Pre-flight: create a throwaway container with exactly the mounts the config declares. A bind

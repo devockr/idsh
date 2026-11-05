@@ -8,8 +8,8 @@
 // image cannot be built yet because its plugins are not published. `GCB_IMAGE` is the operator's
 // in both modes: the broker's checkout is not this repository.
 //
-// `--dry` resolves the config, checks the images, the health check and the strict bind sources,
-// and stops. `--no-pull` skips step 1 for an image that is already local.
+// `--dry` resolves the config, checks the image *names*, the health check and the strict bind
+// sources, and stops — it neither pulls nor builds. `--no-pull` skips step 1 for an image that is already local.
 import { execFile, spawn } from 'node:child_process'
 import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
@@ -106,7 +106,10 @@ const resolveDocker = async (): Promise<string> => {
 const dockerBin = await resolveDocker()
 const docker = (args: string[], extraEnv?: Record<string, string>) => run(dockerBin, args, extraEnv)
 
-/** A reference that cannot move: an explicit tag other than `latest`, or a digest. */
+/**
+ * Not a moving reference: `:latest` is refused, and a tag or digest is required; whether the tag
+ * itself is immutable is still the operator's promise.
+ */
 const pinnedRef = (ref: string): boolean => {
   if (ref.includes('@sha256:')) {
     return true
@@ -145,7 +148,7 @@ if (hasBroker) {
     )
   }
   if (!pinnedRef(brokerImage)) {
-    die(`GCB_IMAGE ${brokerImage} is not pinned — use a sha-<commit> or version tag, or a digest`)
+    die(`GCB_IMAGE ${brokerImage} ends in :latest — name an immutable tag or a digest`)
   }
 }
 const pinned = process.env.IDSH_IMAGE ?? ''
@@ -154,7 +157,7 @@ if (!build) {
     die('IDSH_IMAGE is not set — pin it (e.g. ghcr.io/devockr/idsh:sha-<commit>) or pass --build')
   }
   if (!pinnedRef(pinned)) {
-    die(`IDSH_IMAGE ${pinned} is not pinned — use a sha-<commit> or version tag, or a digest`)
+    die(`IDSH_IMAGE ${pinned} ends in :latest — name an immutable tag or a digest`)
   }
 }
 
@@ -232,6 +235,11 @@ if (hasBroker) {
   console.log(`deploy:prod: gcb ${brokerImage}`)
 }
 
+if (dry) {
+  console.log('deploy:prod: --dry — the config resolves; nothing was pulled, built or recreated')
+  process.exit(0)
+}
+
 // The config resolved, so the build is worth paying for.
 if (build) {
   console.log(`deploy:prod: building ${image} from this checkout`)
@@ -242,16 +250,15 @@ if (build) {
   }
 }
 
-if (dry) {
-  console.log('deploy:prod: --dry — the config resolves; nothing was pulled, built or recreated')
-  process.exit(0)
-}
-
 // 1) The images. A pinned tag is already immutable, so pulling is about presence, not freshness.
 if (!build && !noPull) {
   console.log('deploy:prod: pulling the pinned images')
   try {
-    await compose(['pull'])
+    await runStreaming(
+      dockerBin,
+      ['compose', ...files.flatMap(file => ['-f', file]), 'pull'],
+      composeEnv,
+    )
   } catch (error) {
     die(
       `could not pull the pinned images:\n${stderrOf(error)}\n` +
@@ -269,7 +276,13 @@ try {
     '-d',
     '--no-build',
     '--force-recreate',
+    // A deployment that dropped the broker overlay must not keep the old broker container, which
+    // is exactly what would hold the socket the host broker is about to want.
+    '--remove-orphans',
     ...(noPull ? ['--pull', 'never'] : []),
+    // The service, on purpose: without one, `--force-recreate` would also tear down the broker
+    // and its socket on a deploy that changed nothing.
+    'dsh',
   ])
 } catch (error) {
   die(`the deployment did not come up:\n${stderrOf(error)}`)
