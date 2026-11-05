@@ -140,19 +140,6 @@ for (const file of files) {
 }
 const hasBroker = files.includes('docker-compose.broker.yml')
 
-const brokerImage = process.env.GCB_IMAGE ?? ''
-if (hasBroker) {
-  if (brokerImage === '') {
-    die(
-      'GCB_IMAGE is not set — pin the broker image, e.g. ghcr.io/code-vaults/gcb-host:sha-<commit>',
-    )
-  }
-  if (!pinnedRef(brokerImage)) {
-    die(
-      `GCB_IMAGE ${brokerImage} names no immutable tag — use a tag other than :latest, or a digest`,
-    )
-  }
-}
 const pinned = process.env.IDSH_IMAGE ?? ''
 if (!build) {
   if (pinned === '') {
@@ -179,7 +166,13 @@ if (build) {
   image = `devockr/idsh:${short}`
 }
 
-const composeEnv = { ...env, IDSH_IMAGE: image, GCB_IMAGE: brokerImage }
+const composeEnv = {
+  ...env,
+  IDSH_IMAGE: image,
+  // Passed only when the shell has it: leaving it out lets compose read the deployment's own
+  // `.env`, where the pin lives for the manual command and the broker's recreate alike.
+  ...(process.env.GCB_IMAGE === undefined ? {} : { GCB_IMAGE: process.env.GCB_IMAGE }),
+}
 const composeWith = (list: readonly string[], args: string[]) =>
   docker(['compose', ...list.flatMap(file => ['-f', file]), ...args], composeEnv)
 const compose = (args: string[]) => composeWith(files, args)
@@ -200,14 +193,21 @@ const raw = await compose(['config', '--format', 'json']).catch((error: unknown)
 )
 const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
+// Resolved through compose, so the pin can live in the shell or in the deployment's `.env`.
+const brokerImage = resolved.services?.gcb?.image ?? ''
+if (hasBroker) {
+  if (brokerImage === '') {
+    die('the broker service names no image; set GCB_IMAGE in the shell or in .env')
+  }
+  if (!pinnedRef(brokerImage)) {
+    die(
+      `GCB_IMAGE ${brokerImage} names no immutable tag — use a tag other than :latest, or a digest`,
+    )
+  }
+}
 if (service.image !== image) {
   die(
     `docker-compose.prod.yml must run IDSH_IMAGE; the resolved config says ${JSON.stringify(service.image)}`,
-  )
-}
-if (hasBroker && resolved.services?.gcb?.image !== brokerImage) {
-  die(
-    `docker-compose.broker.yml must run GCB_IMAGE; the resolved config says ${JSON.stringify(resolved.services?.gcb?.image)}`,
   )
 }
 if (service.healthcheck?.test === undefined) {
