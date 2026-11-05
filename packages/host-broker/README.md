@@ -158,7 +158,10 @@ path guard comes with the first declaration that does. The router operations are
 before it answers the verdict.
 `deploy.recreate` is the first destructive operation: it runs one fixed `docker compose` in
 `--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`, and
-`docker-compose.broker.yml` too when the credential broker runs in a container), and the plugin
+`docker-compose.broker.yml` too when the credential broker runs in a container, and the broker's
+environment must then carry `GCB_IMAGE` — the image that file names, which compose interpolates
+before it does anything; without it the recreate fails with compose's own message, recorded in
+`compose.log`), and the plugin
 asks the person before calling it. `deploy.build` records the rollback target, and `deploy.rollback`
 uses the recreate path with that image; one deployment lock serializes the four. A recreate is
 acknowledged first and launched detached, so the answer arrives before the container is replaced;

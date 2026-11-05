@@ -2085,6 +2085,57 @@ esac`,
   }
 })
 
+void test('the compose the broker spawns inherits its environment', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose "*) echo "compose-gcb=\${GCB_IMAGE:-unset}" >> "${calls}"; exit 1 ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(checkout, 'docker-compose.broker.yml'), 'services: {}\n')
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const previous = process.env['GCB_IMAGE']
+  process.env['GCB_IMAGE'] = 'ghcr.io/test/gcb:sha-x'
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    // The broker does not know the image; the deployment's environment has to, and compose gets it
+    // from the process the broker spawned.
+    await waitFor(async () =>
+      (await readFile(calls, 'utf8').catch(() => '')).includes(
+        'compose-gcb=ghcr.io/test/gcb:sha-x',
+      ),
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+    if (previous === undefined) {
+      delete process.env['GCB_IMAGE']
+    } else {
+      process.env['GCB_IMAGE'] = previous
+    }
+  }
+})
+
 void test('deploy.recreate without a checkout is refused', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
