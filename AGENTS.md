@@ -96,7 +96,8 @@ release. The npm pin therefore lives in the **published stage**, not in `base`: 
 image's parent, and an install there made every gcb bump invalidate the dev image's apt layer — the
 ten-minute one — for a version dev never uses. A gcb-only change now needs `docker build -f
 Dockerfile.dev -t devockr/idsh:dev .` and nothing else. That build needs the broker's client image
-locally — `docker build --target client -t code-vaults/gcb-client:dev .` in the broker's checkout —
+locally — `docker build --target client -t code-vaults/gcb-client:dev .` in the broker's checkout, or
+a published one through `--build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag>` —
 and the broker service needs its image too
 (`docker build --target host -t code-vaults/gcb-host:dev .`), because `deploy:dev` now pre-flights
 every service the config names. The broker's definition lives in `docker-compose.broker.yml`, shared
