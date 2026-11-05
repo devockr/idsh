@@ -2,14 +2,15 @@
 // Deploy the production pair: pinned images, no build, no moving tag.
 //
 // This is the deployment file's channel: `docker-compose.prod.yml` names `IDSH_IMAGE` and
-// `GCB_IMAGE`, and this script only drives it. In its default mode it pulls the pinned tags and
-// recreates the deployment from them; `--build` builds *this* checkout instead, tags it by commit,
-// and points `IDSH_IMAGE` at that tag for the run — the pre-release path, where the published
-// image cannot be built yet because its plugins are not published. `GCB_IMAGE` is the operator's
-// in both modes: the broker's checkout is not this repository.
+// `GCB_IMAGE`, and this script only drives it — pull the pinned tags, recreate, verify. It never
+// builds: the image it deploys is the one a release published, and a locally built one would not
+// be that release. Until the plugins are published there is no such image, and the pre-release
+// path is `pnpm deploy:dev`. `GCB_IMAGE` is the operator's in both channels: the broker's
+// checkout is not this repository.
 //
 // `--dry` resolves the config, checks the image *names*, the health check and the strict bind
-// sources, and stops — it neither pulls nor builds. `--no-pull` skips step 1 for an image that is already local.
+// sources, and stops — it neither pulls nor recreates. `--no-pull` skips step 1 for images that are
+// already local.
 import { execFile, spawn } from 'node:child_process'
 import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
@@ -19,9 +20,20 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 const repo = fileURLToPath(new URL('../../', import.meta.url))
-const dry = process.argv.includes('--dry')
-const build = process.argv.includes('--build')
-const noPull = process.argv.includes('--no-pull')
+const args = process.argv.slice(2)
+for (const arg of args) {
+  if (!['--dry', '--no-pull'].includes(arg)) {
+    console.error(
+      `deploy:prod: unknown option ${arg}` +
+        (arg === '--build'
+          ? ' — this tool never builds; the pre-release path is pnpm deploy:dev'
+          : ''),
+    )
+    process.exit(2)
+  }
+}
+const dry = args.includes('--dry')
+const noPull = args.includes('--no-pull')
 
 const die = (message: string): never => {
   console.error(`deploy:prod: ${message}`)
@@ -140,18 +152,6 @@ for (const file of files) {
 }
 const hasBroker = files.includes('docker-compose.broker.yml')
 
-// `IDSH_IMAGE` is resolved through compose as well, so `.env` can hold it; `--build` is the one
-// mode where this tool owns the tag and the value has to be given to compose.
-let builtTag = ''
-if (build) {
-  const short = (await run('git', ['rev-parse', '--short', 'HEAD'])).trim()
-  if (short === '') {
-    die('git could not name the commit this checkout is at')
-  }
-  const dirty = (await run('git', ['status', '--porcelain'])).trim() !== ''
-  builtTag = `devockr/idsh:${short}${dirty ? '-dirty' : ''}`
-}
-
 const env = {
   UID: String(process.getuid?.() ?? ''),
   GID: String(process.getgid?.() ?? ''),
@@ -159,9 +159,6 @@ const env = {
 
 const composeEnv = {
   ...env,
-  // Only `--build` hands the image over: otherwise compose reads `.env`/`the shell`, so the pin is
-  // the deployment's rather than a value this tool copied into the environment.
-  ...(build ? { IDSH_IMAGE: builtTag } : {}),
   ...(process.env.GCB_IMAGE === undefined ? {} : { GCB_IMAGE: process.env.GCB_IMAGE }),
 }
 const composeWith = (list: readonly string[], args: string[]) =>
@@ -184,12 +181,7 @@ const raw = await compose(['config', '--format', 'json']).catch((error: unknown)
 )
 const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
-const image = build ? builtTag : (service.image ?? '')
-if (build && service.image !== builtTag) {
-  die(
-    `docker-compose.prod.yml must run IDSH_IMAGE; the resolved config says ${JSON.stringify(service.image)}`,
-  )
-}
+const image = service.image ?? ''
 if (image === '') {
   die('the dsh service names no image; set IDSH_IMAGE in the shell or in .env')
 }
@@ -237,22 +229,12 @@ if (hasBroker) {
 }
 
 if (dry) {
-  console.log('deploy:prod: --dry — the config resolves; nothing was pulled, built or recreated')
+  console.log('deploy:prod: --dry — the config resolves; nothing was pulled or recreated')
   process.exit(0)
 }
 
-// The config resolved, so the build is worth paying for.
-if (build) {
-  console.log(`deploy:prod: building ${image} from this checkout`)
-  try {
-    await runStreaming(dockerBin, ['build', '-f', 'Dockerfile', '-t', image, '.'])
-  } catch (error) {
-    die(`the build failed; the running deployment was not touched:\n${stderrOf(error)}`)
-  }
-}
-
 // 1) The images. A pinned tag is already immutable, so pulling is about presence, not freshness.
-if (!build && !noPull) {
+if (!noPull) {
   console.log('deploy:prod: pulling the pinned images')
   try {
     await runStreaming(

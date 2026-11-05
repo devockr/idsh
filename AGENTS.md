@@ -138,9 +138,10 @@ live in the state directory, so the conversation survives, the process does not)
 - Until the plugins are published the published image cannot be built at all, so local runs use
   `:dev` (built from `:base`, plugins from `packages/`) — which is also what "dogfood the source"
   means here. `pnpm deploy:prod` drives `docker-compose.prod.yml`: it pulls the pinned
-  `IDSH_IMAGE`/`GCB_IMAGE` and recreates the deployment, verifying the image and health; `--build`
-  builds this checkout instead, tagged by commit; `--dry` stops after resolving the config. The
-  production file never names `:latest`.
+  `IDSH_IMAGE`/`GCB_IMAGE` and recreates the deployment, verifying the image and health — it
+  never builds, because the published stage installs its plugins strictly and a locally built
+  image is not the release. `--dry` stops after resolving the config. The production file never
+  names `:latest`.
 - **A deployment must declare a health check.** After `compose up -d` the broker watches the
   container it created: success is compose exiting zero, that container `running` with
   `health=healthy`, and — when the operation knows it — running the image it was supposed to (the

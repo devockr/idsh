@@ -68,13 +68,18 @@ Markdown files are the source — there is nothing to keep in sync.
    #   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
    #     -t devockr/idsh:dev .
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
+   # the broker container needs its config and key in ~/.broker-host first:
+   #   gcb init --mode sidecar --dir ~/.broker-host ...   (see the broker's README)
    GCB_IMAGE=code-vaults/gcb-host:dev docker compose -f docker-compose.yml \
      -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
    ```
 
    The copy is the base; `docker-compose.broker.yml` defines the credential broker
    (its config, key and `user.refresh` come from `~/.broker-host`, see the broker's
-   own README), and the channel overlay picks the images (`:dev` here;
+   own README). **A fresh checkout without that directory** can still deploy: run
+   `gcb init`/`gcb authorize` there once, or drop the broker file and supervise the
+   broker on the host — the file's own header says how. The channel overlay picks the
+   images (`:dev` here;
    `docker-compose.prod.yml` is the pinned production pair). **Running the broker in
    its container is the recommended shape** — one definition, one lifecycle with the
    deployment, and the socket shared through the state directory. A host-supervised
@@ -280,9 +285,9 @@ version moves, the workflow builds the image and pushes it to `ghcr.io/devockr/i
 it instead of building. `pnpm deploy:prod` (`pnpm deploy:prod:dry` first) deploys the pins from
 [`docker-compose.prod.yml`](docker-compose.prod.yml) — `IDSH_IMAGE` and `GCB_IMAGE`, read from
 the shell or the deployment's `.env` — pulling them and verifying the container it created runs
-that image and is healthy. `pnpm deploy:prod --build` builds `Dockerfile`'s final stage from this
-checkout instead, tags it by commit, and deploys that tag; the build is strict, so it fails while a
-plugin it ships is unpublished. GHCR creates every new package **private**: it inherits the linked
+that image and is healthy. It never builds: the image is the one a release published, and the
+published stage installs its plugins **strictly**, so it cannot exist while one of them is
+unpublished. Until they are, the path is `pnpm deploy:dev`, which builds from `packages/`. GHCR creates every new package **private**: it inherits the linked
 repository's _permissions_, not its visibility. So flip `idsh` to public once (package settings, then
 Danger Zone — it cannot be made private again), or pull with a token. Docker Hub needs neither: a
 repository there is public by default.
