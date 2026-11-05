@@ -7,6 +7,8 @@ node_modules
 # docker-compose.example.yml. Hostnames, LAN addresses and proxy settings in it
 # are not meant to be published.
 docker-compose.yml
+# Its backups hold the same machine specifics.
+*.bak
 # Local secrets per the README (PUID / PGID).
 .env
 # Never commit private keys that happen to land in the working tree.

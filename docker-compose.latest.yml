@@ -1,17 +1,19 @@
 # The deployment, from the long-lived `:latest` image instead of a locally built `:dev`. Merged
-# over `docker-compose.yml`, never instead of it: the base file carries the binds and the
-# environment, and this one only says which image to run and that nothing here builds.
+# over `docker-compose.yml`, never instead of it: the base file carries the binds, the environment
+# and every service but this one, and this overlay only says which image `dsh` runs and that
+# nothing here builds.
 #
 # `!reset null` drops the base file's build stanza, so `compose up` cannot quietly build a
-# different thing than the image just built. Compose 2.24.4+ is required for `!reset`.
+# different thing than the image just built, and `pull_policy: never` stops `up` from pulling the
+# published tag over it. Compose 2.24.4+ is required for `!reset`.
 #
-# `docker-compose.dev.yml` is where the credential broker's image lives, so a `:latest` deployment
-# has to name one too: the local `code-vaults/gcb-host:dev` this checkout builds is what has no
-# published counterpart. Override it when the broker runs elsewhere.
+# The credential broker is not this overlay's to name: the documented deployment runs it on the
+# host through the mounted socket, and a deployment that runs it in a container declares `gcb` in
+# its own base file — `ghcr.io/code-vaults/gcb-host:<latest|sha-…|version>` is the published image
+# (multi-arch, on GHCR), while `code-vaults/gcb-host:dev` in `docker-compose.dev.yml` is the copy
+# built from the broker's checkout for local development.
 services:
   dsh:
     image: devockr/idsh:latest
-    build: !reset null
-  gcb:
-    image: code-vaults/gcb-host:dev
     pull_policy: never
+    build: !reset null

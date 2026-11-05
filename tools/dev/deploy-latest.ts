@@ -10,7 +10,8 @@
 //
 // The published Dockerfile installs every plugin by name and strictly, so this build fails while a
 // plugin it ships is unpublished — that is the published image's contract, not a local mistake.
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { statSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,7 +38,8 @@ const run = async (cmd: string, args: string[], extraEnv: Record<string, string>
 
 const stderrOf = (error: unknown): string => {
   if (typeof error === 'object' && error !== null) {
-    if ('stderr' in error && typeof error.stderr === 'string') {
+    // `docker exec` reports failures with an empty stderr; a blank line is not a reason.
+    if ('stderr' in error && typeof error.stderr === 'string' && error.stderr.trim() !== '') {
       return error.stderr.trim()
     }
     if ('message' in error && typeof error.message === 'string') {
@@ -46,6 +48,28 @@ const stderrOf = (error: unknown): string => {
   }
   return String(error).trim()
 }
+
+/** Run with the terminal attached: a multi-minute build must not go silent, nor hit a 1 MiB cap. */
+const runStreaming = (cmd: string, args: string[], extraEnv: Record<string, string> = {}) =>
+  new Promise<void>((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd: repo,
+      env: { ...process.env, ...extraEnv },
+      stdio: 'inherit',
+    })
+    child.once('error', reject)
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(
+        new Error(
+          code === null ? `terminated by ${String(signal)}` : `exited with ${String(code)}`,
+        ),
+      )
+    })
+  })
 
 // docker is not on every PATH this runs under, so resolve it: $DOCKER, then PATH, then the usual
 // places — the same order `deploy-dev.ts` uses, for the same reason.
@@ -99,7 +123,17 @@ const compose = (args: string[]) =>
 
 // Resolve first: this is the deployment about to be created, not the one running now.
 interface Resolved {
-  services?: Record<string, { image?: string; container_name?: string }>
+  services?: Record<
+    string,
+    {
+      image?: string
+      container_name?: string
+      pull_policy?: string
+      healthcheck?: { test?: unknown }
+      build?: { args?: Record<string, string | null> }
+      volumes?: { type?: string; source?: string; bind?: { create_host_path?: boolean } }[]
+    }
+  >
 }
 const resolved = JSON.parse(await compose(['config', '--format', 'json'])) as Resolved
 const service = resolved.services?.dsh ?? {}
@@ -108,9 +142,31 @@ if (service.image !== IMAGE) {
     `docker-compose.latest.yml must select ${IMAGE}; the resolved config says ${JSON.stringify(service.image)}`,
   )
 }
-const container = service.container_name ?? 'dsh'
+if (service.pull_policy !== 'never') {
+  die('docker-compose.latest.yml must set pull_policy: never on dsh, or up would pull the tag away')
+}
+if (service.healthcheck?.test === undefined) {
+  die('the deployment declares no health check; the verification after up would fail on it')
+}
+// `up` removes the old container before it creates the new one, so a strict bind source that is
+// missing takes the deployment down. Check those now, while nothing is at stake.
+for (const [name, other] of Object.entries(resolved.services ?? {})) {
+  for (const mount of other.volumes ?? []) {
+    if (mount.type !== 'bind' || mount.bind?.create_host_path !== false) {
+      continue
+    }
+    const source = mount.source ?? ''
+    if (source === '') {
+      die(`service ${name}: a bind mount names no source`)
+    }
+    try {
+      statSync(source)
+    } catch {
+      die(`service ${name}: bind source ${source} does not exist; nothing was touched`)
+    }
+  }
+}
 console.log(`deploy:latest: image ${IMAGE}`)
-console.log(`deploy:latest: container ${container}`)
 
 if (dry) {
   console.log(
@@ -119,16 +175,17 @@ if (dry) {
   process.exit(0)
 }
 
-// 1) The image itself. `--build-arg NPM_REGISTRY` only when the shell sets it, so the Dockerfile's
-//    own default stands otherwise.
+// 1) The image itself. The registry comes from the resolved config, so a value set in `.env` or
+//    the shell follows Compose's own precedence instead of being read twice, differently.
+const registry = service.build?.args?.NPM_REGISTRY
 const buildArgs = ['build', '-f', 'Dockerfile', '-t', IMAGE]
-if (process.env.NPM_REGISTRY) {
-  buildArgs.push('--build-arg', `NPM_REGISTRY=${process.env.NPM_REGISTRY}`)
+if (typeof registry === 'string' && registry !== '') {
+  buildArgs.push('--build-arg', `NPM_REGISTRY=${registry}`)
 }
 buildArgs.push('.')
 console.log('deploy:latest: building the published image')
 try {
-  await docker(buildArgs)
+  await runStreaming(dockerBin, buildArgs)
 } catch (error) {
   die(`the build failed; the running deployment was not touched:\n${stderrOf(error)}`)
 }
@@ -142,22 +199,9 @@ try {
   die(`the deployment did not come up:\n${stderrOf(error)}`)
 }
 
-// 3) Say what is running, from inside the container rather than from the image: a recreate that
-//    silently kept the old container would still pass the build above.
-for (const line of [
-  ['dsh', '--version'],
-  ['gcb', '--version'],
-]) {
-  try {
-    const answer = await docker(['exec', container, ...line], env)
-    console.log(`deploy:latest: ${container}: ${line[0]} ${answer.trim()}`)
-  } catch (error) {
-    console.log(`deploy:latest: warning — could not read ${line[0]} — ${stderrOf(error)}`)
-  }
-}
-// 4) Prove it: compose exiting 0 is not enough — the container has to be running the image that
-//    was just built and its health check has to pass. A recreate that kept the old container would
-//    pass every check above; the broker's own verification makes the same two demands.
+// 3) Prove it: compose exiting 0 is not enough — the container compose created has to be running
+//    the image that was just built and its health check has to pass. A recreate that kept the old
+//    container would pass every check above; the broker's own verification makes the same demands.
 const expected = (await docker(['image', 'inspect', '--format', '{{.Id}}', IMAGE])).trim()
 const WAIT_MS = 180_000
 const POLL_MS = 2_000
@@ -166,18 +210,47 @@ const stateFormat =
 const deadline = Date.now() + WAIT_MS
 let seen = ''
 for (;;) {
-  seen = (await docker(['inspect', container, '--format', stateFormat])).trim()
+  // Ask compose for the container it created: a name guessed here would be nobody's container
+  // when the base file sets no container_name, and `inspect` on that exits non-zero.
+  let id = ''
+  try {
+    id = ((await compose(['ps', '-q', 'dsh'])).trim().split(/\r?\n/u)[0] ?? '').trim()
+  } catch {
+    id = ''
+  }
+  if (id === '') {
+    seen = 'no container'
+  } else {
+    try {
+      seen = (await docker(['inspect', id, '--format', stateFormat])).trim()
+    } catch (error) {
+      seen = `inspect failed: ${stderrOf(error)}`
+    }
+  }
   const [status, health, image] = seen.split(' ')
   if (status === 'running' && health === 'healthy' && image === expected) {
-    console.log(`deploy:latest: ${container}: running, healthy, ${image}`)
+    console.log(`deploy:latest: dsh: running, healthy, ${image}`)
     break
   }
   if (Date.now() >= deadline) {
     die(
       `the container did not prove itself within ${String(WAIT_MS / 1000)}s: ${seen}` +
         (image === expected ? '' : ` (image is not what was built: ${String(image)})`) +
-        (health === 'none' ? ' — the compose file declares no health check' : ''),
+        (health === 'none' ? ' — the compose file declares no health check' : '') +
+        ' — the previous container may be gone; fix the cause and re-run',
     )
   }
   await new Promise(resolve => setTimeout(resolve, POLL_MS))
+}
+
+// 4) Say what is running, from the container that just proved itself: a version read before the
+//    proof would describe a container that may no longer exist.
+for (const line of ['dsh', 'gcb'] as const) {
+  const args = ['exec', 'dsh', line, '--version']
+  try {
+    const answer = await docker(args, env)
+    console.log(`deploy:latest: dsh: ${line} ${answer.trim()}`)
+  } catch (error) {
+    console.log(`deploy:latest: warning — could not read ${line} — ${stderrOf(error)}`)
+  }
 }
