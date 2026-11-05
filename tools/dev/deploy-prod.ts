@@ -174,7 +174,7 @@ interface Resolved {
     string,
     {
       image?: string
-      healthcheck?: { test?: unknown }
+      healthcheck?: { test?: unknown; disable?: boolean }
       volumes?: { type?: string; source?: string; bind?: { create_host_path?: boolean } }[]
     }
   >
@@ -208,8 +208,10 @@ if (hasBroker) {
     )
   }
 }
-if (service.healthcheck?.test === undefined) {
-  die('the deployment declares no health check; the verification after up would fail on it')
+if (service.healthcheck?.test === undefined || service.healthcheck.disable === true) {
+  die(
+    'the deployment declares no health check (or disables it); the verification after up would fail on it',
+  )
 }
 // `up` removes the old container before it creates the new one, so a strict bind source that is
 // missing takes the deployment down. Check those now, while nothing is at stake.

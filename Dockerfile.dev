@@ -45,6 +45,13 @@ FROM ${BASE}
 # An ARG before FROM is only usable in the FROM line, so the registry has to be declared again.
 ARG NPM_REGISTRY=https://registry.npmmirror.com/
 
+# The broker's client image. The default is the local build the dev workflow makes
+# (`docker build --target client -t code-vaults/gcb-client:dev .` in the broker's checkout); a
+# user without that checkout can point it at a published one instead
+# (`--build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag>`), which is what makes the
+# dev image buildable from this repository alone.
+ARG GCB_CLIENT_IMAGE=code-vaults/gcb-client:dev
+
 # apt is by far the slowest step, and the default mirror measured 11.6KB/s here against 874KB/s
 # for the one below — the same reason NPM_REGISTRY defaults to a mirror. Override with
 # `--build-arg APT_MIRROR=…`; both the deb822 and the classic source layout are handled.
@@ -73,12 +80,12 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 # that lib/ is what dsh loads, a fresh checkout has none until it has run, so it is checked here
 # rather than discovered at runtime. `--chmod` is not decoration either — COPY takes the modes from
 # the build context, so a builder with a strict umask would ship the sources 0600 root:root.
-# The broker's client comes from its own checkout's dev image, not from npm: the dev overlay is
-# where a gcb change is exercised against idsh, and a published version would only ever show the
-# last release. `base` carries no client at all (the published stage installs it), so the copy is
+# The broker's client comes from its own checkout's dev image (or the published one a builder
+# names through GCB_CLIENT_IMAGE), not from npm: the dev overlay is where a gcb change is exercised
+# against idsh. `base` carries no client at all (the published stage installs it), so the copy is
 # the only one here; `/usr/local/bin/gcb` is created below and points into the copied package.
-COPY --from=code-vaults/gcb-client:dev /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-client
-COPY --from=code-vaults/gcb-client:dev /usr/local/lib/node_modules/gcb-core /usr/local/lib/node_modules/gcb-core
+COPY --from=${GCB_CLIENT_IMAGE} /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-client
+COPY --from=${GCB_CLIENT_IMAGE} /usr/local/lib/node_modules/gcb-core /usr/local/lib/node_modules/gcb-core
 RUN ln -sf ../lib/node_modules/gcb-client/bin/gcb.js /usr/local/bin/gcb && gcb --version
 
 COPY --chmod=755 packages/ /opt/dsh/packages/

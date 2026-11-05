@@ -64,6 +64,9 @@ Markdown files are the source — there is nothing to keep in sync.
    # the broker's own images, from its checkout (client for the dev image, host for gcb)
    (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
      && docker build --target host -t code-vaults/gcb-host:dev .)
+   # no broker checkout? point the dev image at the published client instead:
+   #   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
+   #     -t devockr/idsh:dev .
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
    GCB_IMAGE=code-vaults/gcb-host:dev docker compose -f docker-compose.yml \
      -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
