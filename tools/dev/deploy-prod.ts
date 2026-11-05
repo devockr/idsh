@@ -106,17 +106,18 @@ const resolveDocker = async (): Promise<string> => {
 const dockerBin = await resolveDocker()
 const docker = (args: string[], extraEnv?: Record<string, string>) => run(dockerBin, args, extraEnv)
 
-const brokerImage = process.env.GCB_IMAGE ?? ''
-if (brokerImage === '') {
-  die('GCB_IMAGE is not set — pin the broker image, e.g. ghcr.io/code-vaults/gcb-host:sha-<commit>')
-}
-const pinned = process.env.IDSH_IMAGE ?? ''
-if (!build && pinned === '') {
-  die('IDSH_IMAGE is not set — pin it (e.g. ghcr.io/devockr/idsh:sha-<commit>) or pass --build')
+/** A reference that cannot move: an explicit tag other than `latest`, or a digest. */
+const pinnedRef = (ref: string): boolean => {
+  if (ref.includes('@sha256:')) {
+    return true
+  }
+  const last = ref.slice(ref.lastIndexOf('/') + 1)
+  const colon = last.indexOf(':')
+  return colon > 0 && last.slice(colon + 1) !== 'latest'
 }
 
 // A deployment that supervises the broker on the host has no broker overlay; the base and the
-// channel are the whole config then.
+// channel are the whole config then, and there is no broker image to pin.
 const files = ['docker-compose.yml']
 if (
   await fs.access(path.join(repo, 'docker-compose.broker.yml')).then(
@@ -134,6 +135,28 @@ for (const file of files) {
     die(`${file} is missing next to tools/`)
   }
 }
+const hasBroker = files.includes('docker-compose.broker.yml')
+
+const brokerImage = process.env.GCB_IMAGE ?? ''
+if (hasBroker) {
+  if (brokerImage === '') {
+    die(
+      'GCB_IMAGE is not set — pin the broker image, e.g. ghcr.io/code-vaults/gcb-host:sha-<commit>',
+    )
+  }
+  if (!pinnedRef(brokerImage)) {
+    die(`GCB_IMAGE ${brokerImage} is not pinned — use a sha-<commit> or version tag, or a digest`)
+  }
+}
+const pinned = process.env.IDSH_IMAGE ?? ''
+if (!build) {
+  if (pinned === '') {
+    die('IDSH_IMAGE is not set — pin it (e.g. ghcr.io/devockr/idsh:sha-<commit>) or pass --build')
+  }
+  if (!pinnedRef(pinned)) {
+    die(`IDSH_IMAGE ${pinned} is not pinned — use a sha-<commit> or version tag, or a digest`)
+  }
+}
 
 const env = {
   UID: String(process.getuid?.() ?? ''),
@@ -149,12 +172,6 @@ if (build) {
     die('git could not name the commit this checkout is at')
   }
   image = `devockr/idsh:${short}`
-  console.log(`deploy:prod: building ${image} from this checkout`)
-  try {
-    await runStreaming(dockerBin, ['build', '-f', 'Dockerfile', '-t', image, '.'])
-  } catch (error) {
-    die(`the build failed; the running deployment was not touched:\n${stderrOf(error)}`)
-  }
 }
 
 const composeEnv = { ...env, IDSH_IMAGE: image, GCB_IMAGE: brokerImage }
@@ -184,9 +201,9 @@ if (service.image !== image) {
     `docker-compose.prod.yml must run IDSH_IMAGE; the resolved config says ${JSON.stringify(service.image)}`,
   )
 }
-if (resolved.services?.gcb?.image !== brokerImage) {
+if (hasBroker && resolved.services?.gcb?.image !== brokerImage) {
   die(
-    `docker-compose.prod.yml must run GCB_IMAGE; the resolved config says ${JSON.stringify(resolved.services?.gcb?.image)}`,
+    `docker-compose.broker.yml must run GCB_IMAGE; the resolved config says ${JSON.stringify(resolved.services?.gcb?.image)}`,
   )
 }
 if (service.healthcheck?.test === undefined) {
@@ -211,7 +228,19 @@ for (const [name, other] of Object.entries(resolved.services ?? {})) {
   }
 }
 console.log(`deploy:prod: dsh ${image}`)
-console.log(`deploy:prod: gcb ${brokerImage}`)
+if (hasBroker) {
+  console.log(`deploy:prod: gcb ${brokerImage}`)
+}
+
+// The config resolved, so the build is worth paying for.
+if (build) {
+  console.log(`deploy:prod: building ${image} from this checkout`)
+  try {
+    await runStreaming(dockerBin, ['build', '-f', 'Dockerfile', '-t', image, '.'])
+  } catch (error) {
+    die(`the build failed; the running deployment was not touched:\n${stderrOf(error)}`)
+  }
+}
 
 if (dry) {
   console.log('deploy:prod: --dry — the config resolves; nothing was pulled, built or recreated')
@@ -235,7 +264,13 @@ if (!build && !noPull) {
 //    above are present first; `--no-build` keeps it from building the reset `build` stanza.
 console.log('deploy:prod: recreating the deployment')
 try {
-  await compose(['up', '-d', '--no-build'])
+  await compose([
+    'up',
+    '-d',
+    '--no-build',
+    '--force-recreate',
+    ...(noPull ? ['--pull', 'never'] : []),
+  ])
 } catch (error) {
   die(`the deployment did not come up:\n${stderrOf(error)}`)
 }
