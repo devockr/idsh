@@ -155,9 +155,29 @@ for (const line of [
     console.log(`deploy:latest: warning — could not read ${line[0]} — ${stderrOf(error)}`)
   }
 }
-try {
-  const health = await docker(['inspect', container, '--format', '{{.State.Status}} {{.Image}}'])
-  console.log(`deploy:latest: ${container}: ${health.trim()}`)
-} catch (error) {
-  die(`the container did not come up:\n${stderrOf(error)}`)
+// 4) Prove it: compose exiting 0 is not enough — the container has to be running the image that
+//    was just built and its health check has to pass. A recreate that kept the old container would
+//    pass every check above; the broker's own verification makes the same two demands.
+const expected = (await docker(['image', 'inspect', '--format', '{{.Id}}', IMAGE])).trim()
+const WAIT_MS = 180_000
+const POLL_MS = 2_000
+const stateFormat =
+  '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.Image}}'
+const deadline = Date.now() + WAIT_MS
+let seen = ''
+for (;;) {
+  seen = (await docker(['inspect', container, '--format', stateFormat])).trim()
+  const [status, health, image] = seen.split(' ')
+  if (status === 'running' && health === 'healthy' && image === expected) {
+    console.log(`deploy:latest: ${container}: running, healthy, ${image}`)
+    break
+  }
+  if (Date.now() >= deadline) {
+    die(
+      `the container did not prove itself within ${String(WAIT_MS / 1000)}s: ${seen}` +
+        (image === expected ? '' : ` (image is not what was built: ${String(image)})`) +
+        (health === 'none' ? ' — the compose file declares no health check' : ''),
+    )
+  }
+  await new Promise(resolve => setTimeout(resolve, POLL_MS))
 }
