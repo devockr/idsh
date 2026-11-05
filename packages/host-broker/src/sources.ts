@@ -707,7 +707,11 @@ async function existingContainerImage(ctx: OpContext): Promise<string | undefine
 }
 
 /** The id of the container compose just created, retried while it may still be appearing. */
-async function recreatedContainerId(ctx: OpContext, deadline: number): Promise<string | undefined> {
+async function recreatedContainerId(
+  ctx: OpContext,
+  deadline: number,
+  retry = true,
+): Promise<string | undefined> {
   for (;;) {
     try {
       const id = (
@@ -725,7 +729,7 @@ async function recreatedContainerId(ctx: OpContext, deadline: number): Promise<s
     } catch {
       // Not there yet, or not there at all; the deadline decides which.
     }
-    if (Date.now() >= deadline) {
+    if (!retry || Date.now() >= deadline) {
       return undefined
     }
     await new Promise(resolve => setTimeout(resolve, RECREATE_POLL_MS))
@@ -788,7 +792,9 @@ async function verifyRecreate(
     await appendFile(logPath, `verify: ${line}\n`, { mode: FILE_MODE }).catch(() => null)
   }
   const deadline = Date.now() + RECREATE_WAIT_MS
-  const id = await recreatedContainerId(ctx, deadline)
+  // Compose failing means nothing new is coming: one look for a container it did create, not a
+  // window spent waiting for one it never will; the deploy lock is held for all of this.
+  const id = await recreatedContainerId(ctx, deadline, composeExit === 0)
   const state = id === undefined ? undefined : await waitForState(ctx, id, deadline)
   const image = state?.image === '' ? undefined : state?.image
   // Compose exiting 0 and a healthy container is the success condition; `id === before` is not a
@@ -886,12 +892,9 @@ async function verifyRecreate(
   const after = await waitForState(ctx, rolledBack, rolledBackDeadline)
   // `previous` can be a registry digest while the container reports its image id, so resolve the
   // target once and compare ids; no answer means fall back to what the file names.
-  const targetId =
-    (await imageId(
-      ctx,
-      previous,
-      Math.min(ctx.execTimeoutMs, Math.max(1, rolledBackDeadline - Date.now())),
-    )) || previous
+  // A fresh budget: the wait above may have used the whole window, and a nominal inspect is what
+  // decides whether a healthy rollback is a success.
+  const targetId = (await imageId(ctx, previous, ctx.execTimeoutMs)) || previous
   const afterImage = after?.image === '' ? undefined : after?.image
   if (after?.ok === true && (afterImage === previous || afterImage === targetId)) {
     await note(`rolled back to ${previous}; ${ctx.container} is up (${after.text})`)
