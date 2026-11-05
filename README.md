@@ -60,11 +60,11 @@ Markdown files are the source — there is nothing to keep in sync.
 
    ```sh
    cp docker-compose.example.yml docker-compose.yml
-   pnpm dev    # builds :base and then :dev from this checkout
-   # the broker's own images, from its checkout (client for the dev image, host for gcb)
+   # the broker's own images first: the dev image copies the client from one of them
    (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
      && docker build --target host -t code-vaults/gcb-host:dev .)
-   # no broker checkout? point the dev image at the published client instead:
+   pnpm dev    # builds :base and then :dev from this checkout
+   # no broker checkout? point the dev image at the published client instead, and skip the above:
    #   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
    #     -t devockr/idsh:dev .
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
