@@ -54,8 +54,10 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   the mount the setup is skipped and the deployment behaves as before — no helper, no credentials,
   no surprise.
 - **Machine specifics never get committed.** The real compose file is gitignored; what is tracked
-  is `docker-compose.example.yml` for the deployment and `docker-compose.dev.yml` for the browser
-  settings, which are a state-directory path and a public mirror and hold nothing personal.
+  is `docker-compose.example.yml` for the deployment, `docker-compose.broker.yml` for the broker,
+  and the two channel overlays (`docker-compose.dev.yml` for the browser settings,
+  `docker-compose.prod.yml` for the pinned images), which are a state-directory path, a
+  public mirror and image names and hold nothing personal.
 - **Each image has its own ignore file**: `.dockerignore` for `Dockerfile` (which copies
   `entrypoint.sh` and the one tool the entrypoint runs, `tools/sync-companions.mts`),
   `Dockerfile.dev.dockerignore` for the dev image (`packages/` and `tools/dev/`, plus the Dockerfile
@@ -94,13 +96,18 @@ release. The npm pin therefore lives in the **published stage**, not in `base`: 
 image's parent, and an install there made every gcb bump invalidate the dev image's apt layer — the
 ten-minute one — for a version dev never uses. A gcb-only change now needs `docker build -f
 Dockerfile.dev -t devockr/idsh:dev .` and nothing else. That build needs the broker's client image
-locally — `docker build --target client -t code-vaults/gcb-client:dev .` in the broker's checkout —
-and the overlay's `gcb` service needs its broker image too
+locally — `docker build --target client -t code-vaults/gcb-client:dev .` in the broker's checkout, or
+a published one through `--build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag>` —
+and the broker service needs its image too
 (`docker build --target host -t code-vaults/gcb-host:dev .`), because `deploy:dev` now pre-flights
-every service the config names. Its companion service in
-`docker-compose.dev.yml` (`gcb`, image `code-vaults/gcb-host:dev`) is the broker itself: one
-process per socket, so it replaces a standalone deployment rather than joining it — drop the service and `dsh`'s
-`depends_on` entry when the broker is supervised elsewhere. The socket directory is the state directory's
+every service the config names. The broker's definition lives in `docker-compose.broker.yml`, shared
+by both channels; `docker-compose.dev.yml` and `docker-compose.prod.yml` only pick `dsh`'s image
+(`:dev` from that checkout; a pinned `sha-<commit>`/`<version>` for the production channel), and
+`GCB_IMAGE` picks the broker's. **Containerised is the recommended shape**: one definition, one
+lifecycle with the deployment. It is one process per socket, so it replaces a standalone deployment
+rather than joining it — a host-supervised broker is still supported by dropping the overlay and
+`dsh`'s `depends_on` entry; that also drops the IPv6 `networks:` settings the overlay carries, so
+such a deployment keeps IPv4 or supplies its own. The socket directory is the state directory's
 `git-broker`; the deployment directory is `~/.broker-host` unless `GCB_DEPLOY_DIR` says otherwise.
 
 A cached layer once left a browser-dependency set inside `:latest` that the Dockerfile no longer
@@ -130,7 +137,11 @@ live in the state directory, so the conversation survives, the process does not)
   image layers and logs what it did — read the log, don't assume.
 - Until the plugins are published the published image cannot be built at all, so local runs use
   `:dev` (built from `:base`, plugins from `packages/`) — which is also what "dogfood the source"
-  means here.
+  means here. `pnpm deploy:prod` drives `docker-compose.prod.yml`: it pulls the pinned
+  `IDSH_IMAGE`/`GCB_IMAGE` and recreates the deployment, verifying the image and health — it
+  never builds, because the published stage installs its plugins strictly and a locally built
+  image is not the release. `--dry` stops after resolving the config. The production file never
+  names `:latest`.
 - **A deployment must declare a health check.** After `compose up -d` the broker watches the
   container it created: success is compose exiting zero, that container `running` with
   `health=healthy`, and — when the operation knows it — running the image it was supposed to (the
@@ -240,9 +251,9 @@ Observe the running thing; do not reason from source.
   `image-pins.mts` and `types.d.ts`, and
   `sync-companions.mts` — the one script `entrypoint.sh` runs at boot, which the `Dockerfile`
   copies by name so that everything else here stays out of the image.
-- **`tools/dev/` is for local development only** — `deploy-dev.ts`, `ui-probe.mts` — nothing in
-  there runs in CI or ships. A directory of its own, rather than a per-file convention, because the
-  rule is who runs it, and that is a property of the whole set.
+- **`tools/dev/` is for local development only** — `deploy-dev.ts`, `deploy-prod.ts`,
+  `ui-probe.mts` — nothing in there runs in CI or ships. A directory of its own, rather than a
+  per-file convention, because the rule is who runs it, and that is a property of the whole set.
 
 ## Docs site
 

@@ -90,7 +90,19 @@ const docker = async (args: string[], extraEnv?: Record<string, string>): Promis
   return run(bin, args, extraEnv)
 }
 
-const files = ['docker-compose.yml', 'docker-compose.dev.yml']
+// A deployment that supervises the broker on the host has no broker overlay; the base and the
+// channel are the whole config then.
+const files = ['docker-compose.yml']
+if (
+  await fs.access(path.join(repo, 'docker-compose.broker.yml')).then(
+    () => true,
+    () => false,
+  )
+) {
+  files.push('docker-compose.broker.yml')
+}
+files.push('docker-compose.dev.yml')
+const hasBroker = files.includes('docker-compose.broker.yml')
 for (const file of files) {
   try {
     await fs.access(path.join(repo, file))
@@ -102,6 +114,9 @@ for (const file of files) {
 const env = {
   UID: String(process.getuid?.() ?? ''),
   GID: String(process.getgid?.() ?? ''),
+  // The broker overlay's image reference; dev is where a gcb change meets idsh, so the local
+  // build is the default here and an operator can still override it.
+  GCB_IMAGE: process.env.GCB_IMAGE ?? 'code-vaults/gcb-host:dev',
 }
 const compose = (args: string[]): Promise<string> =>
   docker(['compose', ...files.flatMap(file => ['-f', file]), ...args], env)
@@ -138,9 +153,24 @@ interface Resolved {
   name?: string
   services?: Record<string, Service>
 }
-const resolved = JSON.parse(await compose(['config', '--format', 'json'])) as Resolved
+const raw = await compose(['config', '--format', 'json']).catch((error: unknown) =>
+  die(`the compose files do not resolve:\n${stderrOf(error)}`),
+)
+const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
 const image = service.image ?? 'devockr/idsh:dev'
+// The broker service lives in `docker-compose.broker.yml` now, so its image is not in this
+// channel's config to be checked by the generic loop below; dev still expects the local build.
+if (hasBroker) {
+  const broker = resolved.services?.gcb?.image ?? ''
+  if (broker !== '') {
+    try {
+      await docker(['image', 'inspect', broker])
+    } catch {
+      die(`service gcb: image ${broker} is not in this daemon; nothing was touched`)
+    }
+  }
+}
 console.log(`deploy:dev: image ${image}`)
 
 // 2) Pre-flight: create a throwaway container with exactly the mounts the config declares. A bind

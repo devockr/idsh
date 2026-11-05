@@ -1,0 +1,24 @@
+# The production deployment: pinned images, no build, no moving tag.
+#
+# Merged over `docker-compose.yml` and `docker-compose.broker.yml`, never instead of them: the base
+# file carries the binds and the environment, the broker overlay carries the broker, and this file
+# only says which images this channel runs.
+#
+# Production must not name `:latest`: both images are pinned to immutable tags, and `up` fails
+# before touching the deployment when one is missing rather than silently running an older or a
+# newer build. Use the tags a release publishes (`:sha-<commit>` or `:<version>`), for example
+#
+#   IDSH_IMAGE=ghcr.io/devockr/idsh:sha-<commit>
+#   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:sha-<commit>
+#
+# `pnpm deploy:prod` reads this file and deploys the pins; it never builds — a locally built image
+# would not be the release, and the published stage installs its plugins strictly. Until they are
+# published, `pnpm deploy:dev` is the path.
+#
+# `!reset null` drops the base file's build stanza, so `compose up` cannot quietly build a
+# different thing than the image the deployment names. Compose 2.24.4+ is required for `!reset`.
+services:
+  dsh:
+    image: ${IDSH_IMAGE:?set IDSH_IMAGE to a pinned tag, e.g. ghcr.io/devockr/idsh:sha-<commit>}
+    pull_policy: if_not_present
+    build: !reset null

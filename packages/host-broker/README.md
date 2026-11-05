@@ -157,8 +157,16 @@ path guard comes with the first declaration that does. The router operations are
 `ROADMAP.md`. Through the plugin, `run` is `confirm: true`, so a `dryRun: true` call still asks
 before it answers the verdict.
 `deploy.recreate` is the first destructive operation: it runs one fixed `docker compose` in
-`--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`), and the plugin
-asks the person before calling it. `deploy.build` records the rollback target, and `deploy.rollback`
+`--checkout` (which must hold `docker-compose.yml` and `docker-compose.dev.yml`, and
+`docker-compose.broker.yml` too when the credential broker runs in a container, and `GCB_IMAGE` must name the image that file
+runs. Put it in the deployment's `.env`: compose runs with the checkout as its working directory,
+so that file is read for the manual command, for `pnpm deploy:prod` and for the broker's detached
+recreate alike, and it moves when the pin moves. A value in the broker's own environment wins over
+`.env`, so pinning it only there would let a bump in `.env` leave the broker's recreate on the
+older image; without a value at all the recreate fails at interpolation, with compose's own
+message in `compose.log`). The broker's recreate always merges `docker-compose.dev.yml`, so it
+brings a deployment back to `:dev`: a production deployment is deployed by `pnpm deploy:prod`,
+not by this operation), and the plugin asks the person before calling it. `deploy.build` records the rollback target, and `deploy.rollback`
 uses the recreate path with that image; one deployment lock serializes the four. A recreate is
 acknowledged first and launched detached, so the answer arrives before the container is replaced;
 `<stateDir>/compose.log` records the outcome.

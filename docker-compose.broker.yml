@@ -1,0 +1,135 @@
+# The credential broker as a container — the definition every channel shares.
+#
+# Merged after the base file (which may add its own environment and mounts to `gcb`) and before a
+# channel overlay, which picks the image through `GCB_IMAGE`: `code-vaults/gcb-host:dev` built from
+# this checkout for development, or a pinned `ghcr.io/code-vaults/gcb-host:sha-<commit>`/`<version>`
+# for a long-lived deployment — never `:latest`, which moves under a running deployment. One broker serves the host, so this service replaces a
+# standalone one rather than joining it — two processes cannot bind the same socket path. The
+# deployment directory defaults to `~/.broker-host`; override `GCB_DEPLOY_DIR` when the config and
+# key live elsewhere. A deployment that supervises the broker on the host drops this file — and
+# with it the default network's IPv6 settings below, so such a deployment keeps IPv4 or supplies
+# its own `networks:` block.
+# A deployment that ran `gcb authorize` has a person token, and the broker reads it at
+# `/etc/git-cred-broker/user.refresh`. Add this to the `gcb` service in the deployment's **own,
+# gitignored `docker-compose.yml`**, beside its config and key mounts — not here: this overlay is
+# shared, and the mount is per-deployment. An app-only deployment (tokens minted from the app) must
+# not have it at all:
+#
+#   - type: bind
+#     source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/user.refresh
+#     target: /etc/git-cred-broker/user.refresh
+#     read_only: false       # the broker rotates the token on every exchange
+#     bind:
+#       create_host_path: false
+services:
+  dsh:
+    environment:
+      # The broker's socket lives inside the state directory, which the base file already mounts,
+      # so the path needs no extra volume: git in this container asks the host for a credential
+      # instead of holding one. Fixed, because the broker's socket directory is.
+      - GIT_BROKER_SOCKET=/home/app/.dsh/git-broker/broker.sock
+    # The broker's socket has to exist first: `entrypoint.sh` runs `gcb setup` when it does, and a
+    # boot that beat it would come up without a credential helper.
+    depends_on:
+      gcb:
+        condition: service_healthy
+
+  # The credential broker: `gcb compose`'s default name, and the shape it renders. Its image comes
+  # from the channel (`GCB_IMAGE`), so this file defines the service and the channel picks what runs. One broker serves the host, so this service replaces a standalone
+  # one rather than joining it — two processes cannot bind the same socket path. The deployment
+  # directory defaults to `~/.broker-host` because that is this overlay's own convention; override
+  # `GCB_DEPLOY_DIR` when the config and key live elsewhere, and drop this service **and `dsh`'s
+  # `depends_on` entry** when the broker is supervised somewhere else — compose refuses a dependency
+  # on a service that is not defined.
+  gcb:
+    # The channel supplies the value: `code-vaults/gcb-host:dev` for development, a pinned
+    # `sha-<commit>`/`<version>` for production. The reference lives here so that a deployment
+    # without this file has no `gcb` service at all.
+    image: ${GCB_IMAGE:?set GCB_IMAGE to the broker image this deployment runs}
+    container_name: gcb
+    restart: unless-stopped
+    # The socket is bound after the daemon starts and has read its config, so "started" is not
+    # enough: dsh waits for this instead, and the entrypoint's own check then sees the socket.
+    healthcheck:
+      test: ['CMD-SHELL', 'test -S /run/git-broker/broker.sock']
+      interval: 2s
+      retries: 15
+    # Same uid as dsh, deliberately: the socket is mode 660 owned by this user, so a broker running
+    # as anyone else would leave the helper unable to connect — the healthcheck would still pass
+    # and every push would fail.
+    user: '${UID:?}:${GID:?}'
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - http_proxy=${http_proxy:-${HTTP_PROXY:-}}
+      - https_proxy=${https_proxy:-${HTTPS_PROXY:-}}
+      - no_proxy=${no_proxy:-${NO_PROXY:-}}
+      - NODE_USE_ENV_PROXY=1
+      - GCB_PROXY=${GCB_PROXY-default}
+    command:
+      - sh
+      - -c
+      - |
+        case "${GCB_PROXY-default}" in
+          default) ;;
+          "") unset http_proxy https_proxy no_proxy NODE_USE_ENV_PROXY ;;
+          *) export http_proxy="$$GCB_PROXY" https_proxy="$$GCB_PROXY" no_proxy=localhost,127.0.0.1 NODE_USE_ENV_PROXY=1 ;;
+        esac
+        exec gcb daemon --config /etc/git-cred-broker/broker.config.yml
+    volumes:
+      # `create_host_path: false` is what makes a missing deployment directory fail the pre-flight
+      # instead of becoming an empty directory the daemon then refuses — compose creates a missing
+      # short-syntax bind source itself, and the symptom would be a healthcheck that never passes.
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/broker.config.yml
+        target: /etc/git-cred-broker/broker.config.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/app.pem
+        target: /etc/git-cred-broker/app.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/log
+        target: /var/log/git-cred-broker
+        bind:
+          create_host_path: false
+      # Created by hand, not by compose: a missing bind source becomes a root-owned directory, and
+      # both of these are written as the dsh uid — the broker would fail to bind its socket and to
+      # write its audit log. `create_host_path: false` makes the pre-flight say so before the
+      # deployment is removed, instead of a healthcheck that never passes.
+      - type: bind
+        # Not configurable on its own: dsh's GIT_BROKER_SOCKET is set to the path inside this
+        # directory, so a second override could mount the broker where dsh never looks.
+        source: ./.dsh/git-broker
+        target: /run/git-broker
+        bind:
+          create_host_path: false
+
+networks:
+  default:
+    # Docker gives a container IPv6 addresses only when its network has an IPv6 subnet: this daemon
+    # has no default IPv6 address pool (`docker info` lists none), and `enable_ipv6` alone fails
+    # with "could not find an available, non-overlapping IPv6 address pool". One explicit subnet is
+    # enough — Docker still allocates the IPv4 one automatically.
+    #
+    # The default is a placeholder: a ULA (RFC 4193, `fc00::/7`) is private and has nothing to do
+    # with your ISP prefix, so override `DSH_IPV6_SUBNET` in .env or your shell when it collides
+    # with a network or route on the host (check `docker network inspect` and `ip -6 route`); a
+    # second deployment on the same host collides on this default too, so give each its own.
+    # Nothing here matches the host's global prefix on purpose: the kernel's per-network
+    # `disable_ipv6` follows the network, so the image needs no change, and container traffic is
+    # routed/NATed by the host like any other private subnet. Remove the whole block to keep the
+    # network IPv4-only.
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: ${DSH_IPV6_SUBNET:-fd00:d5c0:0:1::/64}
