@@ -174,7 +174,10 @@ interface Resolved {
     }
   >
 }
-const resolved = JSON.parse(await compose(['config', '--format', 'json'])) as Resolved
+const raw = await compose(['config', '--format', 'json']).catch((error: unknown) =>
+  die(`the compose files do not resolve:\n${stderrOf(error)}`),
+)
+const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
 if (service.image !== image) {
   die(
@@ -248,14 +251,17 @@ const stateFormat =
   '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.Image}}'
 const deadline = Date.now() + WAIT_MS
 let seen = ''
+let containerId = ''
 for (;;) {
   // Ask compose for the container it created: a name guessed here would be nobody's container.
   let id = ''
   try {
-    id = ((await compose(['ps', '-q', 'dsh'])).trim().split(/\r?\n/u)[0] ?? '').trim()
+    // `-a`: a container that failed to boot still exists, and its state is the diagnosis.
+    id = ((await compose(['ps', '-a', '-q', 'dsh'])).trim().split(/\r?\n/u)[0] ?? '').trim()
   } catch {
     id = ''
   }
+  containerId = id
   if (id === '') {
     seen = 'no container'
   } else {
@@ -273,7 +279,9 @@ for (;;) {
   if (Date.now() >= deadline) {
     die(
       `the container did not prove itself within ${String(WAIT_MS / 1000)}s: ${seen}` +
-        (actual === expected ? '' : ` (image is not what was named: ${String(actual)})`) +
+        (actual === undefined || actual === '' || actual === expected
+          ? ''
+          : ` (image is not what was named: ${actual})`) +
         (health === 'none' ? ' — the compose file declares no health check' : '') +
         ' — the previous container may be gone; fix the cause and re-run',
     )
@@ -284,7 +292,7 @@ for (;;) {
 // 4) Say what is running, from the container that just proved itself.
 for (const line of ['dsh', 'gcb'] as const) {
   try {
-    const answer = await docker(['exec', 'dsh', line, '--version'], env)
+    const answer = await docker(['exec', containerId, line, '--version'], env)
     console.log(`deploy:prod: dsh: ${line} ${answer.trim()}`)
   } catch (error) {
     console.log(`deploy:prod: warning — could not read ${line} — ${stderrOf(error)}`)

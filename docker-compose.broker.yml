@@ -30,6 +30,10 @@ services:
   # `depends_on` entry** when the broker is supervised somewhere else — compose refuses a dependency
   # on a service that is not defined.
   gcb:
+    # The channel supplies the value: `code-vaults/gcb-host:dev` for development, a pinned
+    # `sha-<commit>`/`<version>` for production. The reference lives here so that a deployment
+    # without this file has no `gcb` service at all.
+    image: ${GCB_IMAGE:?set GCB_IMAGE to the broker image this deployment runs}
     container_name: gcb
     restart: unless-stopped
     # The socket is bound after the daemon starts and has read its config, so "started" is not

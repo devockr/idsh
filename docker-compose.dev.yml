@@ -21,8 +21,3 @@ services:
       # public npmmirror of the same builds — the host NPM_REGISTRY already defaults to in both
       # Dockerfiles. Point it elsewhere, or drop the line, if you prefer.
       - PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}
-  gcb:
-    # Built from the broker's checkout for local development, because dev is where a gcb change
-    # meets idsh: `docker build --target host -t code-vaults/gcb-host:dev .` there.
-    image: code-vaults/gcb-host:dev
-    pull_policy: never

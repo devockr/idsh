@@ -113,6 +113,9 @@ for (const file of files) {
 const env = {
   UID: String(process.getuid?.() ?? ''),
   GID: String(process.getgid?.() ?? ''),
+  // The broker overlay's image reference; dev is where a gcb change meets idsh, so the local
+  // build is the default here and an operator can still override it.
+  GCB_IMAGE: process.env.GCB_IMAGE ?? 'code-vaults/gcb-host:dev',
 }
 const compose = (args: string[]): Promise<string> =>
   docker(['compose', ...files.flatMap(file => ['-f', file]), ...args], env)
@@ -149,7 +152,10 @@ interface Resolved {
   name?: string
   services?: Record<string, Service>
 }
-const resolved = JSON.parse(await compose(['config', '--format', 'json'])) as Resolved
+const raw = await compose(['config', '--format', 'json']).catch((error: unknown) =>
+  die(`the compose files do not resolve:\n${stderrOf(error)}`),
+)
+const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
 const image = service.image ?? 'devockr/idsh:dev'
 console.log(`deploy:dev: image ${image}`)

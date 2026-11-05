@@ -21,6 +21,3 @@ services:
     image: ${IDSH_IMAGE:?set IDSH_IMAGE to a pinned tag, e.g. ghcr.io/devockr/idsh:sha-<commit>}
     pull_policy: if_not_present
     build: !reset null
-  gcb:
-    image: ${GCB_IMAGE:?set GCB_IMAGE to a pinned tag, e.g. ghcr.io/code-vaults/gcb-host:sha-<commit>}
-    pull_policy: if_not_present

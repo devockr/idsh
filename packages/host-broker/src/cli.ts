@@ -27,7 +27,8 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --ss <path>            The ss client net.sockets runs (default: the usual locations)
   --pnpm <path>          The pnpm client broker.update runs (default pnpm)
   --npm <path>           The npm client broker.update runs (default npm)
-  --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml;
+  --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml
+                          (plus docker-compose.broker.yml when the broker runs in a container);
                           also the source broker.update rebuilds from when the CLI runs inside it
   --gcb-checkout <dir>   The credential broker's checkout; needed with --gcb-compose
                           and --gcb-probe-repo to enable gcb.update
