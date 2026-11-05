@@ -56,29 +56,37 @@ Markdown files are the source — there is nothing to keep in sync.
    web UI's settings. It is kept in the state directory, so it survives a rebuild and never reaches
    the image or the process environment.
 
-2. Create your compose file from the template, then build and start:
+2. Create your compose file from the template, then pick **one** of the two channels.
 
    ```sh
    cp docker-compose.example.yml docker-compose.yml
-   # the broker's own images first: the dev image copies the client from one of them
-   (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
-     && docker build --target host -t code-vaults/gcb-host:dev .)
-   pnpm dev    # builds :base and then :dev from this checkout
-   # no broker checkout? use the published pair instead of building either image:
-   #   pnpm build                                    # packages/lib, which Dockerfile.dev checks
-   #   docker build --target base -t devockr/idsh:base .
-   #   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
-   #     -t devockr/idsh:dev .
-   #   and below, deploy the broker from its release rather than the local build:
-   #   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:<tag> docker compose \
-   #     -f docker-compose.yml -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
-   #   (its config/key still come from ~/.broker-host, see the broker's README)
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
    # the broker container needs its config and key in ~/.broker-host first:
    #   gcb init --mode sidecar --dir ~/.broker-host ...   (see the broker's README)
    # after `gcb authorize`, add the user.refresh mount to your own docker-compose.yml
    # (the stanza is in the broker overlay's header)
+   ```
+
+   **a. Development, from this checkout.** Both broker images are built locally, because the
+   dev image copies the client from one of them:
+
+   ```sh
+   (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
+     && docker build --target host -t code-vaults/gcb-host:dev .)
+   pnpm dev    # builds :base and then :dev from this checkout
    GCB_IMAGE=code-vaults/gcb-host:dev docker compose -f docker-compose.yml \
+     -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
+   ```
+
+   **b. Published images, no broker checkout.** Nothing is built from either repository; the
+   base image still has to be built once, because the dev image starts from it:
+
+   ```sh
+   pnpm build                                    # packages/lib, which Dockerfile.dev checks
+   docker build --target base -t devockr/idsh:base .
+   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
+     -t devockr/idsh:dev .
+   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:<tag> docker compose -f docker-compose.yml \
      -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
    ```
 
