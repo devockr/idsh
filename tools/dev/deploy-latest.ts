@@ -118,8 +118,9 @@ const env = {
   UID: String(process.getuid?.() ?? ''),
   GID: String(process.getgid?.() ?? ''),
 }
-const compose = (args: string[]) =>
-  docker(['compose', ...files.flatMap(file => ['-f', file]), ...args], env)
+const composeWith = (list: readonly string[], args: string[]) =>
+  docker(['compose', ...list.flatMap(file => ['-f', file]), ...args], env)
+const compose = (args: string[]) => composeWith(files, args)
 
 // Resolve first: this is the deployment about to be created, not the one running now.
 interface Resolved {
@@ -175,9 +176,16 @@ if (dry) {
   process.exit(0)
 }
 
-// 1) The image itself. The registry comes from the resolved config, so a value set in `.env` or
-//    the shell follows Compose's own precedence instead of being read twice, differently.
-const registry = service.build?.args?.NPM_REGISTRY
+// 1) The image itself. The registry is read from the config **before** the channel overlay resets
+//    `build`, so a value from `.env` or the shell follows Compose's own precedence; the overlay is
+//    what makes it invisible in the merged config above.
+const baseConfig = JSON.parse(
+  await composeWith(
+    ['docker-compose.yml', 'docker-compose.broker.yml'],
+    ['config', '--format', 'json'],
+  ),
+) as Resolved
+const registry = baseConfig.services?.dsh?.build?.args?.NPM_REGISTRY ?? process.env.NPM_REGISTRY
 const buildArgs = ['build', '-f', 'Dockerfile', '-t', IMAGE]
 if (typeof registry === 'string' && registry !== '') {
   buildArgs.push('--build-arg', `NPM_REGISTRY=${registry}`)
