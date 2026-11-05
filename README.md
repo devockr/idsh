@@ -78,10 +78,13 @@ Markdown files are the source — there is nothing to keep in sync.
    broker is still supported: drop the broker file — and with it the IPv6 network
    settings it carries — and set `GIT_BROKER_SOCKET` at its socket instead.
 
-   The dev command passes its broker image inline on purpose: **`.env` is where a
-   production deployment keeps both pins** (`IDSH_IMAGE` and `GCB_IMAGE`, see
-   `docker-compose.prod.yml`), and a production pin must not be mistaken for the dev
-   channel's image. `pnpm deploy:dev` supplies `code-vaults/gcb-host:dev` itself.
+   This command is the **dev channel**, which is why its broker image is inline: a
+   long-lived deployment pins both images in `.env` instead (`IDSH_IMAGE` and
+   `GCB_IMAGE`, see `docker-compose.prod.yml`), and that pin must not be mistaken
+   for the dev channel's image. `pnpm deploy:dev` passes
+   `code-vaults/gcb-host:dev` only when `GCB_IMAGE` is unset — an exported value
+   wins, so `unset GCB_IMAGE` (or set it to the dev image) if the shell carries a
+   production pin.
 
    `docker-compose.yml` itself is gitignored: it is the copy that carries your
    own hostnames, LAN addresses and proxy settings, which do not belong in a

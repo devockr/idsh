@@ -148,7 +148,8 @@ if (build) {
   if (short === '') {
     die('git could not name the commit this checkout is at')
   }
-  builtTag = `devockr/idsh:${short}`
+  const dirty = (await run('git', ['status', '--porcelain'])).trim() !== ''
+  builtTag = `devockr/idsh:${short}${dirty ? '-dirty' : ''}`
 }
 
 const env = {
@@ -184,6 +185,11 @@ const raw = await compose(['config', '--format', 'json']).catch((error: unknown)
 const resolved = JSON.parse(raw) as Resolved
 const service = resolved.services?.dsh ?? {}
 const image = build ? builtTag : (service.image ?? '')
+if (build && service.image !== builtTag) {
+  die(
+    `docker-compose.prod.yml must run IDSH_IMAGE; the resolved config says ${JSON.stringify(service.image)}`,
+  )
+}
 if (image === '') {
   die('the dsh service names no image; set IDSH_IMAGE in the shell or in .env')
 }
@@ -322,7 +328,7 @@ for (;;) {
       `the container did not prove itself within ${String(WAIT_MS / 1000)}s: ${seen}` +
         (actual === undefined || actual === '' || actual === expected
           ? ''
-          : ` (image is not what was named: ${actual})`) +
+          : ` (runs ${actual}, not ${expected})`) +
         (health === 'none' ? ' — the compose file declares no health check' : '') +
         ' — the previous container may be gone; fix the cause and re-run',
     )
