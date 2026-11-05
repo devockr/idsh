@@ -148,7 +148,9 @@ if (hasBroker) {
     )
   }
   if (!pinnedRef(brokerImage)) {
-    die(`GCB_IMAGE ${brokerImage} ends in :latest — name an immutable tag or a digest`)
+    die(
+      `GCB_IMAGE ${brokerImage} names no immutable tag — use a tag other than :latest, or a digest`,
+    )
   }
 }
 const pinned = process.env.IDSH_IMAGE ?? ''
@@ -157,7 +159,7 @@ if (!build) {
     die('IDSH_IMAGE is not set — pin it (e.g. ghcr.io/devockr/idsh:sha-<commit>) or pass --build')
   }
   if (!pinnedRef(pinned)) {
-    die(`IDSH_IMAGE ${pinned} ends in :latest — name an immutable tag or a digest`)
+    die(`IDSH_IMAGE ${pinned} names no immutable tag — use a tag other than :latest, or a digest`)
   }
 }
 
@@ -189,7 +191,6 @@ interface Resolved {
     {
       image?: string
       healthcheck?: { test?: unknown }
-      build?: { args?: Record<string, string | null> }
       volumes?: { type?: string; source?: string; bind?: { create_host_path?: boolean } }[]
     }
   >
