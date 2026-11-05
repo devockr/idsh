@@ -10,7 +10,7 @@
 # This file is the base of a deployment, not the whole of one: the credential
 # broker's definition lives in `docker-compose.broker.yml`, and a channel overlay
 # picks the images — `docker-compose.dev.yml` for `:dev`/`code-vaults/gcb-host:dev`,
-# `docker-compose.latest.yml` for the long-lived `:latest` pair. Merge base,
+# `docker-compose.prod.yml` for pinned production tags. Merge base,
 # broker and one channel, in that order:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.broker.yml \

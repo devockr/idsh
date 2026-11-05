@@ -67,7 +67,7 @@ Markdown files are the source — there is nothing to keep in sync.
 
    The copy is the base: `docker-compose.broker.yml` defines the credential broker,
    and the channel overlay picks the images (`:dev` + `code-vaults/gcb-host:dev`
-   here; `docker-compose.latest.yml` is the `:latest` pair). A deployment that
+   here; `docker-compose.prod.yml` is the pinned production pair). A deployment that
    supervises the broker on the host drops the broker file instead.
 
    `docker-compose.yml` itself is gitignored: it is the copy that carries your
@@ -260,7 +260,7 @@ version moves, the workflow builds the image and pushes it to `ghcr.io/devockr/i
 `devockr/idsh` on Docker Hub as `:latest`, `:sha-<commit>` and `:<version>`, so a deployment can pull
 it instead of building. Building it locally is `pnpm deploy:latest` (`pnpm deploy:latest:dry` first): it
 builds the published image from `Dockerfile` and recreates the deployment from
-[`docker-compose.latest.yml`](docker-compose.latest.yml), which selects `:latest` and never builds;
+[`docker-compose.prod.yml`](docker-compose.prod.yml), which selects the pinned images and never builds;
 the build is strict, so it fails while a plugin it ships is unpublished. GHCR creates every new package **private**: it inherits the linked
 repository's _permissions_, not its visibility. So flip `idsh` to public once (package settings, then
 Danger Zone — it cannot be made private again), or pull with a token. Docker Hub needs neither: a
