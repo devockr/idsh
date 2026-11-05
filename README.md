@@ -38,7 +38,9 @@ Markdown files are the source — there is nothing to keep in sync.
 
 ## Requirements
 
-- Docker with BuildKit, and Docker Compose **2.24.4+** — the channel overlays use `!reset`
+- Docker with BuildKit and Docker Compose **2.24.4+** (the channel overlays use `!reset`), plus
+  Node.js **≥24** and pnpm **12.16.1** — the pins in `package.json` — with `pnpm install --frozen-lockfile`
+  run once in the checkout.
 
 ## Getting started
 
@@ -56,21 +58,17 @@ Markdown files are the source — there is nothing to keep in sync.
    web UI's settings. It is kept in the state directory, so it survives a rebuild and never reaches
    the image or the process environment.
 
-2. Create your compose file from the template, then pick **one** of the two channels.
+2. Create your compose file from the template and start the development channel.
 
    ```sh
    cp docker-compose.example.yml docker-compose.yml
+   pnpm install --frozen-lockfile
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
    # the broker container needs its config and key in ~/.broker-host first:
    #   gcb init --mode sidecar --dir ~/.broker-host ...   (see the broker's README)
    # after `gcb authorize`, add the user.refresh mount to your own docker-compose.yml
    # (the stanza is in the broker overlay's header)
-   ```
-
-   **a. Development, from this checkout.** Both broker images are built locally, because the
-   dev image copies the client from one of them:
-
-   ```sh
+   # and its two images: the dev image copies the client from one of them
    (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
      && docker build --target host -t code-vaults/gcb-host:dev .)
    pnpm dev    # builds :base and then :dev from this checkout
@@ -78,17 +76,11 @@ Markdown files are the source — there is nothing to keep in sync.
      -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
    ```
 
-   **b. Published images, no broker checkout.** Nothing is built from either repository; the
-   base image still has to be built once, because the dev image starts from it:
-
-   ```sh
-   pnpm build                                    # packages/lib, which Dockerfile.dev checks
-   docker build --target base -t devockr/idsh:base .
-   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
-     -t devockr/idsh:dev .
-   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:<tag> docker compose -f docker-compose.yml \
-     -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
-   ```
+   That is the development channel. Without the broker checkout, `Dockerfile.dev` takes its client
+   from a published image instead (`--build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag>`),
+   and `GCB_IMAGE` can name a published broker; its config/key still come from `~/.broker-host`.
+   A long-lived deployment does not build at all: it runs the pinned images from
+   `docker-compose.prod.yml` — see `pnpm deploy:prod` below.
 
    The copy is the base; `docker-compose.broker.yml` defines the credential broker
    (its config, key and `user.refresh` come from `~/.broker-host`, see the broker's
