@@ -65,6 +65,31 @@ services:
       # credential helper.
       # - GIT_BROKER_SOCKET=/run/git-broker/broker.sock
       # - GIT_BROKER_REQUIRE=1
+    # Required by the broker's recreate: after `up -d` it watches the container it created and
+    # rolls back to the previous image when that container is not **healthy**. A container with no
+    # health status at all counts as failed, because a boot line proves nothing on its own — a
+    # container can print it and exit. Keep this stanza when you copy the file.
+    #
+    # The probe is deliberately not 127.0.0.1: that address is right only for a deployment that
+    # handed the entrypoint loopback. It asks the address dsh bound (`DSH_BIND_HOST`), falling back
+    # to the container's own hostname, which Docker resolves to its address. `--noproxy` is
+    # load-bearing: the proxy variables above are in this environment, and without it the probe
+    # asks the proxy instead (a measured 502). The status is checked explicitly: 200 (an authorized
+    # page), 401 (the boot page without a token) and any 3xx redirect are answers, while a 5xx or no
+    # answer at all is not. Accepting curl's exit 22 instead would count every response `curl -f`
+    # rejects — a broken deployment's 500 included — as a healthy one.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |-
+          host="$${DSH_BIND_HOST:-$$(node -p "require('os').hostname()")}"
+          case "$$host" in *:*) host="[$$host]" ;; esac
+          code="$$(curl -sS --noproxy "*" -o /dev/null -w '%{http_code}' "http://$$host:3080/")" || exit 1
+          case "$$code" in 200|401|3??) exit 0 ;; *) exit 1 ;; esac
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     ports:
       # Loopback only: put a reverse proxy in front, or widen this to '15080:3080' when the
       # port itself is what you publish.

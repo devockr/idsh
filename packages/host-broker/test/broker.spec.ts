@@ -72,6 +72,13 @@ async function waitFor(attempt: () => Promise<boolean>, deadlineMs = LOCK_WAIT_M
 // oxlint-disable-next-line no-magic-numbers -- a sha256 is 64 hex characters
 const ROLLBACK_TARGET = 'sha256:' + 'a'.repeat(64)
 
+/** A commit id is 40 hex characters; a sha256 digest is 64. */
+const SHA_LENGTH = 40
+const DIGEST_LENGTH = 64
+
+/** The image a recreate finds running in the tests below; it is its own rollback target. */
+const RUNNING_IMAGE = `sha256:${'e'.repeat(DIGEST_LENGTH)}`
+
 const roots: string[] = []
 
 after(async () => {
@@ -1301,6 +1308,734 @@ void test('deploy.recreate runs compose in the checkout and is marked confirm', 
   }
 })
 
+void test('a recreate that comes up dead is rolled back and logged', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const recovered = path.join(host.root, 'recovered')
+  const composed = path.join(host.root, 'composed')
+  // Compose "succeeds"; the first inspect says the container exited, and the tag flips a marker so
+  // the inspect after the rollback sees a running container.
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `LOG="${calls}"`,
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "$LOG"; : > "${composed}" ;;
+  *"--format {{.Image}}"*) echo "${RUNNING_IMAGE}" ;;
+  *"{{.Id}}"*)
+    echo "WARNING: Error loading config file" >&2
+    if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*)
+    echo "WARNING: daemon deprecated flag" >&2
+    echo "state $*" >> "$LOG"
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=exited health=none image=${RUNNING_IMAGE}"; fi ;;
+  "tag "*)
+    echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
+  *) echo "other $*" >> "$LOG" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /did not come up \(status=exited health=none\); rolling back/u)
+    assert.match(log, new RegExp(`rolled back to ${RUNNING_IMAGE}; dsh is up`, 'u'))
+    const recorded = await readFile(calls, 'utf8')
+    // The whole log, not just the state lines: a warning that leaked anywhere is the bug.
+    assert.doesNotMatch(recorded, /WARNING/u)
+    const reads = recorded.split(/\r?\n/u).filter(line => line.startsWith('state '))
+    assert.ok(reads.length > 0, 'the state was read')
+    for (const line of reads) {
+      assert.doesNotMatch(line, /WARNING/u)
+      assert.match(line, / (runner-id|rolled-back-id)$/u)
+    }
+    assert.equal(recorded.match(/compose up/gu)?.length, 2)
+    assert.match(recorded, new RegExp(`tag tag ${RUNNING_IMAGE} devockr/idsh:dev`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a recreate with no healthcheck is not healthy, so it rolls back', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
+  // Running, but the compose file declares no healthcheck: per the contract that is a failure.
+  const script = [
+    '#!/bin/sh',
+    `LOG="${calls}"`,
+    `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "$LOG"; : > "${composed}" ;;
+  *"--format {{.Image}}"*) echo "${RUNNING_IMAGE}" ;;
+  *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=running health=none image=${RUNNING_IMAGE}"; fi ;;
+  "tag "*) echo "tag $*" >> "$LOG"; : > "${recovered}" ;;
+esac`,
+  ].join('\n')
+  await writeFile(dockerPath, script, { mode: 0o755 })
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('no healthcheck'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      /did not come up \(status=running health=none — no healthcheck is declared in the compose file\); rolling back/u,
+    )
+    assert.match(await readFile(calls, 'utf8'), new RegExp(`tag tag ${RUNNING_IMAGE}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a recreate that is still starting is waited for, not failed', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const up = path.join(host.root, 'up')
+  const composed = path.join(host.root, 'composed')
+  const calls = path.join(host.root, 'calls.log')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}"; : > "${composed}" ;;
+  *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*)
+    if [ -f "${up}" ]; then echo "status=running health=healthy image=${RUNNING_IMAGE}"; else echo "status=running health=starting image=${RUNNING_IMAGE}"; : > "${up}"; fi ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () => (await readFile(logPath, 'utf8').catch(() => '')).includes('is up'))
+    const log = await readFile(logPath, 'utf8')
+    // The first answer was "starting": the poller waited, it did not fail or roll back.
+    assert.match(log, /is up \(status=running health=healthy\)/u)
+    assert.doesNotMatch(log, /rolling back/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.main verifies what it recreates and rolls back when it is dead', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  const calls = path.join(host.root, 'calls.log')
+  const recovered = path.join(host.root, 'recovered')
+  const composed = path.join(host.root, 'composed')
+  const sha = 'a'.repeat(SHA_LENGTH)
+  const previousImage = `sha256:${'b'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *ls-remote*) echo "${sha} refs/heads/main" ;;
+esac
+exit 0
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "run "*) exit 0 ;;
+  *"--format {{.Image}}"*)
+    echo "WARNING: Error loading config file" >&2
+    echo "${previousImage}" ;;
+  *"{{.Id}}"*)
+    echo "WARNING: Error loading config file" >&2
+    if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${previousImage}"; else echo "status=exited health=none image=${previousImage}"; fi ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+  "compose "*) echo "compose up" >> "${calls}"; : > "${composed}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.main', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /did not come up \(status=exited health=none\); rolling back/u)
+    assert.match(log, new RegExp(`rolled back to ${previousImage}; dsh is up`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a compose that fails is not a successful recreate, even if the container looks fine', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
+  const tried = path.join(host.root, 'tried')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}"
+    if [ -f "${tried}" ]; then exit 0; else : > "${tried}"; exit 1; fi ;;
+  *"--format {{.Image}}"*) echo "${RUNNING_IMAGE}" ;;
+  *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*) echo "status=running health=healthy image=${RUNNING_IMAGE}" ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('compose exited with 1'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /did not come up \(compose exited with 1\); rolling back/u)
+    // No direct-success line: the healthy container did not make the failed compose a success.
+    assert.doesNotMatch(log, /^verify: dsh is up /mu)
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    // The rollback's own compose succeeded, and its outcome is what gets reported: the image that
+    // was running before the failed recreate, not the older one in the recorded file.
+    assert.match(
+      await readFile(logPath, 'utf8'),
+      new RegExp(`rolled back to ${RUNNING_IMAGE}; dsh is up`, 'u'),
+    )
+    assert.match(await readFile(calls, 'utf8'), new RegExp(`tag tag ${RUNNING_IMAGE}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a no-op up that leaves the container alone is not a failure', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}" ;;
+  "image inspect "*) echo "${RUNNING_IMAGE}" ;;
+  *"{{.Id}}"*) echo "same-id" ;;
+  *"--format status="*) echo "status=running health=healthy image=${RUNNING_IMAGE}" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    // A bind-mount-only change (a profile) leaves the container alone and compose says Running:
+    // that is the documented reason to recreate, and it must not be answered with a rollback.
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('compose left'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /compose left dsh in place \(the container is unchanged\); it is up/u)
+    assert.doesNotMatch(log, /rolling back/u)
+    assert.doesNotMatch(await readFile(calls, 'utf8').catch(() => ''), /tag /u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a rollback whose compose fails is reported as a failure', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}"; exit 1 ;;
+  *"{{.Id}}"*) if [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*) echo "status=exited health=none image=${RUNNING_IMAGE}" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes("rollback's compose exited"),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /the rollback's compose exited with 1/u)
+    assert.doesNotMatch(log, /rolled back to .* is up/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a recreate that ends on another image says so', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
+  const other = `sha256:${'f'.repeat(DIGEST_LENGTH)}`
+  // The image read before the swap fails, so the recorded file is the target; after the rescue the
+  // container runs a different image, which is the only thing that actually says it was not restored.
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}" ;;
+  *"--format {{.Image}}"*) if [ -f "${composed}" ]; then echo "${other}"; fi ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${other}"; else echo "status=running health=unhealthy image=${other}"; fi ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('but the deployment runs'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      new RegExp(`rolled back to ${ROLLBACK_TARGET}, but the deployment runs ${other}`, 'u'),
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a failed compose that left the running container alone restores nothing', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  // The recorded target predates the running container; compose fails without touching it.
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}"; exit 1 ;;
+  *"{{.Id}}"*) echo "same-id" ;;
+  *"--format status="*) echo "status=running health=healthy image=${ROLLBACK_TARGET}" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('nothing is rolled back'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      /dsh is unchanged and healthy after compose exited with 1; restoring the image already running would change nothing, so nothing is rolled back/u,
+    )
+    // The healthy deployment was not replaced by the older recorded image.
+    assert.doesNotMatch(await readFile(calls, 'utf8').catch(() => ''), /tag /u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a recreate restores the image that was running, not the older recorded one', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
+  const running = `sha256:${'c'.repeat(DIGEST_LENGTH)}`
+  const older = `sha256:${'d'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}" ;;
+  *"--format {{.Image}}"*) echo "${running}" ;;
+  *"{{.Id}}"*) if [ -f "${recovered}" ]; then echo "rolled-back-id"; elif [ -f "${composed}" ]; then echo "runner-id"; else echo "old-id"; fi ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${running}"; else echo "status=exited health=none image=${running}"; fi ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  // The recorded file points at an image older than the one running now.
+  await writeFile(path.join(host.root, 'rollback'), `${older}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, new RegExp(`rolled back to ${running}; dsh is up`, 'u'))
+    const recorded = await readFile(calls, 'utf8')
+    assert.match(recorded, new RegExp(`tag tag ${running} devockr/idsh:dev`, 'u'))
+    assert.doesNotMatch(recorded, new RegExp(`tag tag ${older}`, 'u'))
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a rescue to a registry digest is a success, not a mismatch', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  const composed = path.join(host.root, 'composed')
+  const recovered = path.join(host.root, 'recovered')
+  // A pulled deployment records a registry digest, while the container reports its image id.
+  const digest = `ghcr.io/devockr/idsh@sha256:${'d'.repeat(DIGEST_LENGTH)}`
+  const imageId = `sha256:${'c'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    : > "${composed}"; echo "compose up" >> "${calls}" ;;
+  "image inspect "*) echo "${imageId}" ;;
+  *"--format {{.Image}}"*) if [ -f "${composed}" ]; then echo "${imageId}"; fi ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*)
+    if [ -f "${recovered}" ]; then echo "status=running health=healthy image=${imageId}"; else echo "status=exited health=none image=${imageId}"; fi ;;
+  "tag "*) echo "tag $*" >> "${calls}"; : > "${recovered}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${digest}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('rolled back to'),
+    )
+    assert.match(
+      await readFile(logPath, 'utf8'),
+      new RegExp(`rolled back to ${digest}; dsh is up`, 'u'),
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a rollback that leaves another image running is not called a success', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  // The compose file starts its own image: the tag moves, compose brings that image up healthy,
+  // and the deployment is not the target — which must not read as "rolled back".
+  const other = `sha256:${'f'.repeat(DIGEST_LENGTH)}`
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}" ;;
+  "image inspect "*) echo "${ROLLBACK_TARGET}" ;;
+  *"--format {{.Image}}"*) echo "${other}" ;;
+  *"{{.Id}}"*) echo "runner-id" ;;
+  *"--format status="*) echo "status=running health=healthy image=${other}" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.rollback', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes('but runs'),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(
+      log,
+      new RegExp(
+        `is up \\(status=running health=healthy\\) but runs ${other}, not ${ROLLBACK_TARGET}`,
+        'u',
+      ),
+    )
+    assert.doesNotMatch(log, /rolled back to .*; dsh is up/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('a failed compose does not spend the window waiting for a container', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'calls.log')
+  // Compose fails and no container exists: the id read must not retry for the whole window, since
+  // the deploy lock is held throughout.
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `case "$*" in
+  "compose -f docker-compose.yml -f docker-compose.dev.yml up -d --no-build")
+    echo "compose up" >> "${calls}"; exit 1 ;;
+  "image inspect "*) echo "${ROLLBACK_TARGET}" ;;
+  "tag "*) echo "tag $*" >> "${calls}" ;;
+esac`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'deploy.recreate', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const logPath = path.join(host.root, 'compose.log')
+    // The whole test's waitFor budget is 5 s: without the single attempt this took 180 s.
+    await waitFor(async () =>
+      (await readFile(logPath, 'utf8').catch(() => '')).includes("the rollback's compose exited"),
+    )
+    const log = await readFile(logPath, 'utf8')
+    assert.match(log, /did not come up \(compose exited with 1\); rolling back/u)
+    assert.match(log, /the rollback's compose exited with 1/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('deploy.recreate without a checkout is refused', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
@@ -1984,8 +2719,9 @@ esac
     dockerPath,
     `#!/bin/sh
 echo "$*" >> '${dockerLog}'
-case "$1" in
-  inspect) echo '${ROLLBACK_TARGET}' ;;
+case "$*" in
+  *"--format status="*) echo 'status=running health=healthy' ;;
+  inspect*) echo '${ROLLBACK_TARGET}' ;;
 esac
 `,
     { mode: 0o755 },
@@ -2777,8 +3513,9 @@ void test('a deployment in flight refuses a broker update', async () => {
   await writeFile(
     dockerPath,
     `#!/bin/sh
-case "$1" in
-  inspect) echo 'sha256:pre vious' ;;
+case "$*" in
+  *"--format status="*) echo 'status=running health=healthy' ;;
+  inspect*) echo 'sha256:pre vious' ;;
 esac
 `,
     { mode: 0o755 },

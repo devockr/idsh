@@ -203,6 +203,18 @@ The socket is owned by the broker's user and is not world-writable, so `PUID`/`P
 uid/gid the broker runs as — a directory ACL does not help, since access is checked on the socket
 itself.
 
+A recreate through the broker verifies what it created. Success needs compose to exit zero, the
+container it created to be `running` with `health=healthy`, and — when the operation knows it —
+that container to run the image it was supposed to: the built `:dev`, the current `:dev`, or a
+rollback's target. A non-zero compose is a failure even if a container looks fine. On failure it restores the image that was running — the recorded one only
+when nothing was — with `deploy.main` using the image recorded before its own build. One case is
+deliberately left alone: when compose fails but the container is unchanged and healthy, nothing is
+restored, because the image already running is the one a rescue would use — a tag-and-up could only
+reproduce the same container. The compose file therefore has to declare a health check —
+`docker-compose.example.yml` carries the one this deployment uses (curl, the address dsh bound,
+`--noproxy`, and 200/401/3xx accepted — a 5xx is not an answer that proves it is up). A container with no health status at
+all counts as failed, and the reason is written to the broker's `compose.log`.
+
 `docker exec -u app dsh gcb probe --repo owner/repo` answers the
 broker's decision — exit 0 allowed, 1 denied, 3 unreachable — with the credential reduced to a
 fingerprint, so its output is safe to share.

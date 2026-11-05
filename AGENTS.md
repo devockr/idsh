@@ -131,6 +131,20 @@ live in the state directory, so the conversation survives, the process does not)
 - Until the plugins are published the published image cannot be built at all, so local runs use
   `:dev` (built from `:base`, plugins from `packages/`) — which is also what "dogfood the source"
   means here.
+- **A deployment must declare a health check.** After `compose up -d` the broker watches the
+  container it created: success is compose exiting zero, that container `running` with
+  `health=healthy`, and — when the operation knows it — running the image it was supposed to (the
+  built `:dev`, the current `:dev`, or a rollback's target). A non-zero compose fails the recreate
+  even when a container looks fine, and a
+  container with no health status at all counts as failed, because a boot line proves nothing. On
+  failure it restores the image it found (the recorded one when nothing was running; `deploy.main`
+  uses the image recorded before its build), except when a failed compose left the container
+  unchanged and healthy — then nothing is restored, since a rescue would only reproduce it.
+  `docker-compose.example.yml` carries the working probe, including its three traps: the address
+  must be the one dsh bound (never `127.0.0.1`), `--noproxy` is required because the proxy
+  variables are in the container's environment, and the HTTP status is checked explicitly — 200/401/3xx
+  are answers, a 5xx is not.
+
 - A restart is enough when only the _profile_ changed: it re-runs the entrypoint and re-resolves
   bundles. **Hot reload does not re-resolve bundles.**
 - **Compose runs as the user who owns the deployment.** `~`-relative bind sources and

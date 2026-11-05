@@ -34,6 +34,8 @@ import {
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
+  RECREATE_POLL_MS,
+  RECREATE_WAIT_MS,
   TAIL_WINDOW_BYTES,
   VERSIONS_TIMEOUT_MS,
 } from './constants.ts'
@@ -554,7 +556,7 @@ async function composeDetached(
   ctx: OpContext,
   checkout: string,
   args: readonly string[],
-): Promise<void> {
+): Promise<number | undefined> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
   const log = await open(logPath, 'a', FILE_MODE)
   try {
@@ -598,17 +600,315 @@ async function composeDetached(
         mode: FILE_MODE,
       }).catch(() => null)
     }, COMPOSE_TIMEOUT_MS)
+    let exited: number | undefined
     try {
       await new Promise<void>(resolve => {
         child.once('error', () => resolve())
-        child.once('exit', () => resolve())
+        child.once('exit', code => {
+          exited = code ?? undefined
+          resolve()
+        })
       })
     } finally {
       clearTimeout(timer)
     }
+    return exited
   } finally {
     await log.close()
   }
+}
+
+/** Whether the container is up, and what docker says about it. */
+interface RecreateState {
+  readonly ok: boolean
+  /** Waiting longer cannot help: exited, dead, restarting, unhealthy, or no healthcheck. */
+  readonly terminal: boolean
+  readonly status: string
+  readonly health: string
+  /** The image id docker reports for the container. */
+  readonly image: string
+  readonly text: string
+}
+
+/** Ask docker about one container by id; a container mid-swap is not an error yet. */
+async function deploymentState(ctx: OpContext, id: string): Promise<RecreateState | undefined> {
+  try {
+    const text = await docker(
+      ctx,
+      [
+        'inspect',
+        '--format',
+        'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Image}}',
+        id,
+      ],
+      'head',
+      // Parsed, so a docker warning on stderr must not become part of the state.
+      { stdoutOnly: true },
+    )
+    const status = /status=(\S+)/u.exec(text)?.[1]
+    const health = /health=(\S+)/u.exec(text)?.[1] ?? 'none'
+    const image = /image=(\S+)/u.exec(text)?.[1] ?? ''
+    // A boot line proves nothing on its own — a container can print it and exit — so the check the
+    // compose file declares is what counts, and a container that declares none is not healthy.
+    const ok = status === 'running' && health === 'healthy'
+    // Docker's own verdict is the fastest signal there is: a crash loop or a failed check is not
+    // going to fix itself inside the window.
+    const terminal =
+      status === 'exited' ||
+      status === 'dead' ||
+      status === 'restarting' ||
+      (status === 'running' && (health === 'none' || health === 'unhealthy'))
+    // The log line keeps the two facts a person reads; the image is carried as a field.
+    return {
+      ok,
+      terminal,
+      status: status ?? '',
+      health,
+      image,
+      text: `status=${status ?? 'unknown'} health=${health}`,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/** The id of the running container, when there is one; a first deploy has none. */
+async function existingContainerId(ctx: OpContext): Promise<string | undefined> {
+  try {
+    const id = (
+      await docker(
+        ctx,
+        ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container],
+        'head',
+        { stdoutOnly: true },
+      )
+    ).trim()
+    return id === '' ? undefined : id
+  } catch {
+    return undefined
+  }
+}
+
+/** The image the running container uses, when there is one. */
+async function existingContainerImage(ctx: OpContext): Promise<string | undefined> {
+  try {
+    const image = (
+      await docker(
+        ctx,
+        ['inspect', '--type', 'container', '--format', '{{.Image}}', ctx.container],
+        'head',
+        { stdoutOnly: true },
+      )
+    ).trim()
+    return IMAGE_REFERENCE.test(image) ? image : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The id of the container compose just created, retried while it may still be appearing. */
+async function recreatedContainerId(
+  ctx: OpContext,
+  deadline: number,
+  retry = true,
+): Promise<string | undefined> {
+  for (;;) {
+    try {
+      const id = (
+        await docker(
+          ctx,
+          ['inspect', '--type', 'container', '--format', '{{.Id}}', ctx.container],
+          'head',
+          // Parsed: a warning on stderr must not become part of the id it is used as.
+          { stdoutOnly: true },
+        )
+      ).trim()
+      if (id !== '') {
+        return id
+      }
+    } catch {
+      // Not there yet, or not there at all; the deadline decides which.
+    }
+    if (!retry || Date.now() >= deadline) {
+      return undefined
+    }
+    await new Promise(resolve => setTimeout(resolve, RECREATE_POLL_MS))
+  }
+}
+
+/** Poll one container until it is healthy, terminal, or out of time. */
+async function waitForState(
+  ctx: OpContext,
+  id: string,
+  deadline: number,
+): Promise<RecreateState | undefined> {
+  let state = await deploymentState(ctx, id)
+  while (!(state?.ok ?? false) && state?.terminal !== true) {
+    if (Date.now() >= deadline) {
+      break
+    }
+    await new Promise(resolve => setTimeout(resolve, RECREATE_POLL_MS))
+    state = await deploymentState(ctx, id)
+  }
+  return state
+}
+
+/**
+ * Wait for the recreated deployment to prove itself, and roll it back when it does not.
+ *
+ * The caller's connection is already gone — the container it lives in was replaced — so the answer
+ * cannot report this: what happened goes to the compose log, where an operator looks after a swap.
+ * The read is pinned to the id compose created: a container replaced under us is not the one we
+ * were asked to watch, so it counts as a failure to come up, not as a success.
+ */
+interface SwapResult {
+  /** The container id before the swap, when there was one. */
+  readonly before?: string
+  /** The image that was running before the swap; a recreate restores exactly that. */
+  readonly restoreTo?: string
+  /** Compose's exit code, or undefined when the spawn itself failed. */
+  readonly composeExit?: number
+}
+
+interface VerifyOptions {
+  /** A rescue has nothing newer to return to; it reports instead of rolling back. */
+  readonly rollback?: boolean
+  /** A recreate restores the image already running, so a tag-and-up could only be a no-op. */
+  readonly skipNoopRestore?: boolean
+  /** The image id the deployment must run for this swap to count (a rollback's target). */
+  readonly expectImage?: string
+}
+
+async function verifyRecreate(
+  ctx: OpContext,
+  checkout: string,
+  swap: SwapResult,
+  options: VerifyOptions = {},
+): Promise<void> {
+  const { before, restoreTo, composeExit } = swap
+  const rollback = options.rollback ?? true
+  const logPath = path.join(ctx.stateDir, 'compose.log')
+  const note = async (line: string): Promise<void> => {
+    await appendFile(logPath, `verify: ${line}\n`, { mode: FILE_MODE }).catch(() => null)
+  }
+  const deadline = Date.now() + RECREATE_WAIT_MS
+  // Compose failing means nothing new is coming: one look for a container it did create, not a
+  // window spent waiting for one it never will; the deploy lock is held for all of this.
+  const id = await recreatedContainerId(ctx, deadline, composeExit === 0)
+  const state = id === undefined ? undefined : await waitForState(ctx, id, deadline)
+  const image = state?.image === '' ? undefined : state?.image
+  // Compose exiting 0 and a healthy container is the success condition; `id === before` is not a
+  // failure, because a profile-only change (or re-shipping an unchanged main) leaves a bind-mounted
+  // container alone and compose says "Running" — the container it left behind is the one to report.
+  if (composeExit === 0 && state?.ok === true) {
+    if (options.expectImage !== undefined && image !== options.expectImage) {
+      // Healthy, but not the image the tag was supposed to put in front of us: the tag did not take
+      // effect (the compose file starts something else), and "is up" would hide that.
+      await note(
+        `${ctx.container} is up (${state.text}) but runs ${image ?? 'an image docker could not name'}, not ${options.expectImage}`,
+      )
+      return
+    }
+    const unchanged = id !== undefined && id === before
+    await note(
+      unchanged
+        ? `compose left ${ctx.container} in place (the container is unchanged); it is up (${state.text})`
+        : `${ctx.container} is up (${state.text})`,
+    )
+    return
+  }
+  const missingHealth = state?.status === 'running' && state.health === 'none'
+  let why: string
+  if (composeExit === 0) {
+    if (id === undefined) {
+      why = 'no container appeared'
+    } else if (state === undefined) {
+      why = 'the container disappeared while it was watched'
+    } else if (missingHealth) {
+      why = `${state.text} — no healthcheck is declared in the compose file`
+    } else {
+      why = state.text
+    }
+  } else {
+    why = `compose exited with ${String(composeExit ?? 'no status')}`
+  }
+  // `deploy.recreate` restores the image it found running, so when compose failed and left that
+  // container untouched and healthy, a tag-and-up could only re-create the same container: skip it
+  // and say so, rather than spend the rescue path on a no-op. `deploy.main` keeps the path: its
+  // target is recorded immediately before its own build, so restoring it is a real retag.
+  if (
+    options.skipNoopRestore === true &&
+    composeExit !== 0 &&
+    state?.ok === true &&
+    id !== undefined &&
+    id === before
+  ) {
+    await note(
+      `${ctx.container} is unchanged and healthy after ${why}; restoring the image already running would change nothing, so nothing is rolled back`,
+    )
+    return
+  }
+  if (!rollback) {
+    // A rollback has nothing newer to return to; say whether the rescue worked instead.
+    await note(`${ctx.container} did not come up (${why}); not rolling back any further`)
+    return
+  }
+  await note(`${ctx.container} did not come up (${why}); rolling back`)
+  let previous: string | undefined = restoreTo
+  if (previous === undefined) {
+    try {
+      previous = await rollbackTarget(ctx)
+    } catch (error) {
+      await note(`no rollback target (${messageOf(error)}); leaving the deployment as it is`)
+      return
+    }
+  }
+  let rollbackExit: number | undefined
+  try {
+    await docker(ctx, ['tag', previous, BUILD_IMAGE])
+    rollbackExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+  } catch (error) {
+    await note(`the rollback itself failed (${messageOf(error)}); the deployment needs a person`)
+    return
+  }
+  if (rollbackExit !== 0) {
+    // The rescue failed: compose's answer and the moved tag are what is known. What the container
+    // did after a failed `up` is not verified here, so the line does not claim it.
+    await note(
+      `the rollback's compose exited with ${String(rollbackExit ?? 'no status')}; ${BUILD_IMAGE} now names ${previous}`,
+    )
+    return
+  }
+  // The rescue worked when the deployment runs the target image again and is healthy. Whether that
+  // needed a new container is docker's business: a tag moved back to the image already running
+  // (a failed build-based deploy, or a recreate restoring what it found) restores the deployment
+  // without replacing anything.
+  const rolledBackDeadline = Date.now() + RECREATE_WAIT_MS
+  const rolledBack = await recreatedContainerId(ctx, rolledBackDeadline)
+  if (rolledBack === undefined) {
+    await note(`rolled back to ${previous}, but no container appeared`)
+    return
+  }
+  const after = await waitForState(ctx, rolledBack, rolledBackDeadline)
+  // `previous` can be a registry digest while the container reports its image id, so resolve the
+  // target once and compare ids; no answer means fall back to what the file names.
+  // A fresh budget: the wait above may have used the whole window, and a nominal inspect is what
+  // decides whether a healthy rollback is a success.
+  const targetId = (await imageId(ctx, previous, ctx.execTimeoutMs)) || previous
+  const afterImage = after?.image === '' ? undefined : after?.image
+  if (after?.ok === true && (afterImage === previous || afterImage === targetId)) {
+    await note(`rolled back to ${previous}; ${ctx.container} is up (${after.text})`)
+    return
+  }
+  if (afterImage === previous || afterImage === targetId) {
+    await note(
+      `rolled back to ${previous}, but ${ctx.container} still is not up (${after?.text ?? 'docker could not be asked'})`,
+    )
+    return
+  }
+  await note(
+    `rolled back to ${previous}, but the deployment runs ${afterImage ?? 'an image docker could not name'}`,
+  )
 }
 
 /** The files a build takes from main: everything that runs as root before the uid drops. */
@@ -1595,11 +1895,16 @@ export const OPS: readonly OpDefinition[] = [
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveMainSource(ctx, deadline)
       const { previous, failed } = await buildInto(ctx, source, deadline, log)
+      const before = await existingContainerId(ctx)
+      const expectImage = (await imageId(ctx, BUILD_IMAGE, ctx.execTimeoutMs)) || undefined
       return {
         text:
           `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; recreating from it; previous image ${previous}` +
           reapNote(failed),
-        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
+        after: async () => {
+          const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(ctx, checkout, { before, composeExit }, { expectImage })
+        },
       }
     },
   },
@@ -1614,7 +1919,12 @@ export const OPS: readonly OpDefinition[] = [
       const checkout = requireCheckout(ctx)
       const target = await rollbackTarget(ctx)
       // Read-only: a target docker no longer has must fail before anything is acknowledged.
-      await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target])
+      const targetId = (
+        await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', target], 'head', {
+          stdoutOnly: true,
+        })
+      ).trim()
+      const before = await existingContainerId(ctx)
       return {
         text: `rollback queued to ${target}; the session drops when the container is replaced`,
         after: async () => {
@@ -1629,7 +1939,13 @@ export const OPS: readonly OpDefinition[] = [
             ).catch(() => null)
             throw error
           }
-          await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(
+            ctx,
+            checkout,
+            { before, composeExit },
+            { rollback: false, expectImage: targetId === '' ? undefined : targetId },
+          )
         },
       }
     },
@@ -1640,13 +1956,26 @@ export const OPS: readonly OpDefinition[] = [
     confirm: true,
     serial: true,
     input: { type: 'object', properties: {}, additionalProperties: false },
-    run(args, ctx) {
+    async run(args, ctx) {
       rejectUnknown(args, [])
       const checkout = requireCheckout(ctx)
-      return Promise.resolve({
+      const before = await existingContainerId(ctx)
+      // The recorded rollback file belongs to the last build, not to what runs now: a recreate
+      // restores the image it found, and only falls back to the file on a first deploy.
+      const restoreTo = await existingContainerImage(ctx)
+      const expectImage = (await imageId(ctx, BUILD_IMAGE, ctx.execTimeoutMs)) || undefined
+      return {
         text: `recreate queued; the session drops when the container is replaced. compose log: ${path.join(ctx.stateDir, 'compose.log')}`,
-        after: () => composeDetached(ctx, checkout, ['up', '-d', '--no-build']),
-      })
+        after: async () => {
+          const composeExit = await composeDetached(ctx, checkout, ['up', '-d', '--no-build'])
+          await verifyRecreate(
+            ctx,
+            checkout,
+            { before, restoreTo, composeExit },
+            { skipNoopRestore: true, expectImage },
+          )
+        },
+      }
     },
   },
 
@@ -2071,28 +2400,25 @@ async function prepareBuildSource(
 /** Remember the image the container runs now, before a build retags `:dev`. */
 async function recordRollback(ctx: OpContext): Promise<string> {
   // RepoDigests lives on the image, not on the container: read the id first, then the image.
-  const idText = await docker(ctx, [
-    'inspect',
-    '--type',
-    'container',
-    '--format',
-    '{{.Image}}',
-    ctx.container,
-  ])
+  const idText = await docker(
+    ctx,
+    ['inspect', '--type', 'container', '--format', '{{.Image}}', ctx.container],
+    'head',
+    // Parsed into the rollback target: a docker warning on stderr must not become part of it.
+    { stdoutOnly: true },
+  )
   const id = idText.trim().split('\n')[0] ?? ''
   if (id === '') {
     throw new BrokerFault('unavailable', 'the container has no image to roll back to')
   }
   let previous = id
   try {
-    const digestsText = await docker(ctx, [
-      'inspect',
-      '--type',
-      'image',
-      '--format',
-      '{{json .RepoDigests}}',
-      id,
-    ])
+    const digestsText = await docker(
+      ctx,
+      ['inspect', '--type', 'image', '--format', '{{json .RepoDigests}}', id],
+      'head',
+      { stdoutOnly: true },
+    )
     const parsed: unknown = JSON.parse(digestsText.trim().split('\n')[0] ?? '[]')
     // A pulled image is one pull away; a local one only exists as its id.
     if (Array.isArray(parsed)) {
