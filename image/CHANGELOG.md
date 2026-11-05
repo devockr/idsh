@@ -1,5 +1,11 @@
 # @idsh/image
 
+## 0.2.0
+
+### Minor Changes
+
+- [#109](https://github.com/devockr/idsh/pull/109) [`7e19f30`](https://github.com/devockr/idsh/commit/7e19f3098172304ee8d9c504c4cbffd904355ace) Thanks [@renovate](https://github.com/apps/renovate)! - chore(deps): bump gcb-client v0.6.0
+
 ## 0.1.2
 
 ### Patch Changes
