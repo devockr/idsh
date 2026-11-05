@@ -9,6 +9,17 @@
 # key live elsewhere. A deployment that supervises the broker on the host drops this file — and
 # with it the default network's IPv6 settings below, so such a deployment keeps IPv4 or supplies
 # its own `networks:` block.
+# A deployment that ran `gcb authorize` has a person token, and the broker reads it at
+# `/etc/git-cred-broker/user.refresh`; add this to the `gcb` service, beside the config and key
+# mounts, because the mount is per-deployment and an app-only one (tokens minted from the app) must
+# not have it:
+#
+#   - type: bind
+#     source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/user.refresh
+#     target: /etc/git-cred-broker/user.refresh
+#     read_only: false       # the broker rotates the token on every exchange
+#     bind:
+#       create_host_path: false
 services:
   dsh:
     environment:

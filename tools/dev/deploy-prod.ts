@@ -62,7 +62,7 @@ const stderrOf = (error: unknown): string => {
   return String(error).trim()
 }
 
-/** Run with the terminal attached: a multi-minute build must not go silent, nor hit a 1 MiB cap. */
+/** Run with the terminal attached: a multi-gigabyte pull must not go silent, nor hit a 1 MiB cap. */
 const runStreaming = (cmd: string, args: string[], extraEnv: Record<string, string> = {}) =>
   new Promise<void>((resolve, reject) => {
     const child = spawn(cmd, args, {

@@ -11,8 +11,9 @@
 #   IDSH_IMAGE=ghcr.io/devockr/idsh:sha-<commit>
 #   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:sha-<commit>
 #
-# `docker-compose.prod.yml` is the file a deployment reads; `pnpm deploy:prod --build` builds this
-# checkout instead, tags it by commit, and points `IDSH_IMAGE` at that tag for one run.
+# `pnpm deploy:prod` reads this file and deploys the pins; it never builds — a locally built image
+# would not be the release, and the published stage installs its plugins strictly. Until they are
+# published, `pnpm deploy:dev` is the path.
 #
 # `!reset null` drops the base file's build stanza, so `compose up` cannot quietly build a
 # different thing than the image the deployment names. Compose 2.24.4+ is required for `!reset`.
