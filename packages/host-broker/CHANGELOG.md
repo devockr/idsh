@@ -19,10 +19,10 @@
   a container with no health status at all counts as failed, and a container that exits, dies,
   restarts in a loop or reports `unhealthy` ends the wait at once instead of burning the window.
   One that is merely starting is watched.
-  
+
   A no-op `up` is a success, not a failure: a profile-only change, or re-shipping an unchanged `main`,
   leaves a bind-mounted container alone and is reported as unchanged.
-  
+
   On failure the deployment is restored to the image it was running — `deploy.main` to the image
   recorded before its build, `deploy.recreate` to the image it found, and a first deploy to the
   recorded file — and the rescue counts when the deployment runs that image again and is healthy.
@@ -33,7 +33,7 @@
   `deploy.rollback` the image it was asked to restore — a compose file that starts something else is
   reported, not counted as a rescue. `deploy.rollback` verifies its own result the same way but cannot
   roll back further.
-  
+
   None of it can be reported to the caller (the session's container is what was replaced), so each
   outcome is written to `compose.log`, with parsed docker reads answering from stdout only so a
   wrapper's warning cannot become an id, a state or a rollback target. `docker-compose.example.yml`
