@@ -1,9 +1,9 @@
 # The credential broker as a container — the definition every channel shares.
 #
 # Merged after the base file (which may add its own environment and mounts to `gcb`) and before a
-# channel overlay, which picks the image: `code-vaults/gcb-host:dev` built from this checkout,
-# `code-vaults/gcb-host:latest` for the long-lived deployment, or a published
-# `ghcr.io/code-vaults/gcb-host:<tag>`. One broker serves the host, so this service replaces a
+# channel overlay, which picks the image through `GCB_IMAGE`: `code-vaults/gcb-host:dev` built from
+# this checkout for development, or a pinned `ghcr.io/code-vaults/gcb-host:sha-<commit>`/`<version>`
+# for a long-lived deployment — never `:latest`, which moves under a running deployment. One broker serves the host, so this service replaces a
 # standalone one rather than joining it — two processes cannot bind the same socket path. The
 # deployment directory defaults to `~/.broker-host`; override `GCB_DEPLOY_DIR` when the config and
 # key live elsewhere. A deployment that supervises the broker on the host drops this file — and
