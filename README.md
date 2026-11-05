@@ -65,10 +65,13 @@ Markdown files are the source — there is nothing to keep in sync.
      && docker build --target host -t code-vaults/gcb-host:dev .)
    pnpm dev    # builds :base and then :dev from this checkout
    # no broker checkout? use the published pair instead of building either image:
+   #   pnpm build                                    # packages/lib, which Dockerfile.dev checks
+   #   docker build --target base -t devockr/idsh:base .
    #   docker build -f Dockerfile.dev --build-arg GCB_CLIENT_IMAGE=ghcr.io/code-vaults/gcb-client:<tag> \
    #     -t devockr/idsh:dev .
    #   and below, deploy the broker from its release rather than the local build:
-   #   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:<tag> docker compose ... up -d --no-build
+   #   GCB_IMAGE=ghcr.io/code-vaults/gcb-host:<tag> docker compose \
+   #     -f docker-compose.yml -f docker-compose.broker.yml -f docker-compose.dev.yml up -d --no-build
    #   (its config/key still come from ~/.broker-host, see the broker's README)
    mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
    # the broker container needs its config and key in ~/.broker-host first:
@@ -89,7 +92,11 @@ Markdown files are the source — there is nothing to keep in sync.
    its container is the recommended shape** — one definition, one lifecycle with the
    deployment, and the socket shared through the state directory. A host-supervised
    broker is still supported: drop the broker file — and with it the IPv6 network
-   settings it carries — and set `GIT_BROKER_SOCKET` at its socket instead.
+   settings it carries — **bind-mount its socket directory into the container** (the
+   template already mounts the state directory, `./.dsh:/home/app/.dsh`, so a socket
+   under `.dsh/git-broker` needs no extra volume) and set `GIT_BROKER_SOCKET` to the
+   path **inside the container** (`/home/app/.dsh/git-broker/broker.sock`), not the
+   host's. `entrypoint.sh` runs `gcb setup` only when that path exists.
 
    This command is the **dev channel**, which is why its broker image is inline: a
    long-lived deployment pins both images in `.env` instead (`IDSH_IMAGE` and

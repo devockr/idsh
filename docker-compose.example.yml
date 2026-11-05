@@ -76,7 +76,11 @@ services:
       # below; the client is already in the image, and `entrypoint.sh` runs `gcb setup` when the
       # socket is there. `GIT_BROKER_REQUIRE=1` fails closed instead of falling back to another
       # credential helper.
-      # - GIT_BROKER_SOCKET=/run/git-broker/broker.sock
+      # A host-supervised broker's socket, at the path inside this container. Two shapes:
+      #   - in the state directory (already mounted below):
+      #       - GIT_BROKER_SOCKET=/home/app/.dsh/git-broker/broker.sock
+      #   - a directory of its own, which then has to be mounted (see volumes):
+      #       - GIT_BROKER_SOCKET=/run/git-broker/broker.sock
       # - GIT_BROKER_REQUIRE=1
     # Required by the broker's recreate: after `up -d` it watches the container it created and
     # rolls back to the previous image when that container is not **healthy**. A container with no
@@ -109,6 +113,7 @@ services:
       - '127.0.0.1:15080:3080'
     volumes:
       # With the broker: its socket directory, owned by the broker's user.
+      # Mount for the second shape above; a no-op for the first.
       # - /srv/git-broker-socket:/run/git-broker
       # Only dsh's own state: what else to mount is yours to decide.
       - ./.dsh:/home/app/.dsh
