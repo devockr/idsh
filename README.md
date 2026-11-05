@@ -73,8 +73,11 @@ Markdown files are the source — there is nothing to keep in sync.
    (its config, key and `user.refresh` come from `~/.broker-host`, see the broker's
    own README), and the channel overlay picks the images (`:dev` and
    `code-vaults/gcb-host:dev` here; `docker-compose.prod.yml` is the pinned
-   production pair). A deployment that supervises the broker on the host drops the
-   broker file — and with it the IPv6 network settings it carries — instead.
+   production pair). **Running the broker in its container is the recommended
+   shape** — one definition, one lifecycle with the deployment, and the socket
+   shared through the state directory. A host-supervised broker is still supported:
+   drop the broker file — and with it the IPv6 network settings it carries — and
+   set `GIT_BROKER_SOCKET` at its socket instead.
 
    `docker-compose.yml` itself is gitignored: it is the copy that carries your
    own hostnames, LAN addresses and proxy settings, which do not belong in a

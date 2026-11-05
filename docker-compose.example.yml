@@ -16,8 +16,9 @@
 #   docker compose -f docker-compose.yml -f docker-compose.broker.yml \
 #     -f docker-compose.dev.yml up -d --no-build
 #
-# A deployment that supervises the broker on the host skips the broker file and
-# `dsh`'s socket variable, as this template's comments note.
+# Running the broker in its container is the recommended shape; a deployment that
+# supervises it on the host skips the broker file and `dsh`'s socket variable, as
+# this template's comments note.
 services:
   dsh:
     build:

@@ -100,11 +100,13 @@ locally — `docker build --target client -t code-vaults/gcb-client:dev .` in th
 and the broker service needs its image too
 (`docker build --target host -t code-vaults/gcb-host:dev .`), because `deploy:dev` now pre-flights
 every service the config names. The broker's definition lives in `docker-compose.broker.yml`, shared
-by both channels; `docker-compose.dev.yml` and `docker-compose.prod.yml` only pick its image
-(`:dev` from that checkout; a pinned `sha-<commit>`/`<version>` for the production channel). It is one process per socket,
-so it replaces a standalone deployment rather than joining it — drop the overlay and `dsh`'s
-`depends_on` entry when the broker is supervised elsewhere; that also drops the IPv6
-`networks:` settings the overlay carries, so such a deployment keeps IPv4 or supplies its own. The socket directory is the state directory's
+by both channels; `docker-compose.dev.yml` and `docker-compose.prod.yml` only pick `dsh`'s image
+(`:dev` from that checkout; a pinned `sha-<commit>`/`<version>` for the production channel), and
+`GCB_IMAGE` picks the broker's. **Containerised is the recommended shape**: one definition, one
+lifecycle with the deployment. It is one process per socket, so it replaces a standalone deployment
+rather than joining it — a host-supervised broker is still supported by dropping the overlay and
+`dsh`'s `depends_on` entry; that also drops the IPv6 `networks:` settings the overlay carries, so
+such a deployment keeps IPv4 or supplies its own. The socket directory is the state directory's
 `git-broker`; the deployment directory is `~/.broker-host` unless `GCB_DEPLOY_DIR` says otherwise.
 
 A cached layer once left a browser-dependency set inside `:latest` that the Dockerfile no longer
