@@ -90,7 +90,7 @@ const docker = async (args: string[], extraEnv?: Record<string, string>): Promis
   return run(bin, args, extraEnv)
 }
 
-const files = ['docker-compose.yml', 'docker-compose.dev.yml']
+const files = ['docker-compose.yml', 'docker-compose.broker.yml', 'docker-compose.dev.yml']
 for (const file of files) {
   try {
     await fs.access(path.join(repo, file))

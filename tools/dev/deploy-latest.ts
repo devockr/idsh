@@ -105,7 +105,7 @@ const resolveDocker = async (): Promise<string> => {
 const dockerBin = await resolveDocker()
 const docker = (args: string[], extraEnv?: Record<string, string>) => run(dockerBin, args, extraEnv)
 
-const files = ['docker-compose.yml', 'docker-compose.latest.yml']
+const files = ['docker-compose.yml', 'docker-compose.broker.yml', 'docker-compose.latest.yml']
 for (const file of files) {
   try {
     await fs.access(path.join(repo, file))

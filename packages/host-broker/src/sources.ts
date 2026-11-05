@@ -9,6 +9,7 @@
  * yet, so there is no path guard to get wrong.
  */
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import {
   appendFile,
   chmod,
@@ -565,20 +566,23 @@ async function composeDetached(
     // necessarily export (a user unit starts it without a login shell): pass its ids explicitly.
     const uid = process.getuid?.()
     const gid = process.getgid?.()
-    const child = spawn(
-      ctx.dockerPath,
-      ['compose', '-f', 'docker-compose.yml', '-f', 'docker-compose.dev.yml', ...args],
-      {
-        detached: true,
-        cwd: checkout,
-        env: {
-          ...process.env,
-          ...(uid === undefined ? {} : { UID: String(uid) }),
-          ...(gid === undefined ? {} : { GID: String(gid) }),
-        },
-        stdio: ['ignore', log.fd, log.fd],
+    // Deployments that keep the broker in its own tracked overlay get it here; one that supervises
+    // the broker elsewhere simply has no such file, and keeps the base + dev pair.
+    const composeArgs = ['compose', '-f', 'docker-compose.yml']
+    if (existsSync(path.join(checkout, 'docker-compose.broker.yml'))) {
+      composeArgs.push('-f', 'docker-compose.broker.yml')
+    }
+    composeArgs.push('-f', 'docker-compose.dev.yml', ...args)
+    const child = spawn(ctx.dockerPath, composeArgs, {
+      detached: true,
+      cwd: checkout,
+      env: {
+        ...process.env,
+        ...(uid === undefined ? {} : { UID: String(uid) }),
+        ...(gid === undefined ? {} : { GID: String(gid) }),
       },
-    )
+      stdio: ['ignore', log.fd, log.fd],
+    })
     // A failed spawn must not take the broker down, and the answer already went out: record it
     // where the operator will look for it. The handle is closed by the finally below, so this
     // appends by path instead of holding the descriptor open.

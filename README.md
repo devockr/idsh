@@ -224,8 +224,9 @@ host's ssh workflow is untouched — so a deployment that mounts its own ssh key
 form there.
 
 For development, the dev image carries the broker's **local** client build
-(`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.dev.yml` runs the
-broker itself as the `gcb` service — `code-vaults/gcb-host:dev`, against the same socket directory
+(`code-vaults/gcb-client:dev`, built from that checkout), and `docker-compose.broker.yml` defines the
+broker as the `gcb` service (the channel overlays pick its image: `:dev` from that checkout,
+`:latest` for a long-lived deployment) — `code-vaults/gcb-host:dev`, against the same socket directory
 (`.dsh/git-broker` — created once by hand, `mkdir -p .dsh/git-broker`, together with the broker's
 own `log` directory; the pre-flight refuses to remove the deployment when either is missing), and
 `dsh` waits for its socket to be bound — the service's healthcheck is
