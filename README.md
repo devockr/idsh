@@ -56,12 +56,19 @@ Markdown files are the source — there is nothing to keep in sync.
    web UI's settings. It is kept in the state directory, so it survives a rebuild and never reaches
    the image or the process environment.
 
-2. Create your compose file from the template and build:
+2. Create your compose file from the template, then build and start:
 
    ```sh
    cp docker-compose.example.yml docker-compose.yml
-   docker compose up -d --build
+   pnpm dev    # builds :base and then :dev from this checkout
+   docker compose -f docker-compose.yml -f docker-compose.broker.yml \
+     -f docker-compose.dev.yml up -d --no-build
    ```
+
+   The copy is the base: `docker-compose.broker.yml` defines the credential broker,
+   and the channel overlay picks the images (`:dev` + `code-vaults/gcb-host:dev`
+   here; `docker-compose.latest.yml` is the `:latest` pair). A deployment that
+   supervises the broker on the host drops the broker file instead.
 
    `docker-compose.yml` itself is gitignored: it is the copy that carries your
    own hostnames, LAN addresses and proxy settings, which do not belong in a
