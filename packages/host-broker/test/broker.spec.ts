@@ -4746,6 +4746,8 @@ async function hostUpdateRig(): Promise<{
     [
       '#!/bin/sh',
       'case "$*" in',
+      '  *"rev-parse --abbrev-ref HEAD"*) echo main ;;',
+      '  *"remote get-url origin"*) echo git@github.com:code-vaults/git-credential-broker.git ;;',
       '  *"pull --ff-only"*) echo "Already up to date." ;;',
       '  *"status --porcelain"*) printf "%s" "$STATUS" ;;',
       `  *"rev-parse HEAD"*) echo "${'b'.repeat(COMMIT_CHARS)}" ;;`,
@@ -4830,6 +4832,8 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     assert.match(answer.result ?? '', /container: not configured/u)
     assert.match(answer.result ?? '', /host: pinned b{12}/u)
+    // The ssh remote is rewritten for the pull: no key, no agent, and the proxy still applies.
+    assert.match(answer.result ?? '', /\(https\)/u)
     assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), newSha)
   } finally {
     supervisor.kill()

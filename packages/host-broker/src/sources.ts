@@ -126,6 +126,8 @@ export interface OpDefinition {
   readonly serial?: boolean
   /** Config the operation cannot work without: absent is not offered by `ops.describe`. */
   readonly requires?: readonly (keyof OpContext)[]
+  /** Extra availability rule for a shape `requires` cannot express, such as "one of two halves". */
+  readonly available?: (ctx: OpContext) => boolean
   run(args: Record<string, unknown>, ctx: OpContext): Promise<Execution | string>
 }
 
@@ -1506,15 +1508,31 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
     }
   }
-  // The only network step, and the only one that needs a bound: without an ssh agent or a proxy,
-  // git waits on a prompt that never comes rather than failing. Everything after this builds from
-  // the checkout as it is, so a failed pull is reported instead of retried.
+  // The only network step. The remote is rewritten to HTTPS: a host broker may have no ssh agent
+  // and no key, a public repository needs no credential over HTTPS, and git then honours
+  // `http_proxy`/`https_proxy` — the only way a broker behind a proxy reaches GitHub. The bound
+  // stays, because a network that answers nothing must fail rather than hold the operation open.
+  const branch = (
+    await step('read the branch', () =>
+      git(ctx, ['rev-parse', '--abbrev-ref', 'HEAD'], { stdoutOnly: true }, checkout),
+    )
+  ).trim()
+  const remote = (
+    await step('read the remote', () =>
+      git(ctx, ['remote', 'get-url', 'origin'], { stdoutOnly: true }, checkout),
+    )
+  ).trim()
+  const https = httpsRemote(remote)
+  const pullArgs =
+    https === undefined || branch === '' || branch === 'HEAD'
+      ? ['pull', '--ff-only']
+      : ['pull', '--ff-only', https, branch]
   const pull =
     linesOf(
       await step('pull', () =>
         git(
           ctx,
-          ['pull', '--ff-only'],
+          pullArgs,
           {
             stdoutOnly: true,
             timeoutMs: GCB_PULL_TIMEOUT_MS,
@@ -1527,7 +1545,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
         ),
       ),
     )[0] ?? ''
-  done.push(`pull: ${pull}`)
+  done.push(`pull: ${pull}${https === undefined ? '' : ' (https)'}`)
   const sha = (
     await step('read the commit', () =>
       git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true }, checkout),
@@ -1681,6 +1699,26 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   )
   done.push(`probe: ${repo} allowed`)
   return done.join('; ')
+}
+
+/**
+ * The same repository over HTTPS, for a remote that uses ssh.
+ *
+ * The host broker may have no ssh agent and no key, and a public repository needs no credential
+ * over HTTPS — so the one network step does not depend on how this machine happens to be logged in.
+ * It also means git honours `http_proxy`/`https_proxy`, which is how a broker behind a proxy
+ * reaches GitHub at all.
+ */
+function httpsRemote(remote: string): string | undefined {
+  const scp = /^git@([^:]+):(.+)$/u.exec(remote)
+  if (scp !== null) {
+    return `https://${scp[1]}/${scp[2]}`
+  }
+  const ssh = /^ssh:\/\/git@([^/]+)\/(.+)$/u.exec(remote)
+  if (ssh !== null) {
+    return `https://${ssh[1]}/${ssh[2]}`
+  }
+  return /^https?:\/\//u.test(remote) ? remote : undefined
 }
 
 /* ------------------------------------------------------------------ gcb.update (host half) */
@@ -2157,6 +2195,11 @@ export const OPS: readonly OpDefinition[] = [
       GCB_PULL_TIMEOUT_MS +
       GCB_HOST_WAIT_MS,
     requires: ['gcbCheckout'],
+    // One half has to be configured, or the call could only fail after a confirmation: the host
+    // broker (`--gcb-host`) or the container (`--gcb-compose` with `--gcb-probe-repo`).
+    available: ctx =>
+      ctx.gcbHostUpdate === true ||
+      (ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined),
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {
       rejectUnknown(args, [])
@@ -2347,7 +2390,9 @@ export const OPS: readonly OpDefinition[] = [
  */
 const available = (context: OpContext | undefined): readonly OpDefinition[] =>
   OPS.filter(
-    op => op.requires === undefined || op.requires.every(key => context?.[key] !== undefined),
+    op =>
+      (op.requires === undefined || op.requires.every(key => context?.[key] !== undefined)) &&
+      (op.available === undefined || context === undefined || op.available(context)),
   )
 
 export function findOp(name: string, context?: OpContext): OpDefinition | undefined {
