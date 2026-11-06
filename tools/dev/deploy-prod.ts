@@ -281,44 +281,44 @@ const POLL_MS = 2_000
 const stateFormat =
   '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.Image}}'
 const deadline = Date.now() + WAIT_MS
-let seen = ''
-let containerId = ''
-for (;;) {
-  // Ask compose for the container it created: a name guessed here would be nobody's container.
-  let id = ''
-  try {
+// What compose created, or nothing until the loop finds it: both are answered inside, so neither
+// needs an initial value here.
+const waitForHealthy = async (): Promise<string> => {
+  for (;;) {
+    // Ask compose for the container it created: a name guessed here would be nobody's container.
     // `-a`: a container that failed to boot still exists, and its state is the diagnosis.
-    id = ((await compose(['ps', '-a', '-q', 'dsh'])).trim().split(/\r?\n/u)[0] ?? '').trim()
-  } catch {
-    id = ''
-  }
-  containerId = id
-  if (id === '') {
-    seen = 'no container'
-  } else {
-    try {
-      seen = (await docker(['inspect', id, '--format', stateFormat])).trim()
-    } catch (error) {
-      seen = `inspect failed: ${stderrOf(error)}`
+    const id = await compose(['ps', '-a', '-q', 'dsh'])
+      .then(output => (output.trim().split(/\r?\n/u)[0] ?? '').trim())
+      .catch(() => '')
+    let seen: string
+    if (id === '') {
+      seen = 'no container'
+    } else {
+      try {
+        seen = (await docker(['inspect', id, '--format', stateFormat])).trim()
+      } catch (error) {
+        seen = `inspect failed: ${stderrOf(error)}`
+      }
     }
+    const [status, health, actual] = seen.split(' ')
+    if (status === 'running' && health === 'healthy' && actual === expected) {
+      console.log(`deploy:prod: dsh: running, healthy, ${actual}`)
+      return id
+    }
+    if (Date.now() >= deadline) {
+      die(
+        `the container did not prove itself within ${String(WAIT_MS / 1000)}s: ${seen}` +
+          (actual === undefined || actual === '' || actual === expected
+            ? ''
+            : ` (runs ${actual}, not ${expected})`) +
+          (health === 'none' ? ' — the compose file declares no health check' : '') +
+          ' — the previous container may be gone; fix the cause and re-run',
+      )
+    }
+    await new Promise(resolve => setTimeout(resolve, POLL_MS))
   }
-  const [status, health, actual] = seen.split(' ')
-  if (status === 'running' && health === 'healthy' && actual === expected) {
-    console.log(`deploy:prod: dsh: running, healthy, ${actual}`)
-    break
-  }
-  if (Date.now() >= deadline) {
-    die(
-      `the container did not prove itself within ${String(WAIT_MS / 1000)}s: ${seen}` +
-        (actual === undefined || actual === '' || actual === expected
-          ? ''
-          : ` (runs ${actual}, not ${expected})`) +
-        (health === 'none' ? ' — the compose file declares no health check' : '') +
-        ' — the previous container may be gone; fix the cause and re-run',
-    )
-  }
-  await new Promise(resolve => setTimeout(resolve, POLL_MS))
 }
+const containerId = await waitForHealthy()
 
 // 4) Say what is running, from the container that just proved itself.
 for (const line of ['dsh', 'gcb'] as const) {
