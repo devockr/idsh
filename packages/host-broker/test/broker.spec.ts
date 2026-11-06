@@ -5121,11 +5121,13 @@ void test('gcb.update clears an inherited git repository location', async () => 
 })
 
 void test('gcb.update makes ssh non-interactive when nothing else decides it', async () => {
-  // The runner may export either; the branch under test is "nothing decides it".
+  // The runner may export any of the three; the branch under test is "nothing decides it".
   const inherited = process.env['GIT_SSH_COMMAND']
   const inheritedCore = process.env['CORE_SSH']
+  const inheritedSsh = process.env['GIT_SSH']
   delete process.env['GIT_SSH_COMMAND']
   delete process.env['CORE_SSH']
+  delete process.env['GIT_SSH']
   const rig = await gcbRig()
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
@@ -5142,6 +5144,11 @@ void test('gcb.update makes ssh non-interactive when nothing else decides it', a
       delete process.env['CORE_SSH']
     } else {
       process.env['CORE_SSH'] = inheritedCore
+    }
+    if (inheritedSsh === undefined) {
+      delete process.env['GIT_SSH']
+    } else {
+      process.env['GIT_SSH'] = inheritedSsh
     }
   }
 })
