@@ -15,3 +15,7 @@ configuration, so ssh, HTTPS and the proxy behave exactly as they do for a manua
 interactive (`GIT_TERMINAL_PROMPT=0`, and `BatchMode` when the operator has not configured an ssh
 command) and bounded (60 s), because nobody is at a terminal and a network that answers nothing must
 fail rather than hold the request open.
+
+An update is two-phase because the two halves are separate processes: if the container recreate or
+probe fails after the host half has been pinned, the halves run different commits until `gcb.update`
+is run again. The failure answer says which half moved, and re-running converges both.
