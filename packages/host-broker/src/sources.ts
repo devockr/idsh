@@ -1545,7 +1545,14 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   if (process.env['GIT_SSH_COMMAND'] === undefined) {
     const configured = (
       await git(ctx, ['config', '--get', 'core.sshCommand'], { stdoutOnly: true }, checkout).catch(
-        () => '',
+        (error: unknown) => {
+          // `git config --get` exits 1 for a key that is not set; anything else — a timeout, a
+          // broken configuration — is a real failure and must not read as "nothing configured".
+          if (error instanceof BrokerFault && error.message.endsWith('exited with 1')) {
+            return ''
+          }
+          throw error
+        },
       )
     ).trim()
     if (configured === '') {
@@ -1789,9 +1796,12 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
   }
 
   const before = await readPid()
+  // Asked once: the answer decides both the refusal below and the signal after the pin, and a
+  // second probe after the pin could fail for a reason that no longer has an untouched state.
+  const wasRunning = before !== undefined && alive(before)
   // A pid file survives a crash, and a recycled pid belongs to somebody else: check it before the
   // pin moves, so the refusal is the whole effect of a stale file.
-  if (before !== undefined && alive(before)) {
+  if (wasRunning) {
     const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
     if (!/gcb/u.test(cmdline)) {
       throw new BrokerFault(
@@ -1802,7 +1812,7 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
   }
   await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
   await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
-  if (before !== undefined && alive(before)) {
+  if (wasRunning && before !== undefined) {
     try {
       process.kill(before, 'SIGTERM')
     } catch {
@@ -1811,24 +1821,35 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
   }
 
   const deadline = Date.now() + GCB_HOST_WAIT_MS
-  for (;;) {
-    const pid = await readPid()
-    if (pid !== before && alive(pid) && (await stagedSha()) === sha) {
-      return `pinned ${sha.slice(0, 12)}; host broker ${String(pid)} (was ${before === undefined ? 'not running' : String(before)})`
-    }
-    if (Date.now() >= deadline) {
-      throw new BrokerFault(
-        'unavailable',
-        `pinned ${sha.slice(0, 12)}, but the host broker did not stage it within ${String(GCB_HOST_WAIT_MS / 1000)}s; check ${path.join(deployDir, 'gcb-host.log')}`,
+  const pinned = `app.ref is pinned to ${sha.slice(0, 12)}`
+  try {
+    for (;;) {
+      const pid = await readPid()
+      if (pid !== before && alive(pid) && (await stagedSha()) === sha) {
+        return `pinned ${sha.slice(0, 12)}; host broker ${String(pid)} (was ${before === undefined ? 'not running' : String(before)})`
+      }
+      if (Date.now() >= deadline) {
+        throw new BrokerFault(
+          'unavailable',
+          `the host broker did not stage it within ${String(GCB_HOST_WAIT_MS / 1000)}s; check ${path.join(deployDir, 'gcb-host.log')}`,
+        )
+      }
+      if (ctx.signal?.aborted === true) {
+        throw new BrokerFault('timeout', 'gcb.update: cancelled while waiting for the host broker')
+      }
+      // Clamped: a poll that sleeps past the deadline would let the request's own timeout win, and
+      // that answer is the one without the log path.
+      await new Promise(resolve =>
+        setTimeout(resolve, Math.max(0, Math.min(GCB_HOST_POLL_MS, deadline - Date.now()))),
       )
     }
-    if (ctx.signal?.aborted === true) {
-      throw new BrokerFault('timeout', 'gcb.update: cancelled while waiting for the host broker')
-    }
-    // Clamped: a poll that sleeps past the deadline would let the request's own timeout win, and
-    // that answer is the one without the log path.
-    await new Promise(resolve =>
-      setTimeout(resolve, Math.max(0, Math.min(GCB_HOST_POLL_MS, deadline - Date.now()))),
+  } catch (error) {
+    // The pin is the effect that survives whatever went wrong next; an answer without it would
+    // leave the operator thinking nothing changed.
+    const message = messageOf(error)
+    throw new BrokerFault(
+      error instanceof BrokerFault ? error.code : 'unavailable',
+      `${message}; ${pinned}, but the host broker has not confirmed it`,
     )
   }
 }

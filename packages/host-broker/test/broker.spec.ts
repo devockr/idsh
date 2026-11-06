@@ -4115,7 +4115,7 @@ async function gcbRig(
       // `gcb.update` reads the commit it pins the host broker to, and whether an ssh command is
       // configured before it pulls.
       'case "$*" in',
-      '  *"config --get core.sshCommand"*) printf "%s" "${CORE_SSH:-}" ;;',
+      '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; printf "%s" "${CORE_SSH:-}" ;;',
       '  *"pull --ff-only"*) printf "ssh=%s\\n" "${GIT_SSH_COMMAND:-none}" >> ' +
         JSON.stringify(recorded) +
         '; echo "Already up to date." ;;',
@@ -4838,6 +4838,11 @@ async function hostUpdateRig(): Promise<{
 }
 
 void test('gcb.update makes ssh non-interactive when nothing else decides it', async () => {
+  // The runner may export either; the branch under test is "nothing decides it".
+  const inherited = process.env['GIT_SSH_COMMAND']
+  const inheritedCore = process.env['CORE_SSH']
+  delete process.env['GIT_SSH_COMMAND']
+  delete process.env['CORE_SSH']
   const rig = await gcbRig()
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
@@ -4845,6 +4850,29 @@ void test('gcb.update makes ssh non-interactive when nothing else decides it', a
     assert.match(await rig.calls(), /ssh=ssh -o BatchMode=yes -o ConnectTimeout=10/u)
   } finally {
     await rig.close()
+    if (inherited === undefined) {
+      delete process.env['GIT_SSH_COMMAND']
+    } else {
+      process.env['GIT_SSH_COMMAND'] = inherited
+    }
+    if (inheritedCore === undefined) {
+      delete process.env['CORE_SSH']
+    } else {
+      process.env['CORE_SSH'] = inheritedCore
+    }
+  }
+})
+
+void test('gcb.update does not read a failed config query as "unset"', async () => {
+  process.env['FAIL_CONFIG'] = '1'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /config is unreadable/u)
+  } finally {
+    await rig.close()
+    delete process.env['FAIL_CONFIG']
   }
 })
 
