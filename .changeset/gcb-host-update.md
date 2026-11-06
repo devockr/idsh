@@ -14,4 +14,5 @@ compose files. The pull is the one network step: it pulls the tracked branch, re
 no key is needed for a public repository, and is bounded (60 s, non-interactive) — without an agent
 or a proxy git waits on a prompt rather than failing, which was a hang, not an error. A remote that
 already carries credentials is left to the plain pull: the URL never becomes an argument, so a token
-cannot appear in the process list.
+cannot appear in the process list. A private checkout whose only credentials are ssh gets a second
+bounded attempt over its configured remote, so the rewrite cannot turn a working pull into a 404.

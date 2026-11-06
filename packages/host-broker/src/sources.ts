@@ -1456,6 +1456,8 @@ const GCB_QUERY_TIMEOUT_MS = 10_000
 const GCB_QUERIES = 5
 /** The git reads before the pull, each at the default deadline, so the budget does not assume them. */
 const GCB_PRELUDE_STEPS = 5
+/** How many attempts the pull gets: the rewritten URL, then the checkout's own remote. */
+const GCB_PULL_ATTEMPTS = 2
 /** The steps that may take the build budget: build and recreate (the pull has its own bound). */
 const GCB_BUILD_STEPS = 2
 
@@ -1555,29 +1557,41 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     )
   ).trim()
   const https = httpsRemote(remote)
-  const pullArgs =
-    https === undefined || branch === '' || branch === 'HEAD'
-      ? ['pull', '--ff-only']
-      : ['pull', '--ff-only', https, branch]
-  const pull =
-    linesOf(
-      await step('pull', () =>
-        git(
-          ctx,
-          pullArgs,
-          {
-            stdoutOnly: true,
-            timeoutMs: GCB_PULL_TIMEOUT_MS,
-            env: {
-              GIT_TERMINAL_PROMPT: '0',
-              GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10',
-            },
-          },
-          checkout,
-        ),
-      ),
-    )[0] ?? ''
-  done.push(`pull: ${pull}${https === undefined ? '' : ' (https)'}`)
+  // One attempt over the rewritten URL, and — only for that URL — one over the configured remote.
+  // A private checkout may have ssh credentials and no HTTPS credential, and its previous pull
+  // worked; refusing it here because HTTPS answered 404 would be a regression. The fallback keeps
+  // the same bound, so a network that answers nothing still fails.
+  const pullEnv = {
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10',
+  }
+  const attempt = (args: string[]) =>
+    git(ctx, args, { stdoutOnly: true, timeoutMs: GCB_PULL_TIMEOUT_MS, env: pullEnv }, checkout)
+  let pull: string
+  let note = ''
+  if (https === undefined || branch === '' || branch === 'HEAD') {
+    pull = linesOf(await step('pull', () => attempt(['pull', '--ff-only'])))[0] ?? ''
+  } else {
+    try {
+      pull = linesOf(await attempt(['pull', '--ff-only', https, branch]))[0] ?? ''
+      note = ' (https)'
+    } catch (error) {
+      const remoteError = messageOf(error)
+      try {
+        pull = linesOf(await attempt(['pull', '--ff-only']))[0] ?? ''
+        note = ` (https failed: ${remoteError}; used the configured remote)`
+      } catch (fallbackError) {
+        throw new BrokerFault(
+          'unavailable',
+          withCompleted(
+            `gcb.update: pull failed over https (${remoteError}) and over the configured remote (${messageOf(fallbackError)})`,
+            done,
+          ),
+        )
+      }
+    }
+  }
+  done.push(`pull: ${pull}${note}`)
   const sha = (
     await step('read the commit', () =>
       git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true }, checkout),
@@ -2238,7 +2252,7 @@ export const OPS: readonly OpDefinition[] = [
       PROBE_TIMEOUT_MS +
       GCB_QUERIES * GCB_QUERY_TIMEOUT_MS +
       GCB_PRELUDE_STEPS * GCB_QUERY_TIMEOUT_MS +
-      GCB_PULL_TIMEOUT_MS +
+      GCB_PULL_ATTEMPTS * GCB_PULL_TIMEOUT_MS +
       GCB_HOST_WAIT_MS,
     requires: ['gcbCheckout'],
     // One half has to be configured, or the call could only fail after a confirmation: the host

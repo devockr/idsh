@@ -45,6 +45,8 @@ const FLUSH_MS = 700
 const GCB_PROBE_MS = 60_000
 /** The bounded pull and the host-broker wait, both part of the declared budget. */
 const GCB_PULL_MS = 60_000
+/** The rewritten URL first, then the configured remote. */
+const GCB_PULL_ATTEMPTS = 2
 const GCB_HOST_WAIT_MS = 300_000
 /** The git reads before the pull, budgeted at the query deadline each. */
 const GCB_PRELUDE_STEPS = 5
@@ -4113,6 +4115,8 @@ async function gcbRig(
       '  *"rev-parse --abbrev-ref --symbolic-full-name @{upstream}"*) printf "%s" "$UPSTREAM" ;;',
       '  *"rev-parse --abbrev-ref HEAD"*) printf "%s" "${HEAD_BRANCH:-main}" ;;',
       '  *"remote get-url "*) printf "%s" "${REMOTE:-git@github.com:code-vaults/git-credential-broker.git}" ;;',
+      '  *"pull --ff-only https"*) if [ -n "$FAIL_HTTPS" ]; then echo "https refused" >&2; exit 1; fi; echo "Already up to date." ;;',
+      '  *"pull --ff-only"*) echo "Already up to date." ;;',
       '  *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;',
       'esac',
       '',
@@ -4206,7 +4210,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
         GCB_PROBE_MS +
         GCB_QUERY_COUNT * GCB_QUERY_MS +
         GCB_PRELUDE_STEPS * GCB_QUERY_MS +
-        GCB_PULL_MS +
+        GCB_PULL_ATTEMPTS * GCB_PULL_MS +
         GCB_HOST_WAIT_MS,
     )
 
@@ -4297,6 +4301,22 @@ void test('gcb.update pulls the branch the checkout tracks, over https', async (
     await rig.close()
     delete process.env['UPSTREAM']
     delete process.env['HEAD_BRANCH']
+  }
+})
+
+void test('gcb.update falls back to the configured remote when https fails', async () => {
+  process.env['FAIL_HTTPS'] = '1'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /used the configured remote/u)
+    const calls = await rig.calls()
+    assert.match(calls, /pull --ff-only https:\/\//u)
+    assert.match(calls, /pull --ff-only\n/u)
+  } finally {
+    await rig.close()
+    delete process.env['FAIL_HTTPS']
   }
 })
 
