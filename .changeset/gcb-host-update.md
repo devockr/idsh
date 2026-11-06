@@ -10,7 +10,8 @@ the checkout. With `--gcb-host`, `gcb.update` refuses a dirty checkout (the two 
 different code while both calling themselves updated), pins the host broker to the commit it built,
 restarts it, and only answers once the new pid reports that commit — or fails with the log to read.
 The container half is unchanged and still optional: a host-only deployment passes `--gcb-host` and no
-compose files. The pull is the one network step and does not rewrite the checkout's remote: git uses its
+compose files. A checkout with local changes is refused before the pull, whichever half is being updated, so the
+image or the pin always names the commit that was built. The pull is the one network step and does not rewrite the checkout's remote: git uses its
 configuration, so ssh, HTTPS and the proxy behave exactly as they do for a manual pull. It is not
 interactive (`GIT_TERMINAL_PROMPT=0`, and `BatchMode` when the operator has not configured an ssh
 command) and bounded (60 s), because nobody is at a terminal and a network that answers nothing must

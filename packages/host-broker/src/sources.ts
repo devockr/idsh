@@ -1495,13 +1495,13 @@ async function updateBroker(
   if (target === 'container' && !containerConfigured) {
     throw new BrokerFault(
       'unavailable',
-      'the container half is not configured: start the broker with --gcb-compose and --gcb-probe-repo',
+      'gcb.update: the container half is not configured: start the broker with --gcb-compose and --gcb-probe-repo',
     )
   }
   if (target === 'host' && !hostConfigured) {
     throw new BrokerFault(
       'unavailable',
-      'the host half is not configured: start the broker with --gcb-host',
+      'gcb.update: the host half is not configured: start the broker with --gcb-host',
     )
   }
   const containerUpdate = containerConfigured && target !== 'host'
@@ -1543,21 +1543,19 @@ async function updateBroker(
     GIT_INDEX_FILE: undefined,
   }
   // Fail before the one network step. A dirty checkout would otherwise be pulled into before the
-  // refusal, and a missing host directory would pay for the pull first; the directory resolved here
-  // is the one the pin writes to, so the check and the write cannot disagree.
-  let deployDir = ''
-  if (hostUpdate) {
-    const dirty = (
-      await git(ctx, ['status', '--porcelain'], { stdoutOnly: true, env: isolatedGitEnv }, checkout)
-    ).trim()
-    if (dirty !== '') {
-      throw new BrokerFault(
-        'unavailable',
-        'gcb.update: the checkout has local changes; commit or stash them, so the container and the host broker run the same commit',
-      )
-    }
-    deployDir = await hostDeployDir(ctx)
+  // refusal — and every target builds or pins the commit it reports, so none of them may read a
+  // working tree that is not that commit. A missing host directory would pay for the pull first;
+  // the directory resolved here is the one the pin writes to, so the check and the write agree.
+  const dirty = (
+    await git(ctx, ['status', '--porcelain'], { stdoutOnly: true, env: isolatedGitEnv }, checkout)
+  ).trim()
+  if (dirty !== '') {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.update: the checkout has local changes; commit or stash them, so the image and the pin name the commit that was built',
+    )
   }
+  const deployDir = hostUpdate ? await hostDeployDir(ctx) : ''
   const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
     try {
       return await work()
