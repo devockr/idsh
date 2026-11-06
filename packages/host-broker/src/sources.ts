@@ -1862,12 +1862,16 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
   const wasRunning = before !== undefined && alive(before)
   // A pid file survives a crash, and a recycled pid belongs to somebody else: check it before the
   // pin moves, so the refusal is the whole effect of a stale file.
-  if (wasRunning) {
+  if (wasRunning && before !== undefined) {
+    // The pid file sits in this deployment's directory, but a recycled pid may belong to another
+    // `idsh-host` whose arguments happen to contain "gcb". The deployment directory is the part
+    // that is this broker's own: a process launched from somewhere else is not stopped.
+    const deployment = path.resolve(deployDir)
     const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
-    if (!/gcb/u.test(cmdline)) {
+    if (!/gcb/u.test(cmdline) || !cmdline.includes(deployment)) {
       throw new BrokerFault(
         'unavailable',
-        `gcb.update: refusing to stop ${String(before)}: its command line is not the gcb host broker`,
+        `gcb.update: refusing to stop ${String(before)}: it does not run from ${deployment}`,
       )
     }
   }

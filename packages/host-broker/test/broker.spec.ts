@@ -5020,7 +5020,8 @@ void test('gcb.update keeps real git on the checkout despite an inherited GIT_DI
   let oldBroker: ReturnType<typeof spawn> | undefined
   let supervisor: ReturnType<typeof spawn> | undefined
   try {
-    const fakeBroker = path.join(host.root, 'gcb-host.sh')
+    // Inside the deploy directory: the operation refuses a pid whose command line does not name it.
+    const fakeBroker = path.join(deployDir, 'gcb-host.sh')
     await writeFile(fakeBroker, 'sleep 300\n')
     oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
     await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
@@ -5085,6 +5086,28 @@ void test('gcb.update keeps real git on the checkout despite an inherited GIT_DI
   }
 })
 
+void test('gcb.update refuses a stale pid that runs elsewhere', async () => {
+  const rig = await hostUpdateRig()
+  // A live process whose command line mentions gcb but not this deployment's directory.
+  const foreignScript = path.join(rig.host.root, 'gcb-foreign.sh')
+  await writeFile(foreignScript, 'sleep 300\n')
+  const foreign = spawn('sh', [foreignScript], { stdio: 'ignore' })
+  const foreignPid = foreign.pid
+  assert.ok(foreignPid !== undefined)
+  try {
+    await writeFile(rig.pidFile, `${String(foreignPid)}\n`)
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /does not run from/u)
+    // Refused before the pin moved, and without signalling it.
+    assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), 'a'.repeat(COMMIT_CHARS))
+    process.kill(foreignPid, 0)
+  } finally {
+    foreign.kill()
+    await rig.close()
+  }
+})
+
 void test('gcb.update clears an inherited git repository location', async () => {
   const rig = await gcbRig()
   try {
@@ -5146,7 +5169,8 @@ async function standInForHost(
   where: { root: string; pinFile: string; pidFile: string; stagedFile: string },
   options: { oldSha: string; newSha?: string; barrier?: string },
 ): Promise<StandInHost> {
-  const fakeBroker = path.join(where.root, 'gcb-host.sh')
+  // Inside the deploy directory: the operation refuses a pid whose command line does not name it.
+  const fakeBroker = path.join(path.dirname(where.pinFile), 'gcb-host.sh')
   await writeFile(fakeBroker, 'sleep 300\n')
   const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
   await writeFile(where.pidFile, `${String(oldBroker.pid)}\n`)
