@@ -4120,7 +4120,7 @@ async function gcbRig(
       // configured before it pulls.
       'case "$*" in',
       // git exits 1 for a key that is not set — the branch the operation must read as "unset".
-      '  *"status --porcelain"*) printf "%s" "${STATUS:-}" ;;',
+      '  *"status --porcelain"*) if [ -n "$FAIL_STATUS" ]; then echo "status is unreadable" >&2; exit 2; fi; printf "%s" "${STATUS:-}" ;;',
       '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; if [ "${CORE_SSH+x}" != x ]; then exit 1; fi; printf "%s" "$CORE_SSH" ;;',
       '  *"pull --ff-only"*) printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
         JSON.stringify(recorded) +
@@ -4908,6 +4908,21 @@ void test('gcb.update can retry only the host half', async () => {
   } finally {
     host?.stop()
     await rig.close()
+  }
+})
+
+void test('gcb.update names the status check when it fails', async () => {
+  process.env['FAIL_STATUS'] = '1'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /reading the checkout status failed/u)
+    assert.match(JSON.stringify(answer.error), /status is unreadable/u)
+    assert.doesNotMatch(await rig.calls(), /pull --ff-only/u)
+  } finally {
+    await rig.close()
+    delete process.env['FAIL_STATUS']
   }
 })
 

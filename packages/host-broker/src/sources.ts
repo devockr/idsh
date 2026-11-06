@@ -1547,7 +1547,18 @@ async function updateBroker(
   // working tree that is not that commit. A missing host directory would pay for the pull first;
   // the directory resolved here is the one the pin writes to, so the check and the write agree.
   const dirty = (
-    await git(ctx, ['status', '--porcelain'], { stdoutOnly: true, env: isolatedGitEnv }, checkout)
+    await git(
+      ctx,
+      ['status', '--porcelain'],
+      { stdoutOnly: true, env: isolatedGitEnv },
+      checkout,
+    ).catch((error: unknown) => {
+      // Before the pull there is no completed step to blame; name the check itself.
+      throw new BrokerFault(
+        error instanceof BrokerFault ? error.code : 'unavailable',
+        `gcb.update: reading the checkout status failed: ${messageOf(error)}`,
+      )
+    })
   ).trim()
   if (dirty !== '') {
     throw new BrokerFault(
