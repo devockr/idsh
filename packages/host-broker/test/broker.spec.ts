@@ -4934,8 +4934,11 @@ void test('gcb.update names a host broker directory that is not there', async ()
   let broker: RunningBroker | undefined
   let connection: Client | undefined
   try {
+    // Owner-only, like every other socket here: a group-writable parent rejects the socket mode.
+    const secondRoot = path.join(rig.host.root, 'second')
+    await mkdir(secondRoot, { mode: DIRECTORY_MODE })
     broker = await startBroker({
-      socketPath: path.join(rig.host.root, 'second.sock'),
+      socketPath: path.join(secondRoot, 'host.sock'),
       auditPath: path.join(rig.host.root, 'second.jsonl'),
       logDir: rig.host.logDir,
       procDir: rig.host.procDir,
@@ -4945,7 +4948,7 @@ void test('gcb.update names a host broker directory that is not there', async ()
       gcbDeployDir: missing,
       gcbHostUpdate: true,
     })
-    connection = client(path.join(rig.host.root, 'second.sock'))
+    connection = client(path.join(secondRoot, 'host.sock'))
     const answer = await connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /missing-broker-home is not a directory/u)

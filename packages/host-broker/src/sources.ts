@@ -1454,11 +1454,11 @@ const PROBE_TIMEOUT_MS = 60_000
 const GCB_QUERY_TIMEOUT_MS = 10_000
 /** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
 const GCB_QUERIES = 5
-/** The steps that may take the build budget: pull, build and recreate. */
+/** The steps that may take the build budget: build and recreate (the pull has its own bound). */
 const GCB_BUILD_STEPS = 2
 
 /**
- * Rebuild the credential broker from its own checkout and recreate only its container.
+ * Pull the credential broker's checkout, rebuild its container image and pin the host half.
  *
  * Not named `deploy.*`: those mean this deployment, and their log and status would become ambiguous
  * the moment a second deployment shares the namespace. Every step is the answer, so a failure says
@@ -1811,11 +1811,9 @@ async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
   }
 
   const before = await readPid()
-  await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
-  await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
+  // A pid file survives a crash, and a recycled pid belongs to somebody else: check it before the
+  // pin moves, so the refusal is the whole effect of a stale file.
   if (before !== undefined && alive(before)) {
-    // A pid file survives a crash, and a recycled pid belongs to somebody else: a courtesy check
-    // before signalling, so a stale file cannot take down an unrelated process of the same user.
     const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
     if (!/gcb/u.test(cmdline)) {
       throw new BrokerFault(
@@ -1823,6 +1821,10 @@ async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
         `gcb.update: refusing to stop ${String(before)}: its command line is not the gcb host broker`,
       )
     }
+  }
+  await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
+  await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
+  if (before !== undefined && alive(before)) {
     try {
       process.kill(before, 'SIGTERM')
     } catch {
