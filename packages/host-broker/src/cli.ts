@@ -31,7 +31,12 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
                           (plus docker-compose.broker.yml when the broker runs in a container);
                           also the source broker.update rebuilds from when the CLI runs inside it
   --gcb-checkout <dir>   The credential broker's checkout; needed with --gcb-compose
-                          and --gcb-probe-repo to enable gcb.update
+                          and --gcb-probe-repo to enable gcb.update, and to resolve a
+                          ref for gcb.host.update
+  --gcb-deploy-dir <dir> The host broker's own directory, holding app.ref and gcb-host.pid
+                          (default $HOME/.broker-host)
+  --gcb-host            gcb.update also pins the host-supervised broker to the commit it built,
+                          restarts it and waits until it has staged that commit
   --gcb-compose <files>  The compose file(s) that run the credential broker, comma-separated
   --gcb-service <name>   The service in those files that runs the broker (default gcb)
   --gcb-probe-repo <repo>
@@ -89,6 +94,8 @@ function optionsFrom(
     ...(text('npm') === undefined ? {} : { npmPath: text('npm') }),
     ...(text('checkout') === undefined ? {} : { checkout: text('checkout') }),
     ...(text('gcb-checkout') === undefined ? {} : { gcbCheckout: text('gcb-checkout') }),
+    ...(text('gcb-deploy-dir') === undefined ? {} : { gcbDeployDir: text('gcb-deploy-dir') }),
+    ...(values['gcb-host'] === true ? { gcbHostUpdate: true } : {}),
     ...(text('gcb-compose') === undefined ? {} : { gcbCompose: text('gcb-compose') }),
     ...(text('gcb-service') === undefined ? {} : { gcbService: text('gcb-service') }),
     ...(text('gcb-probe-repo') === undefined ? {} : { gcbProbeRepo: text('gcb-probe-repo') }),
@@ -121,6 +128,8 @@ async function main(): Promise<void> {
       npm: { type: 'string' },
       checkout: { type: 'string' },
       'gcb-checkout': { type: 'string' },
+      'gcb-deploy-dir': { type: 'string' },
+      'gcb-host': { type: 'boolean' },
       'gcb-compose': { type: 'string' },
       'gcb-service': { type: 'string' },
       'gcb-probe-repo': { type: 'string' },

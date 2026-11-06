@@ -21,6 +21,7 @@ import {
   readFile,
   readlink,
   realpath,
+  rename,
   rm,
   stat,
   writeFile,
@@ -30,6 +31,9 @@ import path from 'node:path'
 import {
   BUILD_TIMEOUT_MS,
   COMPOSE_TIMEOUT_MS,
+  GCB_HOST_POLL_MS,
+  GCB_PULL_TIMEOUT_MS,
+  GCB_HOST_WAIT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
   MAX_ERROR_CHARS,
@@ -54,6 +58,10 @@ export interface OpContext {
   readonly checkout?: string
   /** The credential broker's checkout; `gcb.update` rebuilds from it. */
   readonly gcbCheckout?: string
+  /** The host broker's own directory: `app.ref`, its pid file and the staged export. */
+  readonly gcbDeployDir?: string
+  /** Whether `gcb.update` also moves the host-supervised broker to the same commit. */
+  readonly gcbHostUpdate?: boolean
   /** The compose file(s) that run the broker. */
   readonly gcbCompose?: readonly string[]
   /** The service in those files that runs the broker. */
@@ -1459,13 +1467,18 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   const composeFiles = ctx.gcbCompose
   const repo = ctx.gcbProbeRepo
   const service = ctx.gcbService
-  if (composeFiles === undefined || checkout === undefined || repo === undefined) {
-    throw new BrokerFault('unavailable', 'the broker is not configured for gcb.update')
+  const containerUpdate = composeFiles !== undefined && repo !== undefined
+  const hostUpdate = ctx.gcbHostUpdate === true
+  if (checkout === undefined || (!containerUpdate && !hostUpdate)) {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.update needs --gcb-checkout, and either the broker container (--gcb-compose with --gcb-probe-repo) or the host broker (--gcb-host)',
+    )
   }
   // One prefix for every `compose` call: a deployment that renders a base file plus an overlay is
   // the same set of files everywhere here. Compose interpolates UID and GID, and the broker's own
   // environment may not carry them.
-  const composeArgs = ['compose', ...composeFiles.flatMap(file => ['-f', file])]
+  const composeArgs = ['compose', ...(composeFiles ?? []).flatMap(file => ['-f', file])]
   const uid = process.getuid?.()
   const gid = process.getgid?.()
   const composeEnv: NodeJS.ProcessEnv = {
@@ -1492,18 +1505,64 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
     }
   }
+  // The only network step, and the only one that needs a bound: without an ssh agent or a proxy,
+  // git waits on a prompt that never comes rather than failing. Everything after this builds from
+  // the checkout as it is, so a failed pull is reported instead of retried.
   const pull =
     linesOf(
       await step('pull', () =>
         git(
           ctx,
           ['pull', '--ff-only'],
-          { stdoutOnly: true, timeoutMs: BUILD_TIMEOUT_MS },
+          {
+            stdoutOnly: true,
+            timeoutMs: GCB_PULL_TIMEOUT_MS,
+            env: {
+              GIT_TERMINAL_PROMPT: '0',
+              GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10',
+            },
+          },
           checkout,
         ),
       ),
     )[0] ?? ''
   done.push(`pull: ${pull}`)
+  const sha = (
+    await step('read the commit', () =>
+      git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true }, checkout),
+    )
+  ).trim()
+  if (!COMMIT_ID.test(sha)) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(`gcb.update: ${JSON.stringify(sha)} is not a commit id`, done),
+    )
+  }
+  done.push(`commit: ${sha.slice(0, 12)}`)
+  // The host broker runs a staged export of one commit, so it can only be updated from a clean
+  // checkout: a dirty tree would build a container from changes the exported tree does not have,
+  // and the two brokers would answer from different commits while both call themselves updated.
+  if (hostUpdate) {
+    const dirty = (
+      await step('check the checkout', () =>
+        git(ctx, ['status', '--porcelain'], { stdoutOnly: true }, checkout),
+      )
+    ).trim()
+    if (dirty !== '') {
+      throw new BrokerFault(
+        'unavailable',
+        withCompleted(
+          'gcb.update: the checkout has local changes; commit or stash them, so the container and the host broker run the same commit',
+          done,
+        ),
+      )
+    }
+    done.push(`host: ${await step('pin the host broker', () => pinHostBroker(ctx, sha))}`)
+  }
+  if (!containerUpdate) {
+    done.push('container: not configured')
+    return done.join('; ')
+  }
   // The named service, not the file: a deployment compose also runs dsh, and this operation must
   // touch only the broker's container.
   const services = linesOf(await step('read the services', () => compose(['config', '--services'])))
@@ -1621,6 +1680,81 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   )
   done.push(`probe: ${repo} allowed`)
   return done.join('; ')
+}
+
+/* ------------------------------------------------------------------ gcb.host.update */
+
+/** A commit id, which is all `app.ref` may hold. */
+const COMMIT_ID = /^[0-9a-f]{40}$/u
+
+/**
+ * Move the host-side gcb broker to a commit and wait until it runs it.
+ *
+ * The host broker is started by a supervisor that re-stages `~/.broker-host/app` from the commit in
+ * `app.ref` whenever it starts, so an update is: write the pin, stop the process, and let the
+ * supervisor restart it. This operation does exactly that, and waits for the restarted process and
+ * the staged commit, because "the pin moved" is not "the broker runs it".
+ */
+async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
+  const deployDir = ctx.gcbDeployDir ?? path.join(process.env['HOME'] ?? '.', '.broker-host')
+  if (deployDir === '.broker-host') {
+    throw new BrokerFault('unavailable', 'the broker has no HOME to find the host broker under')
+  }
+  const pinFile = path.join(deployDir, 'app.ref')
+  const pidFile = path.join(deployDir, 'gcb-host.pid')
+  const stagedFile = path.join(deployDir, 'app', 'STAGED.json')
+
+  const readPid = async (): Promise<number | undefined> => {
+    const text = await readFile(pidFile, 'utf8').catch(() => '')
+    const pid = Number(text.trim())
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+  }
+  const alive = (pid: number | undefined): boolean => {
+    if (pid === undefined) {
+      return false
+    }
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const stagedSha = async (): Promise<string | undefined> => {
+    const text = await readFile(stagedFile, 'utf8').catch(() => '')
+    try {
+      const parsed = JSON.parse(text) as { sha?: unknown }
+      return typeof parsed.sha === 'string' ? parsed.sha : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  const before = await readPid()
+  await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
+  await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
+  if (before !== undefined && alive(before)) {
+    try {
+      process.kill(before, 'SIGTERM')
+    } catch {
+      // It exited between the check and the signal, which is the outcome the signal wanted.
+    }
+  }
+
+  const deadline = Date.now() + GCB_HOST_WAIT_MS
+  for (;;) {
+    const pid = await readPid()
+    if (pid !== before && alive(pid) && (await stagedSha()) === sha) {
+      return `pinned ${sha.slice(0, 12)}; host broker ${String(pid)} (was ${before === undefined ? 'not running' : String(before)})`
+    }
+    if (Date.now() >= deadline) {
+      throw new BrokerFault(
+        'unavailable',
+        `pinned ${sha.slice(0, 12)}, but the host broker did not stage it within ${String(GCB_HOST_WAIT_MS / 1000)}s; check ${path.join(deployDir, 'gcb-host.log')}`,
+      )
+    }
+    await new Promise(resolve => setTimeout(resolve, GCB_HOST_POLL_MS))
+  }
 }
 
 export const OPS: readonly OpDefinition[] = [
@@ -1985,7 +2119,8 @@ export const OPS: readonly OpDefinition[] = [
 
   {
     name: 'gcb.update',
-    summary: 'Rebuild the credential broker from its checkout and recreate only its container.',
+    summary:
+      'Update the credential broker from its checkout: rebuild and recreate its container, and pin the host-supervised broker to the same commit.',
     confirm: true,
     serial: true,
     // The operation's own deadline has to outlast every step it runs: a pull, a build and a
@@ -1993,7 +2128,7 @@ export const OPS: readonly OpDefinition[] = [
     // working update into a timeout halfway through it.
     timeoutMs:
       GCB_BUILD_STEPS * BUILD_TIMEOUT_MS + PROBE_TIMEOUT_MS + GCB_QUERIES * GCB_QUERY_TIMEOUT_MS,
-    requires: ['gcbCheckout', 'gcbCompose', 'gcbProbeRepo'],
+    requires: ['gcbCheckout'],
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {
       rejectUnknown(args, [])

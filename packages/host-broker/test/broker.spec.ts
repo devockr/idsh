@@ -38,6 +38,7 @@ import {
 
 // The bounds these tests assert against; named here because the broker keeps them internal.
 const ALIGN = 32
+const COMMIT_CHARS = 40
 /** Long enough for the deferred work of one operation to land. */
 const FLUSH_MS = 700
 /** The probe's bound, and the bound of each local query, as `gcb.update` declares them. */
@@ -4093,9 +4094,18 @@ async function gcbRig(
     { mode: 0o755 },
   )
   const gitPath = path.join(host.root, 'git')
-  await writeFile(gitPath, `#!/bin/sh\nprintf 'git %s\\n' "$*" >> ${JSON.stringify(recorded)}\n`, {
-    mode: 0o755,
-  })
+  await writeFile(
+    gitPath,
+    [
+      '#!/bin/sh',
+      `printf 'git %s\n' "$*" >> ${JSON.stringify(recorded)}`,
+      // `gcb.update` reads the commit it pins the host broker to; a fake git that answered nothing
+      // would read as "not a commit id".
+      'case "$*" in *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;; esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
   const gcbCheckout = path.join(host.root, 'gcb')
   const gcbComposeFiles = Array.from({ length: stub.files ?? 1 }, (_, index) =>
     path.join(host.root, `gcb-compose-${String(index)}.yml`),
@@ -4173,7 +4183,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     const answer = await withAmbientUid(() =>
       rig.connection.request({ op: 'gcb.update', args: {} }),
     )
-    assert.equal(answer.ok, true)
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const recorded = await rig.calls()
     assert.match(recorded, /git -C .*gcb pull --ff-only/u)
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --services/u)
@@ -4699,5 +4709,137 @@ void test('ops.describe answers the bare table to a client that declares nothing
   } finally {
     connection.close()
     await broker.close()
+  }
+})
+
+/** A broker configured for the host half of `gcb.update`: a fake git, no container. */
+async function hostUpdateRig(): Promise<{
+  host: FakeHost
+  deployDir: string
+  pinFile: string
+  pidFile: string
+  stagedFile: string
+  connection: Client
+  close(): Promise<void>
+}> {
+  const host = await fakeHost()
+  const deployDir = path.join(host.root, '.broker-host')
+  const appDir = path.join(deployDir, 'app')
+  await mkdir(appDir, { recursive: true })
+  const pinFile = path.join(deployDir, 'app.ref')
+  const pidFile = path.join(deployDir, 'gcb-host.pid')
+  const stagedFile = path.join(appDir, 'STAGED.json')
+  const oldSha = 'a'.repeat(COMMIT_CHARS)
+  await writeFile(pinFile, `${oldSha}\n`)
+  await writeFile(stagedFile, JSON.stringify({ sha: oldSha }))
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"pull --ff-only"*) echo "Already up to date." ;;',
+      '  *"status --porcelain"*) printf "%s" "$STATUS" ;;',
+      `  *"rev-parse HEAD"*) echo "${'b'.repeat(COMMIT_CHARS)}" ;;`,
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const gcbCheckout = path.join(host.root, 'gcb')
+  await mkdir(gcbCheckout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'docker'),
+    gitPath,
+    gcbCheckout,
+    gcbDeployDir: deployDir,
+    gcbHostUpdate: true,
+  })
+  const connection = client(host.socketPath)
+  return {
+    host,
+    deployDir,
+    pinFile,
+    pidFile,
+    stagedFile,
+    connection,
+    async close() {
+      connection.close()
+      await broker.close()
+    },
+  }
+}
+
+void test('gcb.update is not offered without a gcb checkout', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'docker'),
+    gcbHostUpdate: true,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: { protocol: 1 } })
+    const ops = describedTable(described.result).ops
+    assert.equal(
+      ops.find(op => op.name === 'gcb.update'),
+      undefined,
+    )
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.update pins the host broker and waits for the restarted process', async () => {
+  const rig = await hostUpdateRig()
+  const oldBroker = spawn('sleep', ['300'], { stdio: 'ignore' })
+  await writeFile(rig.pidFile, `${String(oldBroker.pid)}\n`)
+  const newSha = 'b'.repeat(COMMIT_CHARS)
+  const supervisor = spawn(
+    'sh',
+    [
+      '-c',
+      'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$4"; printf \'{"sha":"%s"}\\n\' "$3" > "$5"',
+      'sh',
+      rig.pinFile,
+      'a'.repeat(COMMIT_CHARS),
+      newSha,
+      rig.pidFile,
+      rig.stagedFile,
+    ],
+    { stdio: 'ignore' },
+  )
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /container: not configured/u)
+    assert.match(answer.result ?? '', /host: pinned b{12}/u)
+    assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), newSha)
+  } finally {
+    supervisor.kill()
+    oldBroker.kill()
+    delete process.env['STATUS']
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a dirty checkout before it touches either broker', async () => {
+  const rig = await hostUpdateRig()
+  process.env['STATUS'] = ' M packages/x.ts'
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /local changes/u)
+  } finally {
+    delete process.env['STATUS']
+    await rig.close()
   }
 })

@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
 import { access, appendFile, chmod, lstat, mkdir, rm, stat, unlink } from 'node:fs/promises'
 import net from 'node:net'
+import { homedir } from 'node:os'
 import path from 'node:path'
 
 import packageJson from '../package.json' with { type: 'json' }
@@ -94,6 +95,10 @@ export interface BrokerOptions {
   readonly checkout?: string
   /** The credential broker's own checkout; `gcb.update` rebuilds from it. */
   readonly gcbCheckout?: string
+  /** The host broker's own directory; `gcb.update` writes its pin there when `gcbHostUpdate`. */
+  readonly gcbDeployDir?: string
+  /** Whether `gcb.update` also pins the host-supervised broker to the commit it built. */
+  readonly gcbHostUpdate?: boolean
   /** The compose file(s) that run the broker, comma-separated; `gcb.update` handles one service. */
   readonly gcbCompose?: string
   /** The service in those files that runs the broker. Default `gcb`. */
@@ -195,6 +200,9 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
   const checkout = await optionalPath(options.checkout, '--checkout', 'directory')
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
+  // Defaulted, not required: only `gcb.host.update` reads it, and that operation reports its own
+  // missing directory when it runs.
+  const gcbDeployDir = options.gcbDeployDir ?? path.join(homedir(), '.broker-host')
   const gcbComposeFiles = await composeFiles(options.gcbCompose)
   const gcbService = options.gcbService ?? 'gcb'
   if (!/^\w[\w.-]*$/u.test(gcbService)) {
@@ -258,6 +266,8 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     deployLock,
     ...(checkout === undefined ? {} : { checkout }),
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
+    gcbDeployDir,
+    ...(options.gcbHostUpdate === true ? { gcbHostUpdate: true } : {}),
     ...(gcbComposeFiles === undefined ? {} : { gcbCompose: gcbComposeFiles }),
     gcbService,
     ...(gcbProbeRepo === undefined ? {} : { gcbProbeRepo }),
