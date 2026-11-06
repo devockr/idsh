@@ -4047,11 +4047,15 @@ async function withAmbientUid<T>(work: () => Promise<T>): Promise<T> {
 }
 
 interface GcbRig {
+  host: FakeHost
   connection: ReturnType<typeof client>
   /** Every docker invocation the fake recorded, one per line. */
   calls(): Promise<string>
   /** The pin file, when the rig also configured the host half. */
   pinFile?: string
+  /** The pid file and staged export, when the rig also configured the host half. */
+  pidFile?: string
+  stagedFile?: string
   close(): Promise<void>
 }
 
@@ -4128,13 +4132,12 @@ async function gcbRig(
   )
   const gcbCheckout = path.join(host.root, 'gcb')
   const deployDir = stub.host === true ? path.join(host.root, '.broker-host') : undefined
+  // `c` is not the fake git's commit (`a`), so a pin write is a visible change.
+  const oldSha = 'c'.repeat(COMMIT_CHARS)
   if (deployDir !== undefined) {
     await mkdir(path.join(deployDir, 'app'), { recursive: true })
-    await writeFile(path.join(deployDir, 'app.ref'), `${'a'.repeat(COMMIT_CHARS)}\n`)
-    await writeFile(
-      path.join(deployDir, 'app', 'STAGED.json'),
-      JSON.stringify({ sha: 'a'.repeat(COMMIT_CHARS) }),
-    )
+    await writeFile(path.join(deployDir, 'app.ref'), `${oldSha}\n`)
+    await writeFile(path.join(deployDir, 'app', 'STAGED.json'), JSON.stringify({ sha: oldSha }))
   }
   const gcbComposeFiles = Array.from({ length: stub.files ?? 1 }, (_, index) =>
     path.join(host.root, `gcb-compose-${String(index)}.yml`),
@@ -4157,8 +4160,15 @@ async function gcbRig(
   })
   const connection = client(host.socketPath)
   return {
+    host,
     connection,
-    ...(deployDir === undefined ? {} : { pinFile: path.join(deployDir, 'app.ref') }),
+    ...(deployDir === undefined
+      ? {}
+      : {
+          pinFile: path.join(deployDir, 'app.ref'),
+          pidFile: path.join(deployDir, 'gcb-host.pid'),
+          stagedFile: path.join(deployDir, 'app', 'STAGED.json'),
+        }),
     calls: () => readFile(recorded, 'utf8'),
     async close() {
       connection.close()
@@ -4278,7 +4288,7 @@ void test('gcb.update leaves the host pin alone when the build fails', async () 
     assert.match(JSON.stringify(answer.error), /build failed/u)
     assert.equal(
       rig.pinFile === undefined ? '' : (await readFile(rig.pinFile, 'utf8')).trim(),
-      'a'.repeat(COMMIT_CHARS),
+      'c'.repeat(COMMIT_CHARS),
     )
   } finally {
     await rig.close()
@@ -4838,6 +4848,57 @@ async function hostUpdateRig(): Promise<{
   }
 }
 
+void test('gcb.update can retry only the host half', async () => {
+  const rig = await gcbRig({ host: true })
+  let supervisor: ReturnType<typeof spawn> | undefined
+  let oldBroker: ReturnType<typeof spawn> | undefined
+  try {
+    const pinFile = rig.pinFile ?? ''
+    const pidFile = rig.pidFile ?? ''
+    const stagedFile = rig.stagedFile ?? ''
+    assert.ok(pinFile !== '' && pidFile !== '' && stagedFile !== '')
+    const fakeBroker = path.join(rig.host.root, 'gcb-host.sh')
+    await writeFile(fakeBroker, 'sleep 300\n')
+    oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
+    await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
+    // The rig's pin starts at `c`; the fake git's commit is `a`.
+    const newSha = 'a'.repeat(COMMIT_CHARS)
+    supervisor = spawn(
+      'sh',
+      [
+        '-c',
+        'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; printf \'{"sha":"%s"}\\n\' "$4" > "$5"',
+        'sh',
+        pinFile,
+        'c'.repeat(COMMIT_CHARS),
+        pidFile,
+        newSha,
+        stagedFile,
+      ],
+      { stdio: 'ignore' },
+    )
+    const answer = await rig.connection.request({ op: 'gcb.update', args: { target: 'host' } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /container: skipped \(target host\)/u)
+    // A host refresh does not rebuild the container.
+    assert.doesNotMatch(await rig.calls(), /build --target host/u)
+    assert.equal((await readFile(pinFile, 'utf8')).trim(), newSha)
+  } finally {
+    supervisor?.kill()
+    oldBroker?.kill()
+    const pidFile = rig.pidFile ?? ''
+    const restarted = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim())
+    if (Number.isInteger(restarted) && restarted > 0) {
+      try {
+        process.kill(restarted, 'SIGKILL')
+      } catch {
+        // Already gone.
+      }
+    }
+    await rig.close()
+  }
+})
+
 void test('gcb.update can retry only the container half', async () => {
   const rig = await gcbRig({ host: true })
   try {
@@ -4848,7 +4909,7 @@ void test('gcb.update can retry only the container half', async () => {
     assert.match(await rig.calls(), /build --target host/u)
     assert.equal(
       rig.pinFile === undefined ? '' : (await readFile(rig.pinFile, 'utf8')).trim(),
-      'a'.repeat(COMMIT_CHARS),
+      'c'.repeat(COMMIT_CHARS),
     )
   } finally {
     await rig.close()

@@ -1573,7 +1573,7 @@ async function updateBroker(
         },
       )
     ).trim()
-    if (configured === '') {
+    if (configured === '' && process.env['GIT_SSH'] === undefined) {
       pullEnv['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
     }
   }
@@ -1607,7 +1607,10 @@ async function updateBroker(
         `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
       )
     }
-    done.push('container: not configured')
+    // Configured and deliberately skipped is a different answer from not configured at all.
+    done.push(
+      containerConfigured ? 'container: skipped (target host)' : 'container: not configured',
+    )
     return done.join('; ')
   }
   // The named service, not the file: a deployment compose also runs dsh, and this operation must
