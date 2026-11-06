@@ -4153,8 +4153,6 @@ async function gcbRig(
     async close() {
       connection.close()
       await broker.close()
-      // The git stub reads this; leaving it behind would point later tests at a removed directory.
-      delete process.env['CALLS']
     },
   }
 }
@@ -4793,6 +4791,7 @@ async function hostUpdateRig(): Promise<{
     ].join('\n'),
     { mode: 0o755 },
   )
+  const previousCalls = process.env['CALLS']
   process.env['CALLS'] = calls
   const gcbCheckout = path.join(host.root, 'gcb')
   await mkdir(gcbCheckout)
@@ -4819,6 +4818,12 @@ async function hostUpdateRig(): Promise<{
     async close() {
       connection.close()
       await broker.close()
+      // The git stub reads this; leaving it behind would point later tests at a removed directory.
+      if (previousCalls === undefined) {
+        delete process.env['CALLS']
+      } else {
+        process.env['CALLS'] = previousCalls
+      }
     },
   }
 }
