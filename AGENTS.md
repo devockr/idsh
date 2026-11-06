@@ -346,9 +346,11 @@ operations (`deploy.status`, `deploy.log`, `deploy.versions`, `deploy.build`,
 `deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `run`, the one operation that takes an
 argv: a declared, read-only binary, its flags and positional shape checked against the declaration,
 `dryRun` answering the verdict first — `broker.status`/`broker.update`, so the
-broker can replace itself under its supervisor, and `gcb.update`, which rebuilds the credential
-broker from its own checkout, recreates only the named service (one or more compose files) and
-probes it through the deployment's client — and `packages/host-ops` turns that
+broker can replace itself under its supervisor, and `gcb.update`, which pulls the credential
+broker's checkout, optionally pins and restarts the host-supervised broker to the same commit
+(`--gcb-host`), rebuilds and recreates only the named service (one or more compose files) and
+probes it through the deployment's client; `target` limits an update to one half, for the retry
+after a two-phase failure — and `packages/host-ops` turns that
 table into dsh tools, asking the person first for any operation the table marks `confirm`. A change that
 implements one updates that file, `README.md` and this one in the same pull request — the next
 session reads the repository, not the private notes the plan came from.

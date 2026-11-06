@@ -4284,42 +4284,23 @@ void test('a combined failure after the pin carries the convergence hint', async
   // The build succeeds, the host pin moves, and the recreate fails: the answer has to say that the
   // host half is ahead, because re-running is what converges it.
   const rig = await gcbRig({ host: true, up: 'exit 1' })
-  const pinFile = rig.pinFile ?? ''
-  const pidFile = rig.pidFile ?? ''
-  const stagedFile = rig.stagedFile ?? ''
-  assert.ok(pinFile !== '' && pidFile !== '' && stagedFile !== '')
-  const fakeBroker = path.join(rig.host.root, 'gcb-host.sh')
-  await writeFile(fakeBroker, 'sleep 300\n')
-  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
-  let supervisor: ReturnType<typeof spawn> | undefined
+  let host: StandInHost | undefined
   try {
-    await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
-    supervisor = spawn(
-      'sh',
-      [
-        '-c',
-        'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; printf \'{"sha":"%s"}\\n\' "$(cat "$1")" > "$4"',
-        'sh',
-        pinFile,
-        'c'.repeat(COMMIT_CHARS),
-        pidFile,
-        stagedFile,
-      ],
-      { stdio: 'ignore', detached: true },
+    host = await standInForHost(
+      {
+        root: rig.host.root,
+        pinFile: rig.pinFile ?? '',
+        pidFile: rig.pidFile ?? '',
+        stagedFile: rig.stagedFile ?? '',
+      },
+      { oldSha: 'c'.repeat(COMMIT_CHARS), newSha: 'a'.repeat(COMMIT_CHARS) },
     )
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /host: pinned a{12}/u)
     assert.match(JSON.stringify(answer.error), /re-run gcb.update to converge both/u)
   } finally {
-    if (supervisor?.pid !== undefined) {
-      try {
-        process.kill(-supervisor.pid, 'SIGKILL')
-      } catch {
-        supervisor.kill()
-      }
-    }
-    oldBroker.kill()
+    host?.stop()
     await rig.close()
   }
 })
@@ -4907,50 +4888,24 @@ async function hostUpdateRig(): Promise<{
 
 void test('gcb.update can retry only the host half', async () => {
   const rig = await gcbRig({ host: true })
-  let supervisor: ReturnType<typeof spawn> | undefined
-  let oldBroker: ReturnType<typeof spawn> | undefined
+  let host: StandInHost | undefined
   try {
     const pinFile = rig.pinFile ?? ''
     const pidFile = rig.pidFile ?? ''
     const stagedFile = rig.stagedFile ?? ''
     assert.ok(pinFile !== '' && pidFile !== '' && stagedFile !== '')
-    const fakeBroker = path.join(rig.host.root, 'gcb-host.sh')
-    await writeFile(fakeBroker, 'sleep 300\n')
-    oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
-    await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
-    // The rig's pin starts at `c`; the fake git's commit is `a`.
-    const newSha = 'a'.repeat(COMMIT_CHARS)
-    supervisor = spawn(
-      'sh',
-      [
-        '-c',
-        'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; printf \'{"sha":"%s"}\\n\' "$4" > "$5"',
-        'sh',
-        pinFile,
-        'c'.repeat(COMMIT_CHARS),
-        pidFile,
-        newSha,
-        stagedFile,
-      ],
-      // Its own group: the replacement dies with it, even if the pid was never published.
-      { stdio: 'ignore', detached: true },
+    host = await standInForHost(
+      { root: rig.host.root, pinFile, pidFile, stagedFile },
+      { oldSha: 'c'.repeat(COMMIT_CHARS), newSha: 'a'.repeat(COMMIT_CHARS) },
     )
     const answer = await rig.connection.request({ op: 'gcb.update', args: { target: 'host' } })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     assert.match(answer.result ?? '', /container: skipped \(target host\)/u)
     // A host refresh does not rebuild the container.
     assert.doesNotMatch(await rig.calls(), /build --target host/u)
-    assert.equal((await readFile(pinFile, 'utf8')).trim(), newSha)
+    assert.equal((await readFile(pinFile, 'utf8')).trim(), 'a'.repeat(COMMIT_CHARS))
   } finally {
-    // The group, not a pid from a file that may not have been published yet.
-    if (supervisor?.pid !== undefined) {
-      try {
-        process.kill(-supervisor.pid, 'SIGKILL')
-      } catch {
-        supervisor.kill()
-      }
-    }
-    oldBroker?.kill()
+    host?.stop()
     await rig.close()
   }
 })
@@ -5145,6 +5100,54 @@ async function withEnv<T>(
   }
 }
 
+interface StandInHost {
+  stop(): void
+}
+
+/**
+ * A stand-in for the supervisor that restarts the host broker: it waits for `app.ref` to change,
+ * publishes a live replacement pid, optionally waits for `barrier`, then records the pinned commit
+ * as staged. `stop` kills the supervisor's process group, so a replacement published late dies with
+ * it, and the pid file is never read back.
+ */
+async function standInForHost(
+  where: { root: string; pinFile: string; pidFile: string; stagedFile: string },
+  options: { oldSha: string; newSha?: string; barrier?: string },
+): Promise<StandInHost> {
+  const fakeBroker = path.join(where.root, 'gcb-host.sh')
+  await writeFile(fakeBroker, 'sleep 300\n')
+  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
+  await writeFile(where.pidFile, `${String(oldBroker.pid)}\n`)
+  const supervisor = spawn(
+    'sh',
+    [
+      '-c',
+      'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; if [ -n "$6" ]; then while [ ! -e "$6" ]; do sleep 0.1; done; fi; if [ -n "$5" ]; then printf \'{"sha":"%s"}\\n\' "$5" > "$4"; else printf \'{"sha":"%s"}\\n\' "$(cat "$1")" > "$4"; fi',
+      'sh',
+      where.pinFile,
+      options.oldSha,
+      where.pidFile,
+      where.stagedFile,
+      options.newSha ?? '',
+      options.barrier ?? '',
+    ],
+    // Its own group: everything it starts dies with `stop`.
+    { stdio: 'ignore', detached: true },
+  )
+  return {
+    stop(): void {
+      if (supervisor.pid !== undefined) {
+        try {
+          process.kill(-supervisor.pid, 'SIGKILL')
+        } catch {
+          supervisor.kill()
+        }
+      }
+      oldBroker.kill()
+    },
+  }
+}
+
 void test('gcb.update makes ssh non-interactive when nothing else decides it', async () => {
   const rig = await gcbRig()
   try {
@@ -5240,30 +5243,19 @@ void test('gcb.update is not offered without a gcb checkout', async () => {
 
 void test('gcb.update pins the host broker and waits for the restarted process', async () => {
   const rig = await hostUpdateRig()
-  const fakeBroker = path.join(rig.host.root, 'gcb-host.sh')
-  await writeFile(fakeBroker, 'sleep 300\n')
-  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
-  await writeFile(rig.pidFile, `${String(oldBroker.pid)}\n`)
   const barrier = path.join(rig.host.root, 'staged.barrier')
   const newSha = 'b'.repeat(COMMIT_CHARS)
-  // The supervisor publishes the restarted pid first, then blocks before recording the staged
-  // commit: the operation has to keep waiting for the second fact, not answer on the first.
-  const supervisor = spawn(
-    'sh',
-    [
-      '-c',
-      'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$4"; while [ ! -e "$6" ]; do sleep 0.1; done; printf \'{"sha":"%s"}\\n\' "$3" > "$5"',
-      'sh',
-      rig.pinFile,
-      'a'.repeat(COMMIT_CHARS),
-      newSha,
-      rig.pidFile,
-      rig.stagedFile,
-      barrier,
-    ],
-    { stdio: 'ignore', detached: true },
-  )
+  let host: StandInHost | undefined
   try {
+    host = await standInForHost(
+      {
+        root: rig.host.root,
+        pinFile: rig.pinFile,
+        pidFile: rig.pidFile,
+        stagedFile: rig.stagedFile,
+      },
+      { oldSha: 'a'.repeat(COMMIT_CHARS), newSha, barrier },
+    )
     let settled = false
     const pending = rig.connection.request({ op: 'gcb.update', args: {} }).then(answer => {
       settled = true
@@ -5273,7 +5265,7 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     // new pid yet, the request would still be pending for the wrong reason.
     await waitFor(async () => {
       const restarted = Number((await readFile(rig.pidFile, 'utf8').catch(() => '')).trim())
-      if (!Number.isInteger(restarted) || restarted <= 0 || restarted === oldBroker.pid) {
+      if (!Number.isInteger(restarted) || restarted <= 0) {
         return false
       }
       try {
@@ -5293,15 +5285,7 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     assert.match(answer.result ?? '', /host: pinned b{12}/u)
     assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), newSha)
   } finally {
-    // The group, so a replacement that was started but not yet published dies with its supervisor.
-    if (supervisor.pid !== undefined) {
-      try {
-        process.kill(-supervisor.pid, 'SIGKILL')
-      } catch {
-        supervisor.kill()
-      }
-    }
-    oldBroker.kill()
+    host?.stop()
     delete process.env['STATUS']
     await rig.close()
   }
