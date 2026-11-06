@@ -1,5 +1,11 @@
 # @idsh/image
 
+## 0.2.1
+
+### Patch Changes
+
+- [#110](https://github.com/devockr/idsh/pull/110) [`dd69116`](https://github.com/devockr/idsh/commit/dd691166d8b5e4dfa9c99f19bde28acdbf96119f) Thanks [@renovate](https://github.com/apps/renovate)! - chore(deps): update dependency pnpm to v12.18.0
+
 ## 0.2.0
 
 ### Minor Changes
