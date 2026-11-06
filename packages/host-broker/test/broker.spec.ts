@@ -45,6 +45,8 @@ const FLUSH_MS = 700
 const GCB_PROBE_MS = 60_000
 /** The bounded pull and the host-broker wait, both part of the declared budget. */
 const GCB_PULL_MS = 60_000
+/** How often the host-half wait looks again; the barrier test relies on it. */
+const GCB_POLL_MS = 2_000
 const GCB_HOST_WAIT_MS = 300_000
 /** The git reads around the pull (status, commit), budgeted at the query deadline each. */
 const GCB_PRELUDE_STEPS = 2
@@ -4858,23 +4860,36 @@ void test('gcb.update pins the host broker and waits for the restarted process',
   await writeFile(fakeBroker, 'sleep 300\n')
   const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
   await writeFile(rig.pidFile, `${String(oldBroker.pid)}\n`)
+  const barrier = path.join(rig.host.root, 'staged.barrier')
   const newSha = 'b'.repeat(COMMIT_CHARS)
+  // The supervisor publishes the restarted pid first, then blocks before recording the staged
+  // commit: the operation has to keep waiting for the second fact, not answer on the first.
   const supervisor = spawn(
     'sh',
     [
       '-c',
-      'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$4"; printf \'{"sha":"%s"}\\n\' "$3" > "$5"',
+      'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$4"; while [ ! -e "$6" ]; do sleep 0.1; done; printf \'{"sha":"%s"}\\n\' "$3" > "$5"',
       'sh',
       rig.pinFile,
       'a'.repeat(COMMIT_CHARS),
       newSha,
       rig.pidFile,
       rig.stagedFile,
+      barrier,
     ],
     { stdio: 'ignore' },
   )
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    let settled = false
+    const pending = rig.connection.request({ op: 'gcb.update', args: {} }).then(answer => {
+      settled = true
+      return answer
+    })
+    // Longer than two poll intervals: a new pid is not the answer, the staged commit is.
+    await new Promise(resolve => setTimeout(resolve, 3 * GCB_POLL_MS))
+    assert.equal(settled, false)
+    await writeFile(barrier, '')
+    const answer = await pending
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     assert.match(answer.result ?? '', /container: not configured/u)
     assert.match(answer.result ?? '', /host: pinned b{12}/u)
@@ -4882,7 +4897,7 @@ void test('gcb.update pins the host broker and waits for the restarted process',
   } finally {
     supervisor.kill()
     oldBroker.kill()
-    // The restarted broker is a plain `sleep` started by the stand-in supervisor.
+    // The restarted broker is a plain sleep started by the stand-in supervisor.
     const restarted = Number((await readFile(rig.pidFile, 'utf8').catch(() => '')).trim())
     if (Number.isInteger(restarted) && restarted > 0) {
       try {
