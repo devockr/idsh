@@ -135,6 +135,13 @@ live in the state directory, so the conversation survives, the process does not)
   dies with the connection that asked for it. The command itself, with the host and the paths,
   lives in the local deployment notes. A deployment may wrap it in a local script that warms the
   image layers and logs what it did — read the log, don't assume.
+- **A host-supervised broker runs from a pinned export, and nothing bumps that pin for you.** It runs
+  the tree at `~/.broker-host/app`, which is staged from the commit named in
+  `~/.broker-host/app.ref` — not from the checkout's working tree — and `gcb.update` does not touch
+  it, because that rebuilds the container image. Updating gcb therefore means moving the pin to the
+  new commit and restarting the host broker: one line plus a restart, and a stale pin is how the
+  host half silently stays behind the client it serves. Verify the staged commit
+  (`STAGED.json`'s `sha`) against your own clone before trusting it.
 - Until the plugins are published the published image cannot be built at all, so local runs use
   `:dev` (built from `:base`, plugins from `packages/`) — which is also what "dogfood the source"
   means here. `pnpm deploy:prod` drives `docker-compose.prod.yml`: it pulls the pinned
