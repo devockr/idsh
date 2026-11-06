@@ -291,6 +291,7 @@ function runFixed(
         new BrokerFault(
           'unavailable',
           message === '' ? `${program} exited with ${code ?? signal ?? 'no status'}` : message,
+          code ?? undefined,
         ),
       )
     })
@@ -1548,7 +1549,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
         (error: unknown) => {
           // `git config --get` exits 1 for a key that is not set; anything else — a timeout, a
           // broken configuration — is a real failure and must not read as "nothing configured".
-          if (error instanceof BrokerFault && error.message.endsWith('exited with 1')) {
+          if (error instanceof BrokerFault && error.exitCode === 1) {
             return ''
           }
           throw error

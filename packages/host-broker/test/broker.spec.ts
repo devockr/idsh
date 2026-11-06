@@ -4115,7 +4115,8 @@ async function gcbRig(
       // `gcb.update` reads the commit it pins the host broker to, and whether an ssh command is
       // configured before it pulls.
       'case "$*" in',
-      '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; printf "%s" "${CORE_SSH:-}" ;;',
+      // git exits 1 for a key that is not set — the branch the operation must read as "unset".
+      '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; if [ "${CORE_SSH+x}" != x ]; then exit 1; fi; printf "%s" "$CORE_SSH" ;;',
       '  *"pull --ff-only"*) printf "ssh=%s\\n" "${GIT_SSH_COMMAND:-none}" >> ' +
         JSON.stringify(recorded) +
         '; echo "Already up to date." ;;',

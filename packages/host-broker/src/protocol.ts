@@ -46,11 +46,16 @@ export interface BrokerResponse {
 /** A failure the caller is meant to see, with a code it can branch on. */
 export class BrokerFault extends Error {
   readonly code: BrokerErrorCode
+  /** The exit status of the program that failed, when the fault came from one. */
+  readonly exitCode?: number
 
-  constructor(code: BrokerErrorCode, message: string) {
+  constructor(code: BrokerErrorCode, message: string, exitCode?: number) {
     super(message)
     this.name = 'BrokerFault'
     this.code = code
+    if (exitCode !== undefined) {
+      this.exitCode = exitCode
+    }
   }
 }
 
