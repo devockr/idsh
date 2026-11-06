@@ -4937,6 +4937,8 @@ void test('gcb.update names a host broker directory that is not there', async ()
     // Owner-only, like every other socket here: a group-writable parent rejects the socket mode.
     const secondRoot = path.join(rig.host.root, 'second')
     await mkdir(secondRoot, { mode: DIRECTORY_MODE })
+    // Some filesystems (this Synology one) ignore the mode on mkdir; the socket's own check does not.
+    await chmod(secondRoot, DIRECTORY_MODE)
     broker = await startBroker({
       socketPath: path.join(secondRoot, 'host.sock'),
       auditPath: path.join(rig.host.root, 'second.jsonl'),
