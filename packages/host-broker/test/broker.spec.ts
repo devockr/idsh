@@ -4980,6 +4980,25 @@ void test('gcb.update does not read a failed config query as "unset"', async () 
   }
 })
 
+void test('gcb.update respects an inherited GIT_SSH wrapper', async () => {
+  const inherited = process.env['GIT_SSH']
+  process.env['GIT_SSH'] = '/usr/bin/ssh-wrapper'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    // The wrapper decides the ssh command; BatchMode must not replace it.
+    assert.match(await rig.calls(), /ssh=none/u)
+  } finally {
+    await rig.close()
+    if (inherited === undefined) {
+      delete process.env['GIT_SSH']
+    } else {
+      process.env['GIT_SSH'] = inherited
+    }
+  }
+})
+
 void test('gcb.update leaves a configured ssh command alone', async () => {
   process.env['CORE_SSH'] = 'ssh -o ProxyCommand=corp-proxy'
   const rig = await gcbRig()
