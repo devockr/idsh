@@ -5116,6 +5116,8 @@ async function withEnv<T>(
 }
 
 interface StandInHost {
+  /** The process the pid file named before the pin moved; a replacement is anything else. */
+  oldPid: number | undefined
   stop(): void
 }
 
@@ -5150,6 +5152,7 @@ async function standInForHost(
     { stdio: 'ignore', detached: true },
   )
   return {
+    oldPid: oldBroker.pid,
     stop(): void {
       if (supervisor.pid !== undefined) {
         try {
@@ -5280,7 +5283,8 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     // new pid yet, the request would still be pending for the wrong reason.
     await waitFor(async () => {
       const restarted = Number((await readFile(rig.pidFile, 'utf8').catch(() => '')).trim())
-      if (!Number.isInteger(restarted) || restarted <= 0) {
+      // The old pid sits in that file before the pin moves: only a different one is a replacement.
+      if (!Number.isInteger(restarted) || restarted <= 0 || restarted === host.oldPid) {
         return false
       }
       try {
