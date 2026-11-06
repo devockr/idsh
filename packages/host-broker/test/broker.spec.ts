@@ -4121,7 +4121,7 @@ async function gcbRig(
       'case "$*" in',
       // git exits 1 for a key that is not set — the branch the operation must read as "unset".
       '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; if [ "${CORE_SSH+x}" != x ]; then exit 1; fi; printf "%s" "$CORE_SSH" ;;',
-      '  *"pull --ff-only"*) printf "ssh=%s\\n" "${GIT_SSH_COMMAND:-none}" >> ' +
+      '  *"pull --ff-only"*) printf "ssh=%s gitdir=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" >> ' +
         JSON.stringify(recorded) +
         '; echo "Already up to date." ;;',
       '  *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;',
@@ -4875,7 +4875,8 @@ void test('gcb.update can retry only the host half', async () => {
         newSha,
         stagedFile,
       ],
-      { stdio: 'ignore' },
+      // Its own group: the replacement dies with it, even if the pid was never published.
+      { stdio: 'ignore', detached: true },
     )
     const answer = await rig.connection.request({ op: 'gcb.update', args: { target: 'host' } })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
@@ -4884,17 +4885,15 @@ void test('gcb.update can retry only the host half', async () => {
     assert.doesNotMatch(await rig.calls(), /build --target host/u)
     assert.equal((await readFile(pinFile, 'utf8')).trim(), newSha)
   } finally {
-    supervisor?.kill()
-    oldBroker?.kill()
-    const pidFile = rig.pidFile ?? ''
-    const restarted = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim())
-    if (Number.isInteger(restarted) && restarted > 0) {
+    // The group, not a pid from a file that may not have been published yet.
+    if (supervisor?.pid !== undefined) {
       try {
-        process.kill(restarted, 'SIGKILL')
+        process.kill(-supervisor.pid, 'SIGKILL')
       } catch {
-        // Already gone.
+        supervisor.kill()
       }
     }
+    oldBroker?.kill()
     await rig.close()
   }
 })
@@ -4938,6 +4937,25 @@ void test('gcb.update refuses a half that is not configured', async () => {
     assert.match(JSON.stringify(answer.error), /host half is not configured/u)
   } finally {
     await containerOnly.close()
+  }
+})
+
+void test('gcb.update clears an inherited git repository location', async () => {
+  const inherited = process.env['GIT_DIR']
+  process.env['GIT_DIR'] = '/elsewhere/.git'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    // Empty, not inherited: `-C` alone would not override GIT_DIR.
+    assert.match(await rig.calls(), /gitdir=\n/u)
+  } finally {
+    await rig.close()
+    if (inherited === undefined) {
+      delete process.env['GIT_DIR']
+    } else {
+      process.env['GIT_DIR'] = inherited
+    }
   }
 })
 
@@ -5059,7 +5077,7 @@ void test('gcb.update pins the host broker and waits for the restarted process',
       rig.stagedFile,
       barrier,
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', detached: true },
   )
   try {
     let settled = false
@@ -5091,17 +5109,15 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     assert.match(answer.result ?? '', /host: pinned b{12}/u)
     assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), newSha)
   } finally {
-    supervisor.kill()
-    oldBroker.kill()
-    // The restarted broker is a plain sleep started by the stand-in supervisor.
-    const restarted = Number((await readFile(rig.pidFile, 'utf8').catch(() => '')).trim())
-    if (Number.isInteger(restarted) && restarted > 0) {
+    // The group, so a replacement that was started but not yet published dies with its supervisor.
+    if (supervisor.pid !== undefined) {
       try {
-        process.kill(restarted, 'SIGKILL')
+        process.kill(-supervisor.pid, 'SIGKILL')
       } catch {
-        // Already gone.
+        supervisor.kill()
       }
     }
+    oldBroker.kill()
     delete process.env['STATUS']
     await rig.close()
   }

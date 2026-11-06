@@ -1522,12 +1522,18 @@ async function updateBroker(
   // Each step names itself, in the answer and in the failure: a pull that worked and a build that
   // did not are different answers to whoever reads the audit log.
   const done: string[] = []
+  // A broker may inherit GIT_DIR/GIT_WORK_TREE from whatever started it, and `-C` does not override
+  // them: the pull would then act on another repository while the build uses this checkout. Every
+  // git call here clears only the repository location; transport settings stay inherited.
+  const isolatedGitEnv = { GIT_DIR: '', GIT_WORK_TREE: '', GIT_INDEX_FILE: '' }
   // Fail before the one network step. A dirty checkout would otherwise be pulled into before the
   // refusal, and a missing host directory would pay for the pull first; the directory resolved here
   // is the one the pin writes to, so the check and the write cannot disagree.
   let deployDir = ''
   if (hostUpdate) {
-    const dirty = (await git(ctx, ['status', '--porcelain'], { stdoutOnly: true }, checkout)).trim()
+    const dirty = (
+      await git(ctx, ['status', '--porcelain'], { stdoutOnly: true, env: isolatedGitEnv }, checkout)
+    ).trim()
     if (dirty !== '') {
       throw new BrokerFault(
         'unavailable',
@@ -1556,22 +1562,25 @@ async function updateBroker(
   // proxy, from the remote the checkout already has — this operation does not rewrite it. Prompts
   // are off because nobody is at a terminal; a network that answers nothing fails at the bound
   // rather than holding the request open.
-  const pullEnv: NodeJS.ProcessEnv = { GIT_TERMINAL_PROMPT: '0' }
+  const pullEnv: NodeJS.ProcessEnv = { GIT_TERMINAL_PROMPT: '0', ...isolatedGitEnv }
   // ssh can still ask on /dev/tty (passphrase, host key), so it is made non-interactive — but only
   // when the operator has not chosen an ssh command: core.sshCommand and GIT_SSH_COMMAND win,
   // because that is where a ProxyCommand or a key selection lives. ~/.ssh/config is read either way.
   if (process.env['GIT_SSH_COMMAND'] === undefined) {
     const configured = (
-      await git(ctx, ['config', '--get', 'core.sshCommand'], { stdoutOnly: true }, checkout).catch(
-        (error: unknown) => {
-          // `git config --get` exits 1 for a key that is not set; anything else — a timeout, a
-          // broken configuration — is a real failure and must not read as "nothing configured".
-          if (error instanceof BrokerFault && error.exitCode === 1) {
-            return ''
-          }
-          throw error
-        },
-      )
+      await git(
+        ctx,
+        ['config', '--get', 'core.sshCommand'],
+        { stdoutOnly: true, env: isolatedGitEnv },
+        checkout,
+      ).catch((error: unknown) => {
+        // `git config --get` exits 1 for a key that is not set; anything else — a timeout, a
+        // broken configuration — is a real failure and must not read as "nothing configured".
+        if (error instanceof BrokerFault && error.exitCode === 1) {
+          return ''
+        }
+        throw error
+      })
     ).trim()
     if (configured === '' && process.env['GIT_SSH'] === undefined) {
       pullEnv['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
@@ -1591,7 +1600,7 @@ async function updateBroker(
   done.push(`pull: ${pull}`)
   const sha = (
     await step('read the commit', () =>
-      git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true }, checkout),
+      git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true, env: isolatedGitEnv }, checkout),
     )
   ).trim()
   if (!COMMIT_ID.test(sha)) {
