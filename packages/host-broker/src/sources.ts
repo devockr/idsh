@@ -1740,6 +1740,12 @@ function httpsRemote(remote: string): string | undefined {
   if (ssh !== null) {
     return `https://${ssh[1]}/${ssh[2]}`
   }
+  // Credentials in the URL would be an argument of the pull, and arguments are in the process
+  // list. Falling back to the plain pull keeps them in the remote's configuration, where git reads
+  // them without echoing them.
+  if (/^https?:\/\/[^/]*@/u.test(remote)) {
+    return undefined
+  }
   return /^https?:\/\//u.test(remote) ? remote : undefined
 }
 

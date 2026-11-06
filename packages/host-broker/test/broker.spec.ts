@@ -4300,6 +4300,21 @@ void test('gcb.update pulls the branch the checkout tracks, over https', async (
   }
 })
 
+void test('gcb.update keeps a credential-bearing remote out of the process list', async () => {
+  process.env['REMOTE'] = 'https://user:secret@github.com/code-vaults/git-credential-broker.git'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const calls = await rig.calls()
+    assert.match(calls, /pull --ff-only(?![^\n]*https:\/\/)/u)
+    assert.doesNotMatch(calls, /secret/u)
+  } finally {
+    await rig.close()
+    delete process.env['REMOTE']
+  }
+})
+
 void test('gcb.update leaves an ssh remote with no https form alone', async () => {
   process.env['REMOTE'] = 'ssh://git@github.com:2222/code-vaults/git-credential-broker.git'
   const rig = await gcbRig()

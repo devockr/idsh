@@ -12,4 +12,6 @@ restarts it, and only answers once the new pid reports that commit — or fails 
 The container half is unchanged and still optional: a host-only deployment passes `--gcb-host` and no
 compose files. The pull is the one network step: it pulls the tracked branch, rewrites an ssh origin to HTTPS so
 no key is needed for a public repository, and is bounded (60 s, non-interactive) — without an agent
-or a proxy git waits on a prompt rather than failing, which was a hang, not an error.
+or a proxy git waits on a prompt rather than failing, which was a hang, not an error. A remote that
+already carries credentials is left to the plain pull: the URL never becomes an argument, so a token
+cannot appear in the process list.
