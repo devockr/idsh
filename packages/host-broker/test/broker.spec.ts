@@ -4044,6 +4044,8 @@ interface GcbRig {
   connection: ReturnType<typeof client>
   /** Every docker invocation the fake recorded, one per line. */
   calls(): Promise<string>
+  /** The pin file, when the rig also configured the host half. */
+  pinFile?: string
   close(): Promise<void>
 }
 
@@ -4060,6 +4062,8 @@ async function gcbRig(
     probe?: string
     /** How many compose files to configure; more than one exercises the base-plus-overlay form. */
     files?: number
+    /** Configure the host half too, so a failure can be checked against its pin. */
+    host?: boolean
   } = {},
 ): Promise<GcbRig> {
   const host = await fakeHost()
@@ -4114,6 +4118,15 @@ async function gcbRig(
     { mode: 0o755 },
   )
   const gcbCheckout = path.join(host.root, 'gcb')
+  const deployDir = stub.host === true ? path.join(host.root, '.broker-host') : undefined
+  if (deployDir !== undefined) {
+    await mkdir(path.join(deployDir, 'app'), { recursive: true })
+    await writeFile(path.join(deployDir, 'app.ref'), `${'a'.repeat(COMMIT_CHARS)}\n`)
+    await writeFile(
+      path.join(deployDir, 'app', 'STAGED.json'),
+      JSON.stringify({ sha: 'a'.repeat(COMMIT_CHARS) }),
+    )
+  }
   const gcbComposeFiles = Array.from({ length: stub.files ?? 1 }, (_, index) =>
     path.join(host.root, `gcb-compose-${String(index)}.yml`),
   )
@@ -4131,10 +4144,12 @@ async function gcbRig(
     gcbCheckout,
     gcbCompose: gcbComposeFiles.join(','),
     gcbProbeRepo: 'devockr/idsh',
+    ...(deployDir === undefined ? {} : { gcbDeployDir: deployDir, gcbHostUpdate: true }),
   })
   const connection = client(host.socketPath)
   return {
     connection,
+    ...(deployDir === undefined ? {} : { pinFile: path.join(deployDir, 'app.ref') }),
     calls: () => readFile(recorded, 'utf8'),
     async close() {
       connection.close()
@@ -4179,11 +4194,11 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
-    // The operation outlasts every step it runs: three build-budget steps, the probe, four
-    // queries, the bounded pull and the host-broker wait.
+    // The operation outlasts every step it runs: the build and the recreate at the build budget,
+    // the probe, four queries, the bounded pull and the host-broker wait.
     assert.equal(
       update.timeoutMs,
-      3 * BUILD_TIMEOUT_MS +
+      2 * BUILD_TIMEOUT_MS +
         GCB_PROBE_MS +
         GCB_QUERY_COUNT * GCB_QUERY_MS +
         GCB_PULL_MS +
@@ -4240,6 +4255,21 @@ void test('gcb.update refuses a compose file that names two images', async () =>
     assert.equal(answer.ok, false)
     assert.equal(answer.error?.code, 'unavailable')
     assert.match(answer.error?.message ?? '', /names 2 images/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update leaves the host pin alone when the build fails', async () => {
+  const rig = await gcbRig({ host: true, build: 'exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /build failed/u)
+    assert.equal(
+      rig.pinFile === undefined ? '' : (await readFile(rig.pinFile, 'utf8')).trim(),
+      'a'.repeat(COMMIT_CHARS),
+    )
   } finally {
     await rig.close()
   }
@@ -4854,7 +4884,9 @@ void test('gcb.update is not offered without a gcb checkout', async () => {
 
 void test('gcb.update pins the host broker and waits for the restarted process', async () => {
   const rig = await hostUpdateRig()
-  const oldBroker = spawn('sleep', ['300'], { stdio: 'ignore' })
+  const fakeBroker = path.join(rig.host.root, 'gcb-host.sh')
+  await writeFile(fakeBroker, 'sleep 300\n')
+  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
   await writeFile(rig.pidFile, `${String(oldBroker.pid)}\n`)
   const newSha = 'b'.repeat(COMMIT_CHARS)
   const supervisor = spawn(
@@ -4882,6 +4914,15 @@ void test('gcb.update pins the host broker and waits for the restarted process',
   } finally {
     supervisor.kill()
     oldBroker.kill()
+    // The restarted broker is a plain `sleep` started by the stand-in supervisor.
+    const restarted = Number((await readFile(rig.pidFile, 'utf8').catch(() => '')).trim())
+    if (Number.isInteger(restarted) && restarted > 0) {
+      try {
+        process.kill(restarted, 'SIGKILL')
+      } catch {
+        // Already gone.
+      }
+    }
     delete process.env['STATUS']
     await rig.close()
   }
@@ -4890,25 +4931,27 @@ void test('gcb.update pins the host broker and waits for the restarted process',
 void test('gcb.update names a host broker directory that is not there', async () => {
   const rig = await hostUpdateRig()
   const missing = path.join(rig.host.root, 'missing-broker-home')
-  const broker = await startBroker({
-    socketPath: path.join(rig.host.root, 'second.sock'),
-    auditPath: path.join(rig.host.root, 'second.jsonl'),
-    logDir: rig.host.logDir,
-    procDir: rig.host.procDir,
-    dockerPath: path.join(rig.host.root, 'docker'),
-    gitPath: path.join(rig.host.root, 'git'),
-    gcbCheckout: path.join(rig.host.root, 'gcb'),
-    gcbDeployDir: missing,
-    gcbHostUpdate: true,
-  })
-  const connection = client(path.join(rig.host.root, 'second.sock'))
+  let broker: RunningBroker | undefined
+  let connection: Client | undefined
   try {
+    broker = await startBroker({
+      socketPath: path.join(rig.host.root, 'second.sock'),
+      auditPath: path.join(rig.host.root, 'second.jsonl'),
+      logDir: rig.host.logDir,
+      procDir: rig.host.procDir,
+      dockerPath: path.join(rig.host.root, 'docker'),
+      gitPath: path.join(rig.host.root, 'git'),
+      gcbCheckout: path.join(rig.host.root, 'gcb'),
+      gcbDeployDir: missing,
+      gcbHostUpdate: true,
+    })
+    connection = client(path.join(rig.host.root, 'second.sock'))
     const answer = await connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /missing-broker-home is not a directory/u)
   } finally {
-    connection.close()
-    await broker.close()
+    connection?.close()
+    await broker?.close()
     await rig.close()
   }
 })
@@ -4920,6 +4963,8 @@ void test('gcb.update refuses a dirty checkout before it touches either broker',
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /local changes/u)
+    // The refusal comes before the network step: nothing was pulled into the checkout.
+    assert.doesNotMatch(await readFile(rig.calls, 'utf8'), /pull --ff-only/u)
   } finally {
     delete process.env['STATUS']
     await rig.close()

@@ -57,7 +57,7 @@ export interface OpContext {
   readonly container: string
   readonly dockerPath: string
   readonly checkout?: string
-  /** The credential broker's checkout; `gcb.update` rebuilds from it. */
+  /** The credential broker's checkout; `gcb.update` pulls it and rebuilds from it. */
   readonly gcbCheckout?: string
   /** The host broker's own directory: `app.ref`, its pid file and the staged export. */
   readonly gcbDeployDir?: string
@@ -1455,7 +1455,7 @@ const GCB_QUERY_TIMEOUT_MS = 10_000
 /** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
 const GCB_QUERIES = 5
 /** The steps that may take the build budget: pull, build and recreate. */
-const GCB_BUILD_STEPS = 3
+const GCB_BUILD_STEPS = 2
 
 /**
  * Rebuild the credential broker from its own checkout and recreate only its container.
@@ -1499,6 +1499,18 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // Each step names itself, in the answer and in the failure: a pull that worked and a build that
   // did not are different answers to whoever reads the audit log.
   const done: string[] = []
+  // Fail before the one network step. A dirty checkout would otherwise be pulled into before the
+  // refusal, and a missing host directory would pay for the pull first.
+  if (hostUpdate) {
+    const dirty = (await git(ctx, ['status', '--porcelain'], { stdoutOnly: true }, checkout)).trim()
+    if (dirty !== '') {
+      throw new BrokerFault(
+        'unavailable',
+        'gcb.update: the checkout has local changes; commit or stash them, so the container and the host broker run the same commit',
+      )
+    }
+    await hostDeployDir(ctx)
+  }
   const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
     try {
       return await work()
@@ -1576,27 +1588,10 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     )
   }
   done.push(`commit: ${sha.slice(0, 12)}`)
-  // The host broker runs a staged export of one commit, so it can only be updated from a clean
-  // checkout: a dirty tree would build a container from changes the exported tree does not have,
-  // and the two brokers would answer from different commits while both call themselves updated.
-  if (hostUpdate) {
-    const dirty = (
-      await step('check the checkout', () =>
-        git(ctx, ['status', '--porcelain'], { stdoutOnly: true }, checkout),
-      )
-    ).trim()
-    if (dirty !== '') {
-      throw new BrokerFault(
-        'unavailable',
-        withCompleted(
-          'gcb.update: the checkout has local changes; commit or stash them, so the container and the host broker run the same commit',
-          done,
-        ),
-      )
-    }
-    done.push(`host: ${await step('pin the host broker', () => pinHostBroker(ctx, sha))}`)
-  }
   if (!containerUpdate) {
+    if (hostUpdate) {
+      done.push(`host: ${await step('pin the host broker', () => pinHostBroker(ctx, sha))}`)
+    }
     done.push('container: not configured')
     return done.join('; ')
   }
@@ -1657,6 +1652,11 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     }),
   )
   done.push('build: ok')
+  // The pin comes after a successful build: a build that fails must leave the host broker on the
+  // commit it was running, or the two halves diverge in the very state this operation prevents.
+  if (hostUpdate) {
+    done.push(`host: ${await step('pin the host broker', () => pinHostBroker(ctx, sha))}`)
+  }
   // The image this operation just built is the one that runs: never build from a compose `build:`
   // stanza, never reach for a registry.
   await step('recreate', () =>
@@ -1766,7 +1766,7 @@ const COMMIT_ID = /^[0-9a-f]{40}$/u
  * supervisor restart it. This operation does exactly that, and waits for the restarted process and
  * the staged commit, because "the pin moved" is not "the broker runs it".
  */
-async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
+async function hostDeployDir(ctx: OpContext): Promise<string> {
   const deployDir = ctx.gcbDeployDir ?? defaultDeployDir()
   const stats = await stat(deployDir).catch(() => null)
   if (stats === null || !stats.isDirectory()) {
@@ -1775,6 +1775,11 @@ async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
       `gcb.update: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's`,
     )
   }
+  return deployDir
+}
+
+async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
+  const deployDir = await hostDeployDir(ctx)
   const pinFile = path.join(deployDir, 'app.ref')
   const pidFile = path.join(deployDir, 'gcb-host.pid')
   const stagedFile = path.join(deployDir, 'app', 'STAGED.json')
@@ -1809,6 +1814,15 @@ async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
   await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
   await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
   if (before !== undefined && alive(before)) {
+    // A pid file survives a crash, and a recycled pid belongs to somebody else: a courtesy check
+    // before signalling, so a stale file cannot take down an unrelated process of the same user.
+    const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
+    if (!/gcb/u.test(cmdline)) {
+      throw new BrokerFault(
+        'unavailable',
+        `gcb.update: refusing to stop ${String(before)}: its command line is not the gcb host broker`,
+      )
+    }
     try {
       process.kill(before, 'SIGTERM')
     } catch {

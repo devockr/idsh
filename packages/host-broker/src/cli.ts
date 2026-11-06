@@ -30,9 +30,8 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml
                           (plus docker-compose.broker.yml when the broker runs in a container);
                           also the source broker.update rebuilds from when the CLI runs inside it
-  --gcb-checkout <dir>   The credential broker's checkout; needed with --gcb-compose
-                          and --gcb-probe-repo to enable gcb.update, and to resolve a
-                          ref for gcb.host.update
+  --gcb-checkout <dir>   The credential broker's checkout; gcb.update pulls it, rebuilds
+                          the container image from it and pins the host broker to it
   --gcb-deploy-dir <dir> The host broker's own directory, holding app.ref and gcb-host.pid
                           (default $HOME/.broker-host)
   --gcb-host            gcb.update also pins the host-supervised broker to the commit it built,

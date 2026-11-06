@@ -94,7 +94,7 @@ export const RECREATE_WAIT_MS = 180_000
 export const RECREATE_POLL_MS = 2_000
 
 /**
- * How long `gcb.host.update` waits for the restarted host broker to stage the commit it pinned.
+ * How long `gcb.update`'s host half waits for the restarted host broker to stage its commit.
  *
  * The restart re-stages the export and installs its dependencies, which is a network step; the wait
  * exists so the answer says "staged", not "asked", and a timeout is a visible failure rather than a
