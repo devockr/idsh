@@ -33,8 +33,8 @@ import {
   BUILD_TIMEOUT_MS,
   COMPOSE_TIMEOUT_MS,
   GCB_HOST_POLL_MS,
-  GCB_PULL_TIMEOUT_MS,
   GCB_HOST_WAIT_MS,
+  GCB_PULL_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
   MAX_ERROR_CHARS,
@@ -1454,6 +1454,8 @@ const PROBE_TIMEOUT_MS = 60_000
 const GCB_QUERY_TIMEOUT_MS = 10_000
 /** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
 const GCB_QUERIES = 5
+/** The git reads before the pull, each at the default deadline, so the budget does not assume them. */
+const GCB_PRELUDE_STEPS = 5
 /** The steps that may take the build budget: build and recreate (the pull has its own bound). */
 const GCB_BUILD_STEPS = 2
 
@@ -1758,14 +1760,7 @@ function defaultDeployDir(): string {
 /** A commit id, which is all `app.ref` may hold. */
 const COMMIT_ID = /^[0-9a-f]{40}$/u
 
-/**
- * Move the host-side gcb broker to a commit and wait until it runs it.
- *
- * The host broker is started by a supervisor that re-stages `~/.broker-host/app` from the commit in
- * `app.ref` whenever it starts, so an update is: write the pin, stop the process, and let the
- * supervisor restart it. This operation does exactly that, and waits for the restarted process and
- * the staged commit, because "the pin moved" is not "the broker runs it".
- */
+/** The host broker's directory, checked once so a missing one is named before any work starts. */
 async function hostDeployDir(ctx: OpContext): Promise<string> {
   const deployDir = ctx.gcbDeployDir ?? defaultDeployDir()
   const stats = await stat(deployDir).catch(() => null)
@@ -1778,6 +1773,14 @@ async function hostDeployDir(ctx: OpContext): Promise<string> {
   return deployDir
 }
 
+/**
+ * Move the host-side gcb broker to a commit and wait until it runs it.
+ *
+ * The host broker is started by a supervisor that re-stages `~/.broker-host/app` from the commit in
+ * `app.ref` whenever it starts, so an update is: write the pin, stop the process, and let the
+ * supervisor restart it. This does exactly that, and waits for the restarted process and the staged
+ * commit, because "the pin moved" is not "the broker runs it".
+ */
 async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
   const deployDir = await hostDeployDir(ctx)
   const pinFile = path.join(deployDir, 'app.ref')
@@ -2228,6 +2231,7 @@ export const OPS: readonly OpDefinition[] = [
       GCB_BUILD_STEPS * BUILD_TIMEOUT_MS +
       PROBE_TIMEOUT_MS +
       GCB_QUERIES * GCB_QUERY_TIMEOUT_MS +
+      GCB_PRELUDE_STEPS * GCB_QUERY_TIMEOUT_MS +
       GCB_PULL_TIMEOUT_MS +
       GCB_HOST_WAIT_MS,
     requires: ['gcbCheckout'],

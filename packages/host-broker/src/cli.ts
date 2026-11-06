@@ -34,7 +34,7 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
                           the container image from it and pins the host broker to it
   --gcb-deploy-dir <dir> The host broker's own directory, holding app.ref and gcb-host.pid
                           (default $HOME/.broker-host)
-  --gcb-host            gcb.update also pins the host-supervised broker to the commit it built,
+  --gcb-host             gcb.update also pins the host-supervised broker to the commit it built,
                           restarts it and waits until it has staged that commit
   --gcb-compose <files>  The compose file(s) that run the credential broker, comma-separated
   --gcb-service <name>   The service in those files that runs the broker (default gcb)

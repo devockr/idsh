@@ -46,6 +46,8 @@ const GCB_PROBE_MS = 60_000
 /** The bounded pull and the host-broker wait, both part of the declared budget. */
 const GCB_PULL_MS = 60_000
 const GCB_HOST_WAIT_MS = 300_000
+/** The git reads before the pull, budgeted at the query deadline each. */
+const GCB_PRELUDE_STEPS = 5
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, replicas, ps and inspect. */
 const GCB_QUERY_COUNT = 5
@@ -4154,6 +4156,8 @@ async function gcbRig(
     async close() {
       connection.close()
       await broker.close()
+      // The git stub reads this; leaving it behind would point later tests at a removed directory.
+      delete process.env['CALLS']
     },
   }
 }
@@ -4201,6 +4205,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
       2 * BUILD_TIMEOUT_MS +
         GCB_PROBE_MS +
         GCB_QUERY_COUNT * GCB_QUERY_MS +
+        GCB_PRELUDE_STEPS * GCB_QUERY_MS +
         GCB_PULL_MS +
         GCB_HOST_WAIT_MS,
     )
