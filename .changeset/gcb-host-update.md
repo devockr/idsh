@@ -10,9 +10,7 @@ the checkout. With `--gcb-host`, `gcb.update` refuses a dirty checkout (the two 
 different code while both calling themselves updated), pins the host broker to the commit it built,
 restarts it, and only answers once the new pid reports that commit — or fails with the log to read.
 The container half is unchanged and still optional: a host-only deployment passes `--gcb-host` and no
-compose files. The pull is the one network step: it pulls the tracked branch, rewrites an ssh origin to HTTPS so
-no key is needed for a public repository, and is bounded (60 s, non-interactive) — without an agent
-or a proxy git waits on a prompt rather than failing, which was a hang, not an error. A remote that
-already carries credentials is left to the plain pull: the URL never becomes an argument, so a token
-cannot appear in the process list. A private checkout whose only credentials are ssh gets a second
-bounded attempt over its configured remote, so the rewrite cannot turn a working pull into a 404.
+compose files. The pull is the one network step and does not rewrite the checkout's remote: git uses its
+configuration, so ssh, HTTPS and the proxy behave exactly as they do for a manual pull. It is not
+interactive (`GIT_TERMINAL_PROMPT=0`) and bounded (60 s), because nobody is at a terminal and a
+network that answers nothing must fail rather than hold the request open.

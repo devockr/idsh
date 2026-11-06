@@ -1454,10 +1454,11 @@ const PROBE_TIMEOUT_MS = 60_000
 const GCB_QUERY_TIMEOUT_MS = 10_000
 /** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
 const GCB_QUERIES = 5
-/** The git reads before the pull, each at the default deadline, so the budget does not assume them. */
-const GCB_PRELUDE_STEPS = 5
-/** How many attempts the pull gets: the rewritten URL, then the checkout's own remote. */
-const GCB_PULL_ATTEMPTS = 2
+/**
+ * The git reads around the pull — the optional status check and the commit — at the default
+ * deadline.
+ */
+const GCB_PRELUDE_STEPS = 2
 /** The steps that may take the build budget: build and recreate (the pull has its own bound). */
 const GCB_BUILD_STEPS = 2
 
@@ -1524,74 +1525,26 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
     }
   }
-  // The only network step. The remote is rewritten to HTTPS: a host broker may have no ssh agent
-  // and no key, a public repository needs no credential over HTTPS, and git then honours
-  // `http_proxy`/`https_proxy` — the only way a broker behind a proxy reaches GitHub. The bound
-  // stays, because a network that answers nothing must fail rather than hold the operation open.
-  // What this branch tracks, not what it is called: `release` may track `origin/main`, and an
-  // explicit pull of `origin/release` would then deploy a branch that does not exist.
-  const upstream = (
-    await git(
-      ctx,
-      ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
-      {
-        stdoutOnly: true,
-      },
-      checkout,
-    ).catch(() => '')
-  ).trim()
-  const slash = upstream.indexOf('/')
-  const remoteName = slash > 0 ? upstream.slice(0, slash) : 'origin'
-  const tracked = slash > 0 ? upstream.slice(slash + 1) : ''
-  const branch =
-    tracked === ''
-      ? (
-          await step('read the branch', () =>
-            git(ctx, ['rev-parse', '--abbrev-ref', 'HEAD'], { stdoutOnly: true }, checkout),
-          )
-        ).trim()
-      : tracked
-  const remote = (
-    await step('read the remote', () =>
-      git(ctx, ['remote', 'get-url', remoteName], { stdoutOnly: true }, checkout),
-    )
-  ).trim()
-  const https = httpsRemote(remote)
-  // One attempt over the rewritten URL, and — only for that URL — one over the configured remote.
-  // A private checkout may have ssh credentials and no HTTPS credential, and its previous pull
-  // worked; refusing it here because HTTPS answered 404 would be a regression. The fallback keeps
-  // the same bound, so a network that answers nothing still fails.
-  const pullEnv = {
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=10',
-  }
-  const attempt = (args: string[]) =>
-    git(ctx, args, { stdoutOnly: true, timeoutMs: GCB_PULL_TIMEOUT_MS, env: pullEnv }, checkout)
-  let pull: string
-  let note = ''
-  if (https === undefined || branch === '' || branch === 'HEAD') {
-    pull = linesOf(await step('pull', () => attempt(['pull', '--ff-only'])))[0] ?? ''
-  } else {
-    try {
-      pull = linesOf(await attempt(['pull', '--ff-only', https, branch]))[0] ?? ''
-      note = ' (https)'
-    } catch (error) {
-      const remoteError = messageOf(error)
-      try {
-        pull = linesOf(await attempt(['pull', '--ff-only']))[0] ?? ''
-        note = ` (https failed: ${remoteError}; used the configured remote)`
-      } catch (fallbackError) {
-        throw new BrokerFault(
-          'unavailable',
-          withCompleted(
-            `gcb.update: pull failed over https (${remoteError}) and over the configured remote (${messageOf(fallbackError)})`,
-            done,
-          ),
-        )
-      }
-    }
-  }
-  done.push(`pull: ${pull}${note}`)
+  // The one network step, and the only one that needs a bound: git decides ssh or HTTPS, and the
+  // proxy, from the remote the checkout already has — this operation does not rewrite it. Prompts
+  // are off because nobody is at a terminal; a network that answers nothing fails at the bound
+  // rather than holding the request open.
+  const pull =
+    linesOf(
+      await step('pull', () =>
+        git(
+          ctx,
+          ['pull', '--ff-only'],
+          {
+            stdoutOnly: true,
+            timeoutMs: GCB_PULL_TIMEOUT_MS,
+            env: { GIT_TERMINAL_PROMPT: '0' },
+          },
+          checkout,
+        ),
+      ),
+    )[0] ?? ''
+  done.push(`pull: ${pull}`)
   const sha = (
     await step('read the commit', () =>
       git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true }, checkout),
@@ -1733,34 +1686,6 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   )
   done.push(`probe: ${repo} allowed`)
   return done.join('; ')
-}
-
-/**
- * The same repository over HTTPS, for a remote that uses ssh.
- *
- * The host broker may have no ssh agent and no key, and a public repository needs no credential
- * over HTTPS — so the one network step does not depend on how this machine happens to be logged in.
- * It also means git honours `http_proxy`/`https_proxy`, which is how a broker behind a proxy
- * reaches GitHub at all.
- */
-function httpsRemote(remote: string): string | undefined {
-  // Only the shapes that have an HTTPS equivalent: a port in the host and an absolute path in the
-  // scp form do not, and inventing a URL for them would break a pull that ssh handled.
-  const scp = /^git@([^:/]+):(?!\/)(.+)$/u.exec(remote)
-  if (scp !== null) {
-    return `https://${scp[1]}/${scp[2]}`
-  }
-  const ssh = /^ssh:\/\/git@([^/:]+)\/(.+)$/u.exec(remote)
-  if (ssh !== null) {
-    return `https://${ssh[1]}/${ssh[2]}`
-  }
-  // Credentials in the URL would be an argument of the pull, and arguments are in the process
-  // list. Falling back to the plain pull keeps them in the remote's configuration, where git reads
-  // them without echoing them.
-  if (/^https?:\/\/[^/]*@/u.test(remote)) {
-    return undefined
-  }
-  return /^https?:\/\//u.test(remote) ? remote : undefined
 }
 
 /* ------------------------------------------------------------------ gcb.update (host half) */
@@ -2252,7 +2177,7 @@ export const OPS: readonly OpDefinition[] = [
       PROBE_TIMEOUT_MS +
       GCB_QUERIES * GCB_QUERY_TIMEOUT_MS +
       GCB_PRELUDE_STEPS * GCB_QUERY_TIMEOUT_MS +
-      GCB_PULL_ATTEMPTS * GCB_PULL_TIMEOUT_MS +
+      GCB_PULL_TIMEOUT_MS +
       GCB_HOST_WAIT_MS,
     requires: ['gcbCheckout'],
     // One half has to be configured, or the call could only fail after a confirmation: the host

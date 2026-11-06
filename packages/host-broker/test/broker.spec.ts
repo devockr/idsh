@@ -45,11 +45,9 @@ const FLUSH_MS = 700
 const GCB_PROBE_MS = 60_000
 /** The bounded pull and the host-broker wait, both part of the declared budget. */
 const GCB_PULL_MS = 60_000
-/** The rewritten URL first, then the configured remote. */
-const GCB_PULL_ATTEMPTS = 2
 const GCB_HOST_WAIT_MS = 300_000
-/** The git reads before the pull, budgeted at the query deadline each. */
-const GCB_PRELUDE_STEPS = 5
+/** The git reads around the pull (status, commit), budgeted at the query deadline each. */
+const GCB_PRELUDE_STEPS = 2
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, replicas, ps and inspect. */
 const GCB_QUERY_COUNT = 5
@@ -4112,11 +4110,6 @@ async function gcbRig(
       `printf 'git %s\n' "$*" >> ${JSON.stringify(recorded)}`,
       // `gcb.update` reads the commit it pins the host broker to, and the upstream it pulls.
       'case "$*" in',
-      '  *"rev-parse --abbrev-ref --symbolic-full-name @{upstream}"*) printf "%s" "$UPSTREAM" ;;',
-      '  *"rev-parse --abbrev-ref HEAD"*) printf "%s" "${HEAD_BRANCH:-main}" ;;',
-      '  *"remote get-url "*) printf "%s" "${REMOTE:-git@github.com:code-vaults/git-credential-broker.git}" ;;',
-      '  *"pull --ff-only https"*) if [ -n "$FAIL_HTTPS" ]; then echo "https refused" >&2; exit 1; fi; echo "Already up to date." ;;',
-      '  *"pull --ff-only"*) echo "Already up to date." ;;',
       '  *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;',
       'esac',
       '',
@@ -4210,7 +4203,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
         GCB_PROBE_MS +
         GCB_QUERY_COUNT * GCB_QUERY_MS +
         GCB_PRELUDE_STEPS * GCB_QUERY_MS +
-        GCB_PULL_ATTEMPTS * GCB_PULL_MS +
+        GCB_PULL_MS +
         GCB_HOST_WAIT_MS,
     )
 
@@ -4281,71 +4274,6 @@ void test('gcb.update leaves the host pin alone when the build fails', async () 
     )
   } finally {
     await rig.close()
-  }
-})
-
-void test('gcb.update pulls the branch the checkout tracks, over https', async () => {
-  process.env['UPSTREAM'] = 'origin/main'
-  process.env['HEAD_BRANCH'] = 'release'
-  delete process.env['REMOTE']
-  const rig = await gcbRig()
-  try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    // `release` tracks `origin/main`: the pull names main, not release.
-    assert.match(
-      await rig.calls(),
-      /pull --ff-only https:\/\/github\.com\/code-vaults\/git-credential-broker\.git main/u,
-    )
-  } finally {
-    await rig.close()
-    delete process.env['UPSTREAM']
-    delete process.env['HEAD_BRANCH']
-  }
-})
-
-void test('gcb.update falls back to the configured remote when https fails', async () => {
-  process.env['FAIL_HTTPS'] = '1'
-  const rig = await gcbRig()
-  try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    assert.match(answer.result ?? '', /used the configured remote/u)
-    const calls = await rig.calls()
-    assert.match(calls, /pull --ff-only https:\/\//u)
-    assert.match(calls, /pull --ff-only\n/u)
-  } finally {
-    await rig.close()
-    delete process.env['FAIL_HTTPS']
-  }
-})
-
-void test('gcb.update keeps a credential-bearing remote out of the process list', async () => {
-  process.env['REMOTE'] = 'https://user:secret@github.com/code-vaults/git-credential-broker.git'
-  const rig = await gcbRig()
-  try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    const calls = await rig.calls()
-    assert.match(calls, /pull --ff-only(?![^\n]*https:\/\/)/u)
-    assert.doesNotMatch(calls, /secret/u)
-  } finally {
-    await rig.close()
-    delete process.env['REMOTE']
-  }
-})
-
-void test('gcb.update leaves an ssh remote with no https form alone', async () => {
-  process.env['REMOTE'] = 'ssh://git@github.com:2222/code-vaults/git-credential-broker.git'
-  const rig = await gcbRig()
-  try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    const calls = await rig.calls()
-    assert.match(calls, /pull --ff-only(?![^\n]*https:\/\/)/u)
-  } finally {
-    await rig.close()
-    delete process.env['REMOTE']
   }
 })
 
@@ -4857,9 +4785,6 @@ async function hostUpdateRig(): Promise<{
       '#!/bin/sh',
       `printf '%s\\n' "$*" >> "\${CALLS}"`,
       'case "$*" in',
-      '  *"rev-parse --abbrev-ref --symbolic-full-name @{upstream}"*) printf "%s" "$UPSTREAM" ;;',
-      '  *"rev-parse --abbrev-ref HEAD"*) printf "%s" "${HEAD_BRANCH:-main}" ;;',
-      '  *"remote get-url "*) printf "%s" "${REMOTE:-git@github.com:code-vaults/git-credential-broker.git}" ;;',
       '  *"pull --ff-only"*) echo "Already up to date." ;;',
       '  *"status --porcelain"*) printf "%s" "$STATUS" ;;',
       `  *"rev-parse HEAD"*) echo "${'b'.repeat(COMMIT_CHARS)}" ;;`,
@@ -4948,8 +4873,6 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     assert.match(answer.result ?? '', /container: not configured/u)
     assert.match(answer.result ?? '', /host: pinned b{12}/u)
-    // The ssh remote is rewritten for the pull: no key, no agent, and the proxy still applies.
-    assert.match(answer.result ?? '', /\(https\)/u)
     assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), newSha)
   } finally {
     supervisor.kill()
