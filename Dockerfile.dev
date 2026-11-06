@@ -55,26 +55,17 @@ FROM ${BASE}
 # An ARG before FROM is only usable in the FROM line, so the registry has to be declared again.
 ARG NPM_REGISTRY=https://registry.npmmirror.com/
 
-# apt is by far the slowest step, and the default mirror measured 11.6KB/s here against 874KB/s
-# for the one below — the same reason NPM_REGISTRY defaults to a mirror. Override with
-# `--build-arg APT_MIRROR=…`; both the deb822 and the classic source layout are handled.
-ARG APT_MIRROR=mirrors.aliyun.com
-# The same trick as npm_cache above, with one extra step: the Debian images ship
-# /etc/apt/apt.conf.d/docker-clean, which deletes /var/cache/apt/archives after every dpkg run — so
-# without removing it the cache mount would hold nothing and every rebuild would download the lot
-# again. `keep-cache` then makes apt keep what it downloads. Neither file lands in the image, so the
-# usual `rm -rf /var/lib/apt/lists/*` is not just unnecessary — it would empty the cache each build.
+# The apt sources are the base image's, already rewritten to its `APT_MIRROR` — so this stage
+# installs from the same mirror without an argument of its own. A build that wants another mirror
+# passes it to the base, not here.
+# The base image already dropped `docker-clean` and set `keep-cache`, and both are image layers,
+# so this stage only installs: the two cache mounts are what keeps the archives between builds.
 RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=apt_lists,target=/var/lib/apt/lists,sharing=locked \
-  for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
-      if [ -f "$f" ]; then sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" "$f"; fi; \
-    done && \
-    rm -f /etc/apt/apt.conf.d/docker-clean \
- && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
- && apt-get update && apt-get install -y --no-install-recommends \
-      libatk-bridge2.0-0 libgbm1 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
-      libxkbcommon0 libnss3 libasound2 fonts-liberation fontconfig \
-      libcups2 libcairo2 libpango-1.0-0
+  apt-get update && apt-get install -y --no-install-recommends \
+  libatk-bridge2.0-0 libgbm1 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
+  libxkbcommon0 libnss3 libasound2 fonts-liberation fontconfig \
+  libcups2 libcairo2 libpango-1.0-0
 
 # The same baked profile as the published image, from this checkout instead of the registry, and
 # as a `link:` rather than a copy: a deployment may mount a built checkout over

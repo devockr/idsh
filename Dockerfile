@@ -35,9 +35,16 @@ RUN groupadd app && useradd -m -g app -s /bin/bash app
 # Named caches, like npm_cache: the archives and lists persist across builds, and a cache mount
 # is not part of the layer — which is why the cleanup that used to follow is gone instead of
 # moved: it would empty the cache on every build.
+# The mirror is the same one Dockerfile.dev defaults to, for the same measured reason: the
+# default measured 11.6KB/s here against 874KB/s for the mirror. Override with
+# `--build-arg APT_MIRROR=…`; both the deb822 and the classic source layout are handled.
+ARG APT_MIRROR=mirrors.aliyun.com
 RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=apt_lists,target=/var/lib/apt/lists,sharing=locked \
-  rm -f /etc/apt/apt.conf.d/docker-clean \
+  for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+      if [ -f "$f" ]; then sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" "$f"; fi; \
+    done \
+   && rm -f /etc/apt/apt.conf.d/docker-clean \
    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
    && apt-get update && apt-get install -y --no-install-recommends \
   bash ca-certificates curl git openssh-client util-linux
