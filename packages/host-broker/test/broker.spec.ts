@@ -47,6 +47,8 @@ const GCB_PROBE_MS = 60_000
 const GCB_PULL_MS = 60_000
 /** How often the host-half wait looks again; the barrier test relies on it. */
 const GCB_POLL_MS = 2_000
+/** How long the barrier test waits for the stand-in supervisor to publish its replacement. */
+const REPLACEMENT_WAIT_MS = 5_000
 const GCB_HOST_WAIT_MS = 300_000
 /** The git reads around the pull (status, commit), budgeted at the query deadline each. */
 const GCB_PRELUDE_STEPS = 2
@@ -4885,6 +4887,20 @@ void test('gcb.update pins the host broker and waits for the restarted process',
       settled = true
       return answer
     })
+    // The replacement has to be *running* before the pending assertion means anything: with no
+    // new pid yet, the request would still be pending for the wrong reason.
+    await waitFor(async () => {
+      const restarted = Number((await readFile(rig.pidFile, 'utf8').catch(() => '')).trim())
+      if (!Number.isInteger(restarted) || restarted <= 0 || restarted === oldBroker.pid) {
+        return false
+      }
+      try {
+        process.kill(restarted, 0)
+        return true
+      } catch {
+        return false
+      }
+    }, REPLACEMENT_WAIT_MS)
     // Longer than two poll intervals: a new pid is not the answer, the staged commit is.
     await new Promise(resolve => setTimeout(resolve, 3 * GCB_POLL_MS))
     assert.equal(settled, false)
