@@ -55,12 +55,9 @@ FROM ${BASE}
 # An ARG before FROM is only usable in the FROM line, so the registry has to be declared again.
 ARG NPM_REGISTRY=https://registry.npmmirror.com/
 
-# apt is by far the slowest step, and the default mirror measured 11.6KB/s here against 874KB/s
-# for the one below — the same reason NPM_REGISTRY defaults to a mirror. Override with
-# `--build-arg APT_MIRROR=…`. The base image already persisted its own mirror, so this rewrites
-# whatever host the sources name — Debian's or an inherited mirror — rather than only
-# deb.debian.org; each of these files holds nothing but Debian repositories.
-ARG APT_MIRROR=mirrors.aliyun.com
+# The apt sources are the base image's, already rewritten to its `APT_MIRROR` — so this stage
+# installs from the same mirror without an argument of its own. A build that wants another mirror
+# passes it to the base, not here.
 # The same trick as npm_cache above, with one extra step: the Debian images ship
 # /etc/apt/apt.conf.d/docker-clean, which deletes /var/cache/apt/archives after every dpkg run — so
 # without removing it the cache mount would hold nothing and every rebuild would download the lot
@@ -68,10 +65,7 @@ ARG APT_MIRROR=mirrors.aliyun.com
 # usual `rm -rf /var/lib/apt/lists/*` is not just unnecessary — it would empty the cache each build.
 RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=apt_lists,target=/var/lib/apt/lists,sharing=locked \
-  for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
-      if [ -f "$f" ]; then sed -i -E "s#https?://[^/[:space:]]+#http://${APT_MIRROR}#g" "$f"; fi; \
-    done && \
-    rm -f /etc/apt/apt.conf.d/docker-clean \
+  rm -f /etc/apt/apt.conf.d/docker-clean \
  && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
  && apt-get update && apt-get install -y --no-install-recommends \
       libatk-bridge2.0-0 libgbm1 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
