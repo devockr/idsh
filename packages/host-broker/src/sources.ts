@@ -131,14 +131,6 @@ export interface OpDefinition {
   run(args: Record<string, unknown>, ctx: OpContext): Promise<Execution | string>
 }
 
-/**
- * Run one fixed program with fixed arguments.
- *
- * No shell and no caller-supplied argv; both pipes are collected in arrival order, so a log that
- * writes to stderr is not reordered or welded onto stdout. Past the buffer ceiling a tail operation
- * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
- * size, from the end a log is asked for.
- */
 /** The broker's environment plus an operation's overrides, with `undefined` meaning "remove". */
 function withDropped(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const merged: NodeJS.ProcessEnv = { ...process.env, ...extra }
@@ -166,6 +158,14 @@ interface RunOptions {
   readonly onTruncated?: () => void
 }
 
+/**
+ * Run one fixed program with fixed arguments.
+ *
+ * No shell and no caller-supplied argv; both pipes are collected in arrival order, so a log that
+ * writes to stderr is not reordered or welded onto stdout. Past the buffer ceiling a tail operation
+ * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
+ * size, from the end a log is asked for.
+ */
 function runFixed(
   ctx: OpContext,
   program: string,
