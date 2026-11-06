@@ -139,6 +139,17 @@ export interface OpDefinition {
  * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
  * size, from the end a log is asked for.
  */
+/** The broker's environment plus an operation's overrides, with `undefined` meaning "remove". */
+function withDropped(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = { ...process.env, ...extra }
+  for (const key of Object.keys(extra)) {
+    if (extra[key] === undefined) {
+      delete merged[key]
+    }
+  }
+  return merged
+}
+
 interface RunOptions {
   readonly keep?: Keep
   /** How long this program may run; a build is minutes, not the default ten seconds. */
@@ -147,7 +158,7 @@ interface RunOptions {
   readonly logPath?: string
   /** Where the program runs; a compose file is relative to its checkout. */
   readonly cwd?: string
-  /** Extra environment, merged over the broker's own. */
+  /** Extra environment, merged over the broker's own; an `undefined` value removes the key. */
   readonly env?: NodeJS.ProcessEnv
   /** Answer with stdout only; a caller that parses the output must not see compose's warnings. */
   readonly stdoutOnly?: boolean
@@ -173,7 +184,7 @@ function runFixed(
       // Its own group, so a timeout can stop whatever the program started too.
       detached: true,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+      ...(options.env === undefined ? {} : { env: withDropped(options.env) }),
     })
     const state: { settled: boolean; timer?: NodeJS.Timeout } = {
       settled: false,
@@ -1525,7 +1536,12 @@ async function updateBroker(
   // A broker may inherit GIT_DIR/GIT_WORK_TREE from whatever started it, and `-C` does not override
   // them: the pull would then act on another repository while the build uses this checkout. Every
   // git call here clears only the repository location; transport settings stay inherited.
-  const isolatedGitEnv = { GIT_DIR: '', GIT_WORK_TREE: '', GIT_INDEX_FILE: '' }
+  // `undefined` removes the keys: an empty GIT_DIR is a path, not "unset", and git fails on it.
+  const isolatedGitEnv: NodeJS.ProcessEnv = {
+    GIT_DIR: undefined,
+    GIT_WORK_TREE: undefined,
+    GIT_INDEX_FILE: undefined,
+  }
   // Fail before the one network step. A dirty checkout would otherwise be pulled into before the
   // refusal, and a missing host directory would pay for the pull first; the directory resolved here
   // is the one the pin writes to, so the check and the write cannot disagree.

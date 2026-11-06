@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmod,
@@ -4121,7 +4121,7 @@ async function gcbRig(
       'case "$*" in',
       // git exits 1 for a key that is not set — the branch the operation must read as "unset".
       '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; if [ "${CORE_SSH+x}" != x ]; then exit 1; fi; printf "%s" "$CORE_SSH" ;;',
-      '  *"pull --ff-only"*) printf "ssh=%s gitdir=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" >> ' +
+      '  *"pull --ff-only"*) printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
         JSON.stringify(recorded) +
         '; echo "Already up to date." ;;',
       '  *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;',
@@ -4940,6 +4940,91 @@ void test('gcb.update refuses a half that is not configured', async () => {
   }
 })
 
+void test('gcb.update keeps real git on the checkout despite an inherited GIT_DIR', async () => {
+  // A real git, not a stub: the point is that git itself accepts the environment it is given.
+  const host = await fakeHost()
+  const work = path.join(host.root, 'work')
+  const origin = path.join(host.root, 'origin.git')
+  const git = (...args: string[]): void => {
+    execFileSync('git', args, { stdio: 'ignore' })
+  }
+  git('init', '--bare', origin)
+  git('init', '-b', 'main', work)
+  git('-C', work, 'config', 'user.email', 'test@example.invalid')
+  git('-C', work, 'config', 'user.name', 'test')
+  await writeFile(path.join(work, 'a.txt'), 'one\n')
+  git('-C', work, 'add', 'a.txt')
+  git('-C', work, 'commit', '-m', 'one')
+  git('-C', work, 'remote', 'add', 'origin', origin)
+  git('-C', work, 'push', '-u', 'origin', 'main')
+
+  const deployDir = path.join(host.root, '.broker-host')
+  await mkdir(path.join(deployDir, 'app'), { recursive: true })
+  const pinFile = path.join(deployDir, 'app.ref')
+  const pidFile = path.join(deployDir, 'gcb-host.pid')
+  const stagedFile = path.join(deployDir, 'app', 'STAGED.json')
+  const oldSha = 'c'.repeat(COMMIT_CHARS)
+  await writeFile(pinFile, `${oldSha}\n`)
+  await writeFile(stagedFile, JSON.stringify({ sha: oldSha }))
+
+  const fakeBroker = path.join(host.root, 'gcb-host.sh')
+  await writeFile(fakeBroker, 'sleep 300\n')
+  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
+  await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
+  const supervisor = spawn(
+    'sh',
+    [
+      '-c',
+      'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; printf \'{"sha":"%s"}\\n\' "$(cat "$1")" > "$4"',
+      'sh',
+      pinFile,
+      oldSha,
+      pidFile,
+      stagedFile,
+    ],
+    { stdio: 'ignore', detached: true },
+  )
+
+  const inherited = process.env['GIT_DIR']
+  process.env['GIT_DIR'] = path.join(host.root, 'elsewhere', '.git')
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    gitPath: 'git',
+    gcbCheckout: work,
+    gcbDeployDir: deployDir,
+    gcbHostUpdate: true,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: { target: 'host' } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const pinned = (await readFile(pinFile, 'utf8')).trim()
+    assert.match(pinned, /^[0-9a-f]{40}$/u)
+    assert.notEqual(pinned, oldSha)
+    const staged = JSON.parse(await readFile(stagedFile, 'utf8')) as { sha?: string }
+    assert.equal(staged.sha, pinned)
+  } finally {
+    connection.close()
+    await broker.close()
+    if (supervisor.pid !== undefined) {
+      try {
+        process.kill(-supervisor.pid, 'SIGKILL')
+      } catch {
+        supervisor.kill()
+      }
+    }
+    oldBroker.kill()
+    if (inherited === undefined) {
+      delete process.env['GIT_DIR']
+    } else {
+      process.env['GIT_DIR'] = inherited
+    }
+  }
+})
+
 void test('gcb.update clears an inherited git repository location', async () => {
   const inherited = process.env['GIT_DIR']
   process.env['GIT_DIR'] = '/elsewhere/.git'
@@ -4947,8 +5032,8 @@ void test('gcb.update clears an inherited git repository location', async () => 
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    // Empty, not inherited: `-C` alone would not override GIT_DIR.
-    assert.match(await rig.calls(), /gitdir=\n/u)
+    // Removed, not blanked: git treats an empty GIT_DIR as a path and fails on it.
+    assert.match(await rig.calls(), /gitdir=unset/u)
   } finally {
     await rig.close()
     if (inherited === undefined) {
@@ -5000,19 +5085,36 @@ void test('gcb.update does not read a failed config query as "unset"', async () 
 
 void test('gcb.update respects an inherited GIT_SSH wrapper', async () => {
   const inherited = process.env['GIT_SSH']
+  const inheritedCommand = process.env['GIT_SSH_COMMAND']
+  const inheritedCore = process.env['CORE_SSH']
+  delete process.env['GIT_SSH_COMMAND']
+  delete process.env['CORE_SSH']
   process.env['GIT_SSH'] = '/usr/bin/ssh-wrapper'
   const rig = await gcbRig()
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    // The wrapper decides the ssh command; BatchMode must not replace it.
-    assert.match(await rig.calls(), /ssh=none/u)
+    // The wrapper decides the ssh command; BatchMode must not replace it — and the pull really ran
+    // with that wrapper in its environment.
+    const calls = await rig.calls()
+    assert.match(calls, /ssh=none/u)
+    assert.match(calls, /wrapper=\/usr\/bin\/ssh-wrapper$/mu)
   } finally {
     await rig.close()
     if (inherited === undefined) {
       delete process.env['GIT_SSH']
     } else {
       process.env['GIT_SSH'] = inherited
+    }
+    if (inheritedCommand === undefined) {
+      delete process.env['GIT_SSH_COMMAND']
+    } else {
+      process.env['GIT_SSH_COMMAND'] = inheritedCommand
+    }
+    if (inheritedCore === undefined) {
+      delete process.env['CORE_SSH']
+    } else {
+      process.env['CORE_SSH'] = inheritedCore
     }
   }
 })
