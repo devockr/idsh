@@ -1604,7 +1604,10 @@ async function updateBroker(
         if (error instanceof BrokerFault && error.exitCode === 1) {
           return ''
         }
-        throw error
+        throw new BrokerFault(
+          error instanceof BrokerFault ? error.code : 'unavailable',
+          `gcb.update: reading the ssh configuration failed: ${messageOf(error)}`,
+        )
       })
     ).trim()
     if (configured === '' && process.env['GIT_SSH'] === undefined) {
