@@ -12,5 +12,6 @@ restarts it, and only answers once the new pid reports that commit — or fails 
 The container half is unchanged and still optional: a host-only deployment passes `--gcb-host` and no
 compose files. The pull is the one network step and does not rewrite the checkout's remote: git uses its
 configuration, so ssh, HTTPS and the proxy behave exactly as they do for a manual pull. It is not
-interactive (`GIT_TERMINAL_PROMPT=0`) and bounded (60 s), because nobody is at a terminal and a
-network that answers nothing must fail rather than hold the request open.
+interactive (`GIT_TERMINAL_PROMPT=0`, and `BatchMode` when the operator has not configured an ssh
+command) and bounded (60 s), because nobody is at a terminal and a network that answers nothing must
+fail rather than hold the request open.

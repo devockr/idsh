@@ -50,8 +50,8 @@ const GCB_POLL_MS = 2_000
 /** How long the barrier test waits for the stand-in supervisor to publish its replacement. */
 const REPLACEMENT_WAIT_MS = 5_000
 const GCB_HOST_WAIT_MS = 300_000
-/** The git reads around the pull (status, commit), budgeted at the query deadline each. */
-const GCB_PRELUDE_STEPS = 2
+/** The git reads around the pull (status, ssh config, commit), budgeted at the query deadline each. */
+const GCB_PRELUDE_STEPS = 3
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, replicas, ps and inspect. */
 const GCB_QUERY_COUNT = 5
@@ -4112,8 +4112,13 @@ async function gcbRig(
     [
       '#!/bin/sh',
       `printf 'git %s\n' "$*" >> ${JSON.stringify(recorded)}`,
-      // `gcb.update` reads the commit it pins the host broker to, and the upstream it pulls.
+      // `gcb.update` reads the commit it pins the host broker to, and whether an ssh command is
+      // configured before it pulls.
       'case "$*" in',
+      '  *"config --get core.sshCommand"*) printf "%s" "${CORE_SSH:-}" ;;',
+      '  *"pull --ff-only"*) printf "ssh=%s\\n" "${GIT_SSH_COMMAND:-none}" >> ' +
+        JSON.stringify(recorded) +
+        '; echo "Already up to date." ;;',
       '  *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;',
       'esac',
       '',
@@ -4831,6 +4836,30 @@ async function hostUpdateRig(): Promise<{
     },
   }
 }
+
+void test('gcb.update makes ssh non-interactive when nothing else decides it', async () => {
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(await rig.calls(), /ssh=ssh -o BatchMode=yes -o ConnectTimeout=10/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update leaves a configured ssh command alone', async () => {
+  process.env['CORE_SSH'] = 'ssh -o ProxyCommand=corp-proxy'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(await rig.calls(), /ssh=none/u)
+  } finally {
+    await rig.close()
+    delete process.env['CORE_SSH']
+  }
+})
 
 void test('gcb.update is not offered without a gcb checkout', async () => {
   const host = await fakeHost()

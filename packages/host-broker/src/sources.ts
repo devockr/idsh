@@ -1455,10 +1455,10 @@ const GCB_QUERY_TIMEOUT_MS = 10_000
 /** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
 const GCB_QUERIES = 5
 /**
- * The git reads around the pull — the optional status check and the commit — at the default
- * deadline.
+ * The git reads around the pull — the optional status check, the ssh-config query and the commit —
+ * at the default deadline.
  */
-const GCB_PRELUDE_STEPS = 2
+const GCB_PRELUDE_STEPS = 3
 /** The steps that may take the build budget: build and recreate (the pull has its own bound). */
 const GCB_BUILD_STEPS = 2
 
@@ -1523,7 +1523,14 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       return await work()
     } catch (error) {
       const message = messageOf(error)
-      const failure = withCompleted(`gcb.update: ${name} failed: ${message}`, done)
+      // A pin that already moved is the one state a late failure leaves behind, and re-running is
+      // what converges it; saying so beats implying both halves are still where they were.
+      const diverged = done.some(line => line.startsWith('host: '))
+      const failure =
+        withCompleted(`gcb.update: ${name} failed: ${message}`, done) +
+        (diverged
+          ? '; the host half is already on the new commit — re-run gcb.update to converge both'
+          : '')
       throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
     }
   }
@@ -1531,17 +1538,27 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // proxy, from the remote the checkout already has — this operation does not rewrite it. Prompts
   // are off because nobody is at a terminal; a network that answers nothing fails at the bound
   // rather than holding the request open.
+  const pullEnv: NodeJS.ProcessEnv = { GIT_TERMINAL_PROMPT: '0' }
+  // ssh can still ask on /dev/tty (passphrase, host key), so it is made non-interactive — but only
+  // when the operator has not chosen an ssh command: core.sshCommand and GIT_SSH_COMMAND win,
+  // because that is where a ProxyCommand or a key selection lives. ~/.ssh/config is read either way.
+  if (process.env['GIT_SSH_COMMAND'] === undefined) {
+    const configured = (
+      await git(ctx, ['config', '--get', 'core.sshCommand'], { stdoutOnly: true }, checkout).catch(
+        () => '',
+      )
+    ).trim()
+    if (configured === '') {
+      pullEnv['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
+    }
+  }
   const pull =
     linesOf(
       await step('pull', () =>
         git(
           ctx,
           ['pull', '--ff-only'],
-          {
-            stdoutOnly: true,
-            timeoutMs: GCB_PULL_TIMEOUT_MS,
-            env: { GIT_TERMINAL_PROMPT: '0' },
-          },
+          { stdoutOnly: true, timeoutMs: GCB_PULL_TIMEOUT_MS, env: pullEnv },
           checkout,
         ),
       ),
@@ -1749,8 +1766,16 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
     try {
       process.kill(pid, 0)
       return true
-    } catch {
-      return false
+    } catch (error) {
+      // Only a confirmed absence is "not running": EPERM means the pid exists under another user,
+      // and treating that as gone would let the pin move past a broker the operation cannot check.
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+        return false
+      }
+      throw new BrokerFault(
+        'unavailable',
+        `gcb.update: cannot check pid ${String(pid)}: ${messageOf(error)}`,
+      )
     }
   }
   const stagedSha = async (): Promise<string | undefined> => {
