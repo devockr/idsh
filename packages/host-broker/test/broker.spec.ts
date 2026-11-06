@@ -4280,6 +4280,19 @@ void test('gcb.update refuses a compose file that names two images', async () =>
   }
 })
 
+void test('a container-only failure does not claim the host moved', async () => {
+  const rig = await gcbRig({ host: true, build: 'exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: { target: 'container' } })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /host: skipped \(target container\)/u)
+    assert.doesNotMatch(message, /host half is already on the new commit/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update leaves the host pin alone when the build fails', async () => {
   const rig = await gcbRig({ host: true, build: 'exit 1' })
   try {
@@ -4941,22 +4954,27 @@ void test('gcb.update refuses a half that is not configured', async () => {
 })
 
 void test('gcb.update keeps real git on the checkout despite an inherited GIT_DIR', async () => {
-  // A real git, not a stub: the point is that git itself accepts the environment it is given.
+  // A real git, not a stub: the point is that git itself accepts the environment it is given. The
+  // fixture setup must not inherit the runner's repository location either.
   const host = await fakeHost()
+  const fixtureEnv: NodeJS.ProcessEnv = { ...process.env }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) {
+    delete fixtureEnv[key]
+  }
+  const fixture = (...args: string[]): void => {
+    execFileSync('git', args, { stdio: 'ignore', env: fixtureEnv })
+  }
   const work = path.join(host.root, 'work')
   const origin = path.join(host.root, 'origin.git')
-  const git = (...args: string[]): void => {
-    execFileSync('git', args, { stdio: 'ignore' })
-  }
-  git('init', '--bare', origin)
-  git('init', '-b', 'main', work)
-  git('-C', work, 'config', 'user.email', 'test@example.invalid')
-  git('-C', work, 'config', 'user.name', 'test')
+  fixture('init', '--bare', origin)
+  fixture('init', '-b', 'main', work)
+  fixture('-C', work, 'config', 'user.email', 'test@example.invalid')
+  fixture('-C', work, 'config', 'user.name', 'test')
   await writeFile(path.join(work, 'a.txt'), 'one\n')
-  git('-C', work, 'add', 'a.txt')
-  git('-C', work, 'commit', '-m', 'one')
-  git('-C', work, 'remote', 'add', 'origin', origin)
-  git('-C', work, 'push', '-u', 'origin', 'main')
+  fixture('-C', work, 'add', 'a.txt')
+  fixture('-C', work, 'commit', '-m', 'one')
+  fixture('-C', work, 'remote', 'add', 'origin', origin)
+  fixture('-C', work, 'push', '-u', 'origin', 'main')
 
   const deployDir = path.join(host.root, '.broker-host')
   await mkdir(path.join(deployDir, 'app'), { recursive: true })
@@ -4967,38 +4985,41 @@ void test('gcb.update keeps real git on the checkout despite an inherited GIT_DI
   await writeFile(pinFile, `${oldSha}\n`)
   await writeFile(stagedFile, JSON.stringify({ sha: oldSha }))
 
-  const fakeBroker = path.join(host.root, 'gcb-host.sh')
-  await writeFile(fakeBroker, 'sleep 300\n')
-  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
-  await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
-  const supervisor = spawn(
-    'sh',
-    [
-      '-c',
-      'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; printf \'{"sha":"%s"}\\n\' "$(cat "$1")" > "$4"',
-      'sh',
-      pinFile,
-      oldSha,
-      pidFile,
-      stagedFile,
-    ],
-    { stdio: 'ignore', detached: true },
-  )
-
   const inherited = process.env['GIT_DIR']
-  process.env['GIT_DIR'] = path.join(host.root, 'elsewhere', '.git')
-  const broker = await startBroker({
-    socketPath: host.socketPath,
-    auditPath: host.auditPath,
-    logDir: host.logDir,
-    procDir: host.procDir,
-    gitPath: 'git',
-    gcbCheckout: work,
-    gcbDeployDir: deployDir,
-    gcbHostUpdate: true,
-  })
-  const connection = client(host.socketPath)
+  let broker: RunningBroker | undefined
+  let connection: Client | undefined
+  let oldBroker: ReturnType<typeof spawn> | undefined
+  let supervisor: ReturnType<typeof spawn> | undefined
   try {
+    const fakeBroker = path.join(host.root, 'gcb-host.sh')
+    await writeFile(fakeBroker, 'sleep 300\n')
+    oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
+    await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
+    supervisor = spawn(
+      'sh',
+      [
+        '-c',
+        'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; printf \'{"sha":"%s"}\\n\' "$(cat "$1")" > "$4"',
+        'sh',
+        pinFile,
+        oldSha,
+        pidFile,
+        stagedFile,
+      ],
+      { stdio: 'ignore', detached: true },
+    )
+    process.env['GIT_DIR'] = path.join(host.root, 'elsewhere', '.git')
+    broker = await startBroker({
+      socketPath: host.socketPath,
+      auditPath: host.auditPath,
+      logDir: host.logDir,
+      procDir: host.procDir,
+      gitPath: 'git',
+      gcbCheckout: work,
+      gcbDeployDir: deployDir,
+      gcbHostUpdate: true,
+    })
+    connection = client(host.socketPath)
     const answer = await connection.request({ op: 'gcb.update', args: { target: 'host' } })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const pinned = (await readFile(pinFile, 'utf8')).trim()
@@ -5007,35 +5028,46 @@ void test('gcb.update keeps real git on the checkout despite an inherited GIT_DI
     const staged = JSON.parse(await readFile(stagedFile, 'utf8')) as { sha?: string }
     assert.equal(staged.sha, pinned)
   } finally {
-    connection.close()
-    await broker.close()
-    if (supervisor.pid !== undefined) {
-      try {
-        process.kill(-supervisor.pid, 'SIGKILL')
-      } catch {
-        supervisor.kill()
+    // Each step on its own: a failing close must not keep the processes alive.
+    try {
+      if (inherited === undefined) {
+        delete process.env['GIT_DIR']
+      } else {
+        process.env['GIT_DIR'] = inherited
       }
-    }
-    oldBroker.kill()
-    if (inherited === undefined) {
-      delete process.env['GIT_DIR']
-    } else {
-      process.env['GIT_DIR'] = inherited
+    } finally {
+      try {
+        connection?.close()
+      } finally {
+        try {
+          await broker?.close()
+        } finally {
+          try {
+            if (supervisor?.pid !== undefined) {
+              process.kill(-supervisor.pid, 'SIGKILL')
+            }
+          } catch {
+            supervisor?.kill()
+          }
+          oldBroker?.kill()
+        }
+      }
     }
   }
 })
 
 void test('gcb.update clears an inherited git repository location', async () => {
   const inherited = process.env['GIT_DIR']
-  process.env['GIT_DIR'] = '/elsewhere/.git'
-  const rig = await gcbRig()
+  let rig: GcbRig | undefined
   try {
+    process.env['GIT_DIR'] = '/elsewhere/.git'
+    rig = await gcbRig()
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     // Removed, not blanked: git treats an empty GIT_DIR as a path and fails on it.
     assert.match(await rig.calls(), /gitdir=unset/u)
   } finally {
-    await rig.close()
+    await rig?.close()
     if (inherited === undefined) {
       delete process.env['GIT_DIR']
     } else {

@@ -1565,7 +1565,7 @@ async function updateBroker(
       const message = messageOf(error)
       // A pin that already moved is the one state a late failure leaves behind, and re-running is
       // what converges it; saying so beats implying both halves are still where they were.
-      const diverged = done.some(line => line.startsWith('host: '))
+      const diverged = hostUpdate && done.some(line => line.startsWith('host: '))
       const failure =
         withCompleted(`gcb.update: ${name} failed: ${message}`, done) +
         (diverged
