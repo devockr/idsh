@@ -43,6 +43,9 @@ const COMMIT_CHARS = 40
 const FLUSH_MS = 700
 /** The probe's bound, and the bound of each local query, as `gcb.update` declares them. */
 const GCB_PROBE_MS = 60_000
+/** The bounded pull and the host-broker wait, both part of the declared budget. */
+const GCB_PULL_MS = 60_000
+const GCB_HOST_WAIT_MS = 300_000
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, replicas, ps and inspect. */
 const GCB_QUERY_COUNT = 5
@@ -4172,10 +4175,15 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
-    // The operation outlasts every step it runs: three build-budget steps, the probe, four queries.
+    // The operation outlasts every step it runs: three build-budget steps, the probe, four
+    // queries, the bounded pull and the host-broker wait.
     assert.equal(
       update.timeoutMs,
-      3 * BUILD_TIMEOUT_MS + GCB_PROBE_MS + GCB_QUERY_COUNT * GCB_QUERY_MS,
+      3 * BUILD_TIMEOUT_MS +
+        GCB_PROBE_MS +
+        GCB_QUERY_COUNT * GCB_QUERY_MS +
+        GCB_PULL_MS +
+        GCB_HOST_WAIT_MS,
     )
 
     // The runner may export UID/GID of its own; the sentinel proves the compose calls got `composeEnv`
@@ -4827,6 +4835,32 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     supervisor.kill()
     oldBroker.kill()
     delete process.env['STATUS']
+    await rig.close()
+  }
+})
+
+void test('gcb.update names a host broker directory that is not there', async () => {
+  const rig = await hostUpdateRig()
+  const missing = path.join(rig.host.root, 'missing-broker-home')
+  const broker = await startBroker({
+    socketPath: path.join(rig.host.root, 'second.sock'),
+    auditPath: path.join(rig.host.root, 'second.jsonl'),
+    logDir: rig.host.logDir,
+    procDir: rig.host.procDir,
+    dockerPath: path.join(rig.host.root, 'docker'),
+    gitPath: path.join(rig.host.root, 'git'),
+    gcbCheckout: path.join(rig.host.root, 'gcb'),
+    gcbDeployDir: missing,
+    gcbHostUpdate: true,
+  })
+  const connection = client(path.join(rig.host.root, 'second.sock'))
+  try {
+    const answer = await connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /missing-broker-home is not a directory/u)
+  } finally {
+    connection.close()
+    await broker.close()
     await rig.close()
   }
 })

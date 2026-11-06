@@ -26,6 +26,7 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 
 import {
@@ -1682,7 +1683,19 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   return done.join('; ')
 }
 
-/* ------------------------------------------------------------------ gcb.host.update */
+/* ------------------------------------------------------------------ gcb.update (host half) */
+
+/**
+ * `$HOME/.broker-host`, resolved where it is used: a broker that never updates must start without
+ * it.
+ */
+function defaultDeployDir(): string {
+  try {
+    return path.join(homedir(), '.broker-host')
+  } catch {
+    throw new BrokerFault('unavailable', 'gcb.update: no HOME to find the host broker under')
+  }
+}
 
 /** A commit id, which is all `app.ref` may hold. */
 const COMMIT_ID = /^[0-9a-f]{40}$/u
@@ -1696,9 +1709,13 @@ const COMMIT_ID = /^[0-9a-f]{40}$/u
  * the staged commit, because "the pin moved" is not "the broker runs it".
  */
 async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
-  const deployDir = ctx.gcbDeployDir ?? path.join(process.env['HOME'] ?? '.', '.broker-host')
-  if (deployDir === '.broker-host') {
-    throw new BrokerFault('unavailable', 'the broker has no HOME to find the host broker under')
+  const deployDir = ctx.gcbDeployDir ?? defaultDeployDir()
+  const stats = await stat(deployDir).catch(() => null)
+  if (stats === null || !stats.isDirectory()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.update: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's`,
+    )
   }
   const pinFile = path.join(deployDir, 'app.ref')
   const pidFile = path.join(deployDir, 'gcb-host.pid')
@@ -1753,7 +1770,14 @@ async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
         `pinned ${sha.slice(0, 12)}, but the host broker did not stage it within ${String(GCB_HOST_WAIT_MS / 1000)}s; check ${path.join(deployDir, 'gcb-host.log')}`,
       )
     }
-    await new Promise(resolve => setTimeout(resolve, GCB_HOST_POLL_MS))
+    if (ctx.signal?.aborted === true) {
+      throw new BrokerFault('timeout', 'gcb.update: cancelled while waiting for the host broker')
+    }
+    // Clamped: a poll that sleeps past the deadline would let the request's own timeout win, and
+    // that answer is the one without the log path.
+    await new Promise(resolve =>
+      setTimeout(resolve, Math.max(0, Math.min(GCB_HOST_POLL_MS, deadline - Date.now()))),
+    )
   }
 }
 
@@ -2127,7 +2151,11 @@ export const OPS: readonly OpDefinition[] = [
     // recreate at the build budget, the probe, and the four local queries, or a slow link turns a
     // working update into a timeout halfway through it.
     timeoutMs:
-      GCB_BUILD_STEPS * BUILD_TIMEOUT_MS + PROBE_TIMEOUT_MS + GCB_QUERIES * GCB_QUERY_TIMEOUT_MS,
+      GCB_BUILD_STEPS * BUILD_TIMEOUT_MS +
+      PROBE_TIMEOUT_MS +
+      GCB_QUERIES * GCB_QUERY_TIMEOUT_MS +
+      GCB_PULL_TIMEOUT_MS +
+      GCB_HOST_WAIT_MS,
     requires: ['gcbCheckout'],
     input: { type: 'object', properties: {}, additionalProperties: false },
     run(args, ctx) {

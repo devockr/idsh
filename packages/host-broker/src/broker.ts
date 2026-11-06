@@ -10,7 +10,6 @@ import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
 import { access, appendFile, chmod, lstat, mkdir, rm, stat, unlink } from 'node:fs/promises'
 import net from 'node:net'
-import { homedir } from 'node:os'
 import path from 'node:path'
 
 import packageJson from '../package.json' with { type: 'json' }
@@ -95,7 +94,11 @@ export interface BrokerOptions {
   readonly checkout?: string
   /** The credential broker's own checkout; `gcb.update` rebuilds from it. */
   readonly gcbCheckout?: string
-  /** The host broker's own directory; `gcb.update` writes its pin there when `gcbHostUpdate`. */
+  /**
+   * The host broker's own directory; `gcb.update` writes its pin there when `gcbHostUpdate`.
+   * Defaulted inside the operation (`$HOME/.broker-host`), which is also where a missing one is
+   * reported as `unavailable` — a broker that never updates must not need a HOME at boot.
+   */
   readonly gcbDeployDir?: string
   /** Whether `gcb.update` also pins the host-supervised broker to the commit it built. */
   readonly gcbHostUpdate?: boolean
@@ -200,9 +203,9 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
   const checkout = await optionalPath(options.checkout, '--checkout', 'directory')
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
-  // Defaulted, not required: only `gcb.host.update` reads it, and that operation reports its own
-  // missing directory when it runs.
-  const gcbDeployDir = options.gcbDeployDir ?? path.join(homedir(), '.broker-host')
+  // Kept absent when it was not given: only `gcb.update`'s host half reads it, and it resolves the
+  // default and reports a missing directory itself.
+  const gcbDeployDir = options.gcbDeployDir
   const gcbComposeFiles = await composeFiles(options.gcbCompose)
   const gcbService = options.gcbService ?? 'gcb'
   if (!/^\w[\w.-]*$/u.test(gcbService)) {
@@ -266,7 +269,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     deployLock,
     ...(checkout === undefined ? {} : { checkout }),
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
-    gcbDeployDir,
+    ...(gcbDeployDir === undefined ? {} : { gcbDeployDir }),
     ...(options.gcbHostUpdate === true ? { gcbHostUpdate: true } : {}),
     ...(gcbComposeFiles === undefined ? {} : { gcbCompose: gcbComposeFiles }),
     gcbService,
