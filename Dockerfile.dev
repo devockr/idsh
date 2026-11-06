@@ -63,9 +63,9 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com/
 RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=apt_lists,target=/var/lib/apt/lists,sharing=locked \
   apt-get update && apt-get install -y --no-install-recommends \
-      libatk-bridge2.0-0 libgbm1 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
-      libxkbcommon0 libnss3 libasound2 fonts-liberation fontconfig \
-      libcups2 libcairo2 libpango-1.0-0
+  libatk-bridge2.0-0 libgbm1 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
+  libxkbcommon0 libnss3 libasound2 fonts-liberation fontconfig \
+  libcups2 libcairo2 libpango-1.0-0
 
 # The same baked profile as the published image, from this checkout instead of the registry, and
 # as a `link:` rather than a copy: a deployment may mount a built checkout over
