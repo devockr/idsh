@@ -1898,7 +1898,7 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
     const message = messageOf(error)
     throw new BrokerFault(
       error instanceof BrokerFault ? error.code : 'unavailable',
-      `${message}; ${pinned}, but the host broker has not confirmed it`,
+      `${message}; ${pinned}, but the host broker has not confirmed it; re-run gcb.update to converge both`,
     )
   }
 }

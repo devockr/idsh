@@ -4280,6 +4280,50 @@ void test('gcb.update refuses a compose file that names two images', async () =>
   }
 })
 
+void test('a combined failure after the pin carries the convergence hint', async () => {
+  // The build succeeds, the host pin moves, and the recreate fails: the answer has to say that the
+  // host half is ahead, because re-running is what converges it.
+  const rig = await gcbRig({ host: true, up: 'exit 1' })
+  const pinFile = rig.pinFile ?? ''
+  const pidFile = rig.pidFile ?? ''
+  const stagedFile = rig.stagedFile ?? ''
+  assert.ok(pinFile !== '' && pidFile !== '' && stagedFile !== '')
+  const fakeBroker = path.join(rig.host.root, 'gcb-host.sh')
+  await writeFile(fakeBroker, 'sleep 300\n')
+  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
+  let supervisor: ReturnType<typeof spawn> | undefined
+  try {
+    await writeFile(pidFile, `${String(oldBroker.pid)}\n`)
+    supervisor = spawn(
+      'sh',
+      [
+        '-c',
+        'while [ "$(cat "$1")" = "$2" ]; do sleep 0.1; done; sleep 300 & echo $! > "$3"; printf \'{"sha":"%s"}\\n\' "$(cat "$1")" > "$4"',
+        'sh',
+        pinFile,
+        'c'.repeat(COMMIT_CHARS),
+        pidFile,
+        stagedFile,
+      ],
+      { stdio: 'ignore', detached: true },
+    )
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /host: pinned a{12}/u)
+    assert.match(JSON.stringify(answer.error), /re-run gcb.update to converge both/u)
+  } finally {
+    if (supervisor?.pid !== undefined) {
+      try {
+        process.kill(-supervisor.pid, 'SIGKILL')
+      } catch {
+        supervisor.kill()
+      }
+    }
+    oldBroker.kill()
+    await rig.close()
+  }
+})
+
 void test('a container-only failure does not claim the host moved', async () => {
   const rig = await gcbRig({ host: true, build: 'exit 1' })
   try {
