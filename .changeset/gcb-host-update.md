@@ -18,4 +18,6 @@ fail rather than hold the request open.
 
 An update is two-phase because the two halves are separate processes: if the container recreate or
 probe fails after the host half has been pinned, the halves run different commits until `gcb.update`
-is run again. The failure answer says which half moved, and re-running converges both.
+is run again. The failure answer says which half moved, and `target` (`container` or `host`) updates
+just that half — so the retry does not rebuild the half that already moved — while a bare re-run
+converges both.

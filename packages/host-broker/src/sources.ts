@@ -1471,13 +1471,30 @@ const GCB_BUILD_STEPS = 2
  * which one it was; the container's own state is the last word, because a build that cannot start
  * is not a successful update.
  */
-async function updateBroker(ctx: OpContext): Promise<string> {
+async function updateBroker(
+  ctx: OpContext,
+  target: 'both' | 'container' | 'host',
+): Promise<string> {
   const checkout = ctx.gcbCheckout
   const composeFiles = ctx.gcbCompose
   const repo = ctx.gcbProbeRepo
   const service = ctx.gcbService
-  const containerUpdate = composeFiles !== undefined && repo !== undefined
-  const hostUpdate = ctx.gcbHostUpdate === true
+  const containerConfigured = composeFiles !== undefined && repo !== undefined
+  const hostConfigured = ctx.gcbHostUpdate === true
+  if (target === 'container' && !containerConfigured) {
+    throw new BrokerFault(
+      'unavailable',
+      'the container half is not configured: start the broker with --gcb-compose and --gcb-probe-repo',
+    )
+  }
+  if (target === 'host' && !hostConfigured) {
+    throw new BrokerFault(
+      'unavailable',
+      'the host half is not configured: start the broker with --gcb-host',
+    )
+  }
+  const containerUpdate = containerConfigured && target !== 'host'
+  const hostUpdate = hostConfigured && target !== 'container'
   if (checkout === undefined || (!containerUpdate && !hostUpdate)) {
     throw new BrokerFault(
       'unavailable',
@@ -1642,6 +1659,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
         done,
       ),
     )
+  }
+  if (hostConfigured && !hostUpdate) {
+    done.push('host: skipped (target container)')
   }
   await step('build', () =>
     docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
@@ -2237,10 +2257,28 @@ export const OPS: readonly OpDefinition[] = [
     available: ctx =>
       ctx.gcbHostUpdate === true ||
       (ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined),
-    input: { type: 'object', properties: {}, additionalProperties: false },
+    input: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          enum: ['both', 'container', 'host'],
+          description:
+            'Which half to update; default both. A half that is not configured is an error when named.',
+        },
+      },
+      additionalProperties: false,
+    },
     run(args, ctx) {
-      rejectUnknown(args, [])
-      return updateBroker(ctx)
+      rejectUnknown(args, ['target'])
+      const target = text(args, 'target', MAX_PATTERN_CHARS) ?? 'both'
+      if (target !== 'both' && target !== 'container' && target !== 'host') {
+        throw new BrokerFault(
+          'bad-argument',
+          `target must be both, container or host, got ${JSON.stringify(target)}`,
+        )
+      }
+      return updateBroker(ctx, target)
     },
   },
   {

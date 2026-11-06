@@ -4838,6 +4838,48 @@ async function hostUpdateRig(): Promise<{
   }
 }
 
+void test('gcb.update can retry only the container half', async () => {
+  const rig = await gcbRig({ host: true })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: { target: 'container' } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /host: skipped \(target container\)/u)
+    // The build ran; the host pin did not move.
+    assert.match(await rig.calls(), /build --target host/u)
+    assert.equal(
+      rig.pinFile === undefined ? '' : (await readFile(rig.pinFile, 'utf8')).trim(),
+      'a'.repeat(COMMIT_CHARS),
+    )
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a half that is not configured', async () => {
+  const hostOnly = await hostUpdateRig()
+  try {
+    const answer = await hostOnly.connection.request({
+      op: 'gcb.update',
+      args: { target: 'container' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /container half is not configured/u)
+  } finally {
+    await hostOnly.close()
+  }
+  const containerOnly = await gcbRig()
+  try {
+    const answer = await containerOnly.connection.request({
+      op: 'gcb.update',
+      args: { target: 'host' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /host half is not configured/u)
+  } finally {
+    await containerOnly.close()
+  }
+})
+
 void test('gcb.update makes ssh non-interactive when nothing else decides it', async () => {
   // The runner may export either; the branch under test is "nothing decides it".
   const inherited = process.env['GIT_SSH_COMMAND']
