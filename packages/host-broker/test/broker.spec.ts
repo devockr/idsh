@@ -5274,6 +5274,7 @@ void test('gcb.update pins the host broker and waits for the restarted process',
       },
       { oldSha: 'a'.repeat(COMMIT_CHARS), newSha, barrier },
     )
+    const oldPid = host.oldPid
     let settled = false
     const pending = rig.connection.request({ op: 'gcb.update', args: {} }).then(answer => {
       settled = true
@@ -5284,7 +5285,7 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     await waitFor(async () => {
       const restarted = Number((await readFile(rig.pidFile, 'utf8').catch(() => '')).trim())
       // The old pid sits in that file before the pin moves: only a different one is a replacement.
-      if (!Number.isInteger(restarted) || restarted <= 0 || restarted === host.oldPid) {
+      if (!Number.isInteger(restarted) || restarted <= 0 || restarted === oldPid) {
         return false
       }
       try {
