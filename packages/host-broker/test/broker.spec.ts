@@ -4102,9 +4102,13 @@ async function gcbRig(
     [
       '#!/bin/sh',
       `printf 'git %s\n' "$*" >> ${JSON.stringify(recorded)}`,
-      // `gcb.update` reads the commit it pins the host broker to; a fake git that answered nothing
-      // would read as "not a commit id".
-      'case "$*" in *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;; esac',
+      // `gcb.update` reads the commit it pins the host broker to, and the upstream it pulls.
+      'case "$*" in',
+      '  *"rev-parse --abbrev-ref --symbolic-full-name @{upstream}"*) printf "%s" "$UPSTREAM" ;;',
+      '  *"rev-parse --abbrev-ref HEAD"*) printf "%s" "${HEAD_BRANCH:-main}" ;;',
+      '  *"remote get-url "*) printf "%s" "${REMOTE:-git@github.com:code-vaults/git-credential-broker.git}" ;;',
+      '  *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;',
+      'esac',
       '',
     ].join('\n'),
     { mode: 0o755 },
@@ -4238,6 +4242,40 @@ void test('gcb.update refuses a compose file that names two images', async () =>
     assert.match(answer.error?.message ?? '', /names 2 images/u)
   } finally {
     await rig.close()
+  }
+})
+
+void test('gcb.update pulls the branch the checkout tracks, over https', async () => {
+  process.env['UPSTREAM'] = 'origin/main'
+  process.env['HEAD_BRANCH'] = 'release'
+  delete process.env['REMOTE']
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    // `release` tracks `origin/main`: the pull names main, not release.
+    assert.match(
+      await rig.calls(),
+      /pull --ff-only https:\/\/github\.com\/code-vaults\/git-credential-broker\.git main/u,
+    )
+  } finally {
+    await rig.close()
+    delete process.env['UPSTREAM']
+    delete process.env['HEAD_BRANCH']
+  }
+})
+
+void test('gcb.update leaves an ssh remote with no https form alone', async () => {
+  process.env['REMOTE'] = 'ssh://git@github.com:2222/code-vaults/git-credential-broker.git'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const calls = await rig.calls()
+    assert.match(calls, /pull --ff-only(?![^\n]*https:\/\/)/u)
+  } finally {
+    await rig.close()
+    delete process.env['REMOTE']
   }
 })
 
@@ -4723,6 +4761,7 @@ void test('ops.describe answers the bare table to a client that declares nothing
 /** A broker configured for the host half of `gcb.update`: a fake git, no container. */
 async function hostUpdateRig(): Promise<{
   host: FakeHost
+  calls: string
   deployDir: string
   pinFile: string
   pidFile: string
@@ -4740,14 +4779,17 @@ async function hostUpdateRig(): Promise<{
   const oldSha = 'a'.repeat(COMMIT_CHARS)
   await writeFile(pinFile, `${oldSha}\n`)
   await writeFile(stagedFile, JSON.stringify({ sha: oldSha }))
+  const calls = path.join(host.root, 'git-calls.log')
   const gitPath = path.join(host.root, 'git')
   await writeFile(
     gitPath,
     [
       '#!/bin/sh',
+      `printf '%s\\n' "$*" >> "\${CALLS}"`,
       'case "$*" in',
-      '  *"rev-parse --abbrev-ref HEAD"*) echo main ;;',
-      '  *"remote get-url origin"*) echo git@github.com:code-vaults/git-credential-broker.git ;;',
+      '  *"rev-parse --abbrev-ref --symbolic-full-name @{upstream}"*) printf "%s" "$UPSTREAM" ;;',
+      '  *"rev-parse --abbrev-ref HEAD"*) printf "%s" "${HEAD_BRANCH:-main}" ;;',
+      '  *"remote get-url "*) printf "%s" "${REMOTE:-git@github.com:code-vaults/git-credential-broker.git}" ;;',
       '  *"pull --ff-only"*) echo "Already up to date." ;;',
       '  *"status --porcelain"*) printf "%s" "$STATUS" ;;',
       `  *"rev-parse HEAD"*) echo "${'b'.repeat(COMMIT_CHARS)}" ;;`,
@@ -4756,6 +4798,7 @@ async function hostUpdateRig(): Promise<{
     ].join('\n'),
     { mode: 0o755 },
   )
+  process.env['CALLS'] = calls
   const gcbCheckout = path.join(host.root, 'gcb')
   await mkdir(gcbCheckout)
   const broker = await startBroker({
@@ -4772,6 +4815,7 @@ async function hostUpdateRig(): Promise<{
   const connection = client(host.socketPath)
   return {
     host,
+    calls,
     deployDir,
     pinFile,
     pidFile,

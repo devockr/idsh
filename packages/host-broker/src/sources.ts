@@ -1512,14 +1512,32 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // and no key, a public repository needs no credential over HTTPS, and git then honours
   // `http_proxy`/`https_proxy` — the only way a broker behind a proxy reaches GitHub. The bound
   // stays, because a network that answers nothing must fail rather than hold the operation open.
-  const branch = (
-    await step('read the branch', () =>
-      git(ctx, ['rev-parse', '--abbrev-ref', 'HEAD'], { stdoutOnly: true }, checkout),
-    )
+  // What this branch tracks, not what it is called: `release` may track `origin/main`, and an
+  // explicit pull of `origin/release` would then deploy a branch that does not exist.
+  const upstream = (
+    await git(
+      ctx,
+      ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+      {
+        stdoutOnly: true,
+      },
+      checkout,
+    ).catch(() => '')
   ).trim()
+  const slash = upstream.indexOf('/')
+  const remoteName = slash > 0 ? upstream.slice(0, slash) : 'origin'
+  const tracked = slash > 0 ? upstream.slice(slash + 1) : ''
+  const branch =
+    tracked === ''
+      ? (
+          await step('read the branch', () =>
+            git(ctx, ['rev-parse', '--abbrev-ref', 'HEAD'], { stdoutOnly: true }, checkout),
+          )
+        ).trim()
+      : tracked
   const remote = (
     await step('read the remote', () =>
-      git(ctx, ['remote', 'get-url', 'origin'], { stdoutOnly: true }, checkout),
+      git(ctx, ['remote', 'get-url', remoteName], { stdoutOnly: true }, checkout),
     )
   ).trim()
   const https = httpsRemote(remote)
@@ -1710,11 +1728,13 @@ async function updateBroker(ctx: OpContext): Promise<string> {
  * reaches GitHub at all.
  */
 function httpsRemote(remote: string): string | undefined {
-  const scp = /^git@([^:]+):(.+)$/u.exec(remote)
+  // Only the shapes that have an HTTPS equivalent: a port in the host and an absolute path in the
+  // scp form do not, and inventing a URL for them would break a pull that ssh handled.
+  const scp = /^git@([^:/]+):(?!\/)(.+)$/u.exec(remote)
   if (scp !== null) {
     return `https://${scp[1]}/${scp[2]}`
   }
-  const ssh = /^ssh:\/\/git@([^/]+)\/(.+)$/u.exec(remote)
+  const ssh = /^ssh:\/\/git@([^/:]+)\/(.+)$/u.exec(remote)
   if (ssh !== null) {
     return `https://${ssh[1]}/${ssh[2]}`
   }
