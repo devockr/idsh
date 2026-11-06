@@ -32,11 +32,11 @@ import path from 'node:path'
 import {
   BUILD_TIMEOUT_MS,
   COMPOSE_TIMEOUT_MS,
+  DIRECTORY_MODE,
+  FILE_MODE,
   GCB_HOST_POLL_MS,
   GCB_HOST_WAIT_MS,
   GCB_PULL_TIMEOUT_MS,
-  DIRECTORY_MODE,
-  FILE_MODE,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
@@ -1505,7 +1505,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // did not are different answers to whoever reads the audit log.
   const done: string[] = []
   // Fail before the one network step. A dirty checkout would otherwise be pulled into before the
-  // refusal, and a missing host directory would pay for the pull first.
+  // refusal, and a missing host directory would pay for the pull first; the directory resolved here
+  // is the one the pin writes to, so the check and the write cannot disagree.
+  let deployDir = ''
   if (hostUpdate) {
     const dirty = (await git(ctx, ['status', '--porcelain'], { stdoutOnly: true }, checkout)).trim()
     if (dirty !== '') {
@@ -1514,7 +1516,7 @@ async function updateBroker(ctx: OpContext): Promise<string> {
         'gcb.update: the checkout has local changes; commit or stash them, so the container and the host broker run the same commit',
       )
     }
-    await hostDeployDir(ctx)
+    deployDir = await hostDeployDir(ctx)
   }
   const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
     try {
@@ -1559,7 +1561,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   done.push(`commit: ${sha.slice(0, 12)}`)
   if (!containerUpdate) {
     if (hostUpdate) {
-      done.push(`host: ${await step('pin the host broker', () => pinHostBroker(ctx, sha))}`)
+      done.push(
+        `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
+      )
     }
     done.push('container: not configured')
     return done.join('; ')
@@ -1624,7 +1628,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // The pin comes after a successful build: a build that fails must leave the host broker on the
   // commit it was running, or the two halves diverge in the very state this operation prevents.
   if (hostUpdate) {
-    done.push(`host: ${await step('pin the host broker', () => pinHostBroker(ctx, sha))}`)
+    done.push(
+      `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
+    )
   }
   // The image this operation just built is the one that runs: never build from a compose `build:`
   // stanza, never reach for a registry.
@@ -1712,7 +1718,7 @@ async function hostDeployDir(ctx: OpContext): Promise<string> {
   if (stats === null || !stats.isDirectory()) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.update: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's`,
+      `gcb.update: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's directory`,
     )
   }
   return deployDir
@@ -1726,8 +1732,7 @@ async function hostDeployDir(ctx: OpContext): Promise<string> {
  * supervisor restart it. This does exactly that, and waits for the restarted process and the staged
  * commit, because "the pin moved" is not "the broker runs it".
  */
-async function pinHostBroker(ctx: OpContext, sha: string): Promise<string> {
-  const deployDir = await hostDeployDir(ctx)
+async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Promise<string> {
   const pinFile = path.join(deployDir, 'app.ref')
   const pidFile = path.join(deployDir, 'gcb-host.pid')
   const stagedFile = path.join(deployDir, 'app', 'STAGED.json')
