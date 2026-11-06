@@ -5101,55 +5101,63 @@ void test('gcb.update keeps real git on the checkout despite an inherited GIT_DI
 })
 
 void test('gcb.update clears an inherited git repository location', async () => {
-  const inherited = process.env['GIT_DIR']
-  let rig: GcbRig | undefined
+  const rig = await gcbRig()
   try {
-    process.env['GIT_DIR'] = '/elsewhere/.git'
-    rig = await gcbRig()
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    // Removed, not blanked: git treats an empty GIT_DIR as a path and fails on it.
-    assert.match(await rig.calls(), /gitdir=unset/u)
+    await withEnv({ GIT_DIR: '/elsewhere/.git' }, async () => {
+      const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+      assert.equal(answer.ok, true, JSON.stringify(answer.error))
+      // Removed, not blanked: git treats an empty GIT_DIR as a path and fails on it.
+      assert.match(await rig.calls(), /gitdir=unset/u)
+    })
   } finally {
-    await rig?.close()
-    if (inherited === undefined) {
-      delete process.env['GIT_DIR']
-    } else {
-      process.env['GIT_DIR'] = inherited
-    }
+    await rig.close()
   }
 })
 
+/**
+ * Runs `work` with `vars` set (an `undefined` value removes the key) and restores every previous
+ * value afterwards — including when the work throws. Inherited variables are the test's input, so
+ * each one is either pinned or removed, never left to the runner.
+ */
+async function withEnv<T>(
+  vars: Readonly<Record<string, string | undefined>>,
+  work: () => Promise<T>,
+): Promise<T> {
+  const saved = new Map<string, string | undefined>()
+  for (const [key, value] of Object.entries(vars)) {
+    saved.set(key, process.env[key])
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+  try {
+    return await work()
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  }
+}
+
 void test('gcb.update makes ssh non-interactive when nothing else decides it', async () => {
-  // The runner may export any of the three; the branch under test is "nothing decides it".
-  const inherited = process.env['GIT_SSH_COMMAND']
-  const inheritedCore = process.env['CORE_SSH']
-  const inheritedSsh = process.env['GIT_SSH']
-  delete process.env['GIT_SSH_COMMAND']
-  delete process.env['CORE_SSH']
-  delete process.env['GIT_SSH']
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    assert.match(await rig.calls(), /ssh=ssh -o BatchMode=yes -o ConnectTimeout=10/u)
+    await withEnv(
+      { GIT_SSH: undefined, GIT_SSH_COMMAND: undefined, CORE_SSH: undefined },
+      async () => {
+        const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+        assert.equal(answer.ok, true, JSON.stringify(answer.error))
+        assert.match(await rig.calls(), /ssh=ssh -o BatchMode=yes -o ConnectTimeout=10/u)
+      },
+    )
   } finally {
     await rig.close()
-    if (inherited === undefined) {
-      delete process.env['GIT_SSH_COMMAND']
-    } else {
-      process.env['GIT_SSH_COMMAND'] = inherited
-    }
-    if (inheritedCore === undefined) {
-      delete process.env['CORE_SSH']
-    } else {
-      process.env['CORE_SSH'] = inheritedCore
-    }
-    if (inheritedSsh === undefined) {
-      delete process.env['GIT_SSH']
-    } else {
-      process.env['GIT_SSH'] = inheritedSsh
-    }
   }
 })
 
@@ -5167,51 +5175,42 @@ void test('gcb.update does not read a failed config query as "unset"', async () 
 })
 
 void test('gcb.update respects an inherited GIT_SSH wrapper', async () => {
-  const inherited = process.env['GIT_SSH']
-  const inheritedCommand = process.env['GIT_SSH_COMMAND']
-  const inheritedCore = process.env['CORE_SSH']
-  delete process.env['GIT_SSH_COMMAND']
-  delete process.env['CORE_SSH']
-  process.env['GIT_SSH'] = '/usr/bin/ssh-wrapper'
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    // The wrapper decides the ssh command; BatchMode must not replace it — and the pull really ran
-    // with that wrapper in its environment.
-    const calls = await rig.calls()
-    assert.match(calls, /ssh=none/u)
-    assert.match(calls, /wrapper=\/usr\/bin\/ssh-wrapper$/mu)
+    await withEnv(
+      { GIT_SSH: '/usr/bin/ssh-wrapper', GIT_SSH_COMMAND: undefined, CORE_SSH: undefined },
+      async () => {
+        const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+        assert.equal(answer.ok, true, JSON.stringify(answer.error))
+        // The wrapper decides the ssh command; BatchMode must not replace it — and the pull ran
+        // with that wrapper in its environment.
+        const calls = await rig.calls()
+        assert.match(calls, /ssh=none/u)
+        assert.match(calls, /wrapper=\/usr\/bin\/ssh-wrapper$/mu)
+      },
+    )
   } finally {
     await rig.close()
-    if (inherited === undefined) {
-      delete process.env['GIT_SSH']
-    } else {
-      process.env['GIT_SSH'] = inherited
-    }
-    if (inheritedCommand === undefined) {
-      delete process.env['GIT_SSH_COMMAND']
-    } else {
-      process.env['GIT_SSH_COMMAND'] = inheritedCommand
-    }
-    if (inheritedCore === undefined) {
-      delete process.env['CORE_SSH']
-    } else {
-      process.env['CORE_SSH'] = inheritedCore
-    }
   }
 })
 
 void test('gcb.update leaves a configured ssh command alone', async () => {
-  process.env['CORE_SSH'] = 'ssh -o ProxyCommand=corp-proxy'
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    assert.match(await rig.calls(), /ssh=none/u)
+    await withEnv(
+      {
+        GIT_SSH: undefined,
+        GIT_SSH_COMMAND: undefined,
+        CORE_SSH: 'ssh -o ProxyCommand=corp-proxy',
+      },
+      async () => {
+        const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+        assert.equal(answer.ok, true, JSON.stringify(answer.error))
+        assert.match(await rig.calls(), /ssh=none/u)
+      },
+    )
   } finally {
     await rig.close()
-    delete process.env['CORE_SSH']
   }
 })
 
