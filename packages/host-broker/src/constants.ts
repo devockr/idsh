@@ -93,6 +93,26 @@ export const RECREATE_WAIT_MS = 180_000
 /** How often that question is asked while waiting. */
 export const RECREATE_POLL_MS = 2_000
 
+/**
+ * How long `gcb.update`'s host half waits for the restarted host broker to stage its commit.
+ *
+ * The restart re-stages the export and installs its dependencies, which is a network step; the wait
+ * exists so the answer says "staged", not "asked", and a timeout is a visible failure rather than a
+ * broker that silently keeps serving the previous commit.
+ */
+export const GCB_HOST_WAIT_MS = 300_000
+
+/** How often that wait looks at the pid file and the staged export. */
+export const GCB_HOST_POLL_MS = 2_000
+
+/**
+ * How long `gcb.update`'s one network step may run.
+ *
+ * The broker may have no ssh agent and no proxy, where git does not fail — it waits on a prompt
+ * that never comes. A pull either finishes inside this bound or the operation says so.
+ */
+export const GCB_PULL_TIMEOUT_MS = 60_000
+
 /** The default per-operation deadline. */
 export const DEFAULT_EXEC_TIMEOUT_MS = 10_000
 

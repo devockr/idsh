@@ -21,10 +21,12 @@ import {
   readFile,
   readlink,
   realpath,
+  rename,
   rm,
   stat,
   writeFile,
 } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 
 import {
@@ -32,6 +34,9 @@ import {
   COMPOSE_TIMEOUT_MS,
   DIRECTORY_MODE,
   FILE_MODE,
+  GCB_HOST_POLL_MS,
+  GCB_HOST_WAIT_MS,
+  GCB_PULL_TIMEOUT_MS,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
   MAX_PATTERN_CHARS,
@@ -52,8 +57,12 @@ export interface OpContext {
   readonly container: string
   readonly dockerPath: string
   readonly checkout?: string
-  /** The credential broker's checkout; `gcb.update` rebuilds from it. */
+  /** The credential broker's checkout; `gcb.update` pulls it and rebuilds from it. */
   readonly gcbCheckout?: string
+  /** The host broker's own directory: `app.ref`, its pid file and the staged export. */
+  readonly gcbDeployDir?: string
+  /** Whether `gcb.update` also moves the host-supervised broker to the same commit. */
+  readonly gcbHostUpdate?: boolean
   /** The compose file(s) that run the broker. */
   readonly gcbCompose?: readonly string[]
   /** The service in those files that runs the broker. */
@@ -117,7 +126,36 @@ export interface OpDefinition {
   readonly serial?: boolean
   /** Config the operation cannot work without: absent is not offered by `ops.describe`. */
   readonly requires?: readonly (keyof OpContext)[]
+  /** Extra availability rule for a shape `requires` cannot express, such as "one of two halves". */
+  readonly available?: (ctx: OpContext) => boolean
   run(args: Record<string, unknown>, ctx: OpContext): Promise<Execution | string>
+}
+
+/** The broker's environment plus an operation's overrides, with `undefined` meaning "remove". */
+function withDropped(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = { ...process.env, ...extra }
+  for (const key of Object.keys(extra)) {
+    if (extra[key] === undefined) {
+      delete merged[key]
+    }
+  }
+  return merged
+}
+
+interface RunOptions {
+  readonly keep?: Keep
+  /** How long this program may run; a build is minutes, not the default ten seconds. */
+  readonly timeoutMs?: number
+  /** Append the program's output here as it arrives, so a failed build stays diagnosable. */
+  readonly logPath?: string
+  /** Where the program runs; a compose file is relative to its checkout. */
+  readonly cwd?: string
+  /** Extra environment, merged over the broker's own; an `undefined` value removes the key. */
+  readonly env?: NodeJS.ProcessEnv
+  /** Answer with stdout only; a caller that parses the output must not see compose's warnings. */
+  readonly stdoutOnly?: boolean
+  /** Called when the program wrote more than the retained window, so the answer is a prefix. */
+  readonly onTruncated?: () => void
 }
 
 /**
@@ -128,22 +166,6 @@ export interface OpDefinition {
  * keeps the last 1 MiB and a head operation the first 1 MiB; `capOutput` then trims to the answer
  * size, from the end a log is asked for.
  */
-interface RunOptions {
-  readonly keep?: Keep
-  /** How long this program may run; a build is minutes, not the default ten seconds. */
-  readonly timeoutMs?: number
-  /** Append the program's output here as it arrives, so a failed build stays diagnosable. */
-  readonly logPath?: string
-  /** Where the program runs; a compose file is relative to its checkout. */
-  readonly cwd?: string
-  /** Extra environment, merged over the broker's own. */
-  readonly env?: NodeJS.ProcessEnv
-  /** Answer with stdout only; a caller that parses the output must not see compose's warnings. */
-  readonly stdoutOnly?: boolean
-  /** Called when the program wrote more than the retained window, so the answer is a prefix. */
-  readonly onTruncated?: () => void
-}
-
 function runFixed(
   ctx: OpContext,
   program: string,
@@ -162,7 +184,7 @@ function runFixed(
       // Its own group, so a timeout can stop whatever the program started too.
       detached: true,
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+      ...(options.env === undefined ? {} : { env: withDropped(options.env) }),
     })
     const state: { settled: boolean; timer?: NodeJS.Timeout } = {
       settled: false,
@@ -280,6 +302,7 @@ function runFixed(
         new BrokerFault(
           'unavailable',
           message === '' ? `${program} exited with ${code ?? signal ?? 'no status'}` : message,
+          code ?? undefined,
         ),
       )
     })
@@ -1443,29 +1466,56 @@ const PROBE_TIMEOUT_MS = 60_000
 const GCB_QUERY_TIMEOUT_MS = 10_000
 /** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
 const GCB_QUERIES = 5
-/** The steps that may take the build budget: pull, build and recreate. */
-const GCB_BUILD_STEPS = 3
+/**
+ * The git reads around the pull — the optional status check, the ssh-config query and the commit —
+ * at the default deadline.
+ */
+const GCB_PRELUDE_STEPS = 3
+/** The steps that may take the build budget: build and recreate (the pull has its own bound). */
+const GCB_BUILD_STEPS = 2
 
 /**
- * Rebuild the credential broker from its own checkout and recreate only its container.
+ * Pull the credential broker's checkout, rebuild its container image and pin the host half.
  *
  * Not named `deploy.*`: those mean this deployment, and their log and status would become ambiguous
  * the moment a second deployment shares the namespace. Every step is the answer, so a failure says
  * which one it was; the container's own state is the last word, because a build that cannot start
  * is not a successful update.
  */
-async function updateBroker(ctx: OpContext): Promise<string> {
+async function updateBroker(
+  ctx: OpContext,
+  target: 'both' | 'container' | 'host',
+): Promise<string> {
   const checkout = ctx.gcbCheckout
   const composeFiles = ctx.gcbCompose
   const repo = ctx.gcbProbeRepo
   const service = ctx.gcbService
-  if (composeFiles === undefined || checkout === undefined || repo === undefined) {
-    throw new BrokerFault('unavailable', 'the broker is not configured for gcb.update')
+  const containerConfigured = composeFiles !== undefined && repo !== undefined
+  const hostConfigured = ctx.gcbHostUpdate === true
+  if (target === 'container' && !containerConfigured) {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.update: the container half is not configured: start the broker with --gcb-compose and --gcb-probe-repo',
+    )
+  }
+  if (target === 'host' && !hostConfigured) {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.update: the host half is not configured: start the broker with --gcb-host',
+    )
+  }
+  const containerUpdate = containerConfigured && target !== 'host'
+  const hostUpdate = hostConfigured && target !== 'container'
+  if (checkout === undefined || (!containerUpdate && !hostUpdate)) {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.update needs --gcb-checkout, and either the broker container (--gcb-compose with --gcb-probe-repo) or the host broker (--gcb-host)',
+    )
   }
   // One prefix for every `compose` call: a deployment that renders a base file plus an overlay is
   // the same set of files everywhere here. Compose interpolates UID and GID, and the broker's own
   // environment may not carry them.
-  const composeArgs = ['compose', ...composeFiles.flatMap(file => ['-f', file])]
+  const composeArgs = ['compose', ...(composeFiles ?? []).flatMap(file => ['-f', file])]
   const uid = process.getuid?.()
   const gid = process.getgid?.()
   const composeEnv: NodeJS.ProcessEnv = {
@@ -1483,13 +1533,85 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   // Each step names itself, in the answer and in the failure: a pull that worked and a build that
   // did not are different answers to whoever reads the audit log.
   const done: string[] = []
+  // A broker may inherit GIT_DIR/GIT_WORK_TREE from whatever started it, and `-C` does not override
+  // them: the pull would then act on another repository while the build uses this checkout. Every
+  // git call here clears only the repository location; transport settings stay inherited.
+  // `undefined` removes the keys: an empty GIT_DIR is a path, not "unset", and git fails on it.
+  const isolatedGitEnv: NodeJS.ProcessEnv = {
+    GIT_DIR: undefined,
+    GIT_WORK_TREE: undefined,
+    GIT_INDEX_FILE: undefined,
+  }
+  // Fail before the one network step. A dirty checkout would otherwise be pulled into before the
+  // refusal — and every target builds or pins the commit it reports, so none of them may read a
+  // working tree that is not that commit. A missing host directory would pay for the pull first;
+  // the directory resolved here is the one the pin writes to, so the check and the write agree.
+  const dirty = (
+    await git(
+      ctx,
+      ['status', '--porcelain'],
+      { stdoutOnly: true, env: isolatedGitEnv },
+      checkout,
+    ).catch((error: unknown) => {
+      // Before the pull there is no completed step to blame; name the check itself.
+      throw new BrokerFault(
+        error instanceof BrokerFault ? error.code : 'unavailable',
+        `gcb.update: reading the checkout status failed: ${messageOf(error)}`,
+      )
+    })
+  ).trim()
+  if (dirty !== '') {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.update: the checkout has local changes; commit or stash them, so the image and the pin name the commit that was built',
+    )
+  }
+  const deployDir = hostUpdate ? await hostDeployDir(ctx) : ''
   const step = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
     try {
       return await work()
     } catch (error) {
       const message = messageOf(error)
-      const failure = withCompleted(`gcb.update: ${name} failed: ${message}`, done)
+      // A pin that already moved is the one state a late failure leaves behind, and re-running is
+      // what converges it; saying so beats implying both halves are still where they were.
+      const diverged = hostUpdate && done.some(line => line.startsWith('host: '))
+      const failure =
+        withCompleted(`gcb.update: ${name} failed: ${message}`, done) +
+        (diverged
+          ? '; the host half is already on the new commit — re-run gcb.update to converge both'
+          : '')
       throw new BrokerFault(error instanceof BrokerFault ? error.code : 'unavailable', failure)
+    }
+  }
+  // The one network step, and the only one that needs a bound: git decides ssh or HTTPS, and the
+  // proxy, from the remote the checkout already has — this operation does not rewrite it. Prompts
+  // are off because nobody is at a terminal; a network that answers nothing fails at the bound
+  // rather than holding the request open.
+  const pullEnv: NodeJS.ProcessEnv = { GIT_TERMINAL_PROMPT: '0', ...isolatedGitEnv }
+  // ssh can still ask on /dev/tty (passphrase, host key), so it is made non-interactive — but only
+  // when the operator has not chosen an ssh command: core.sshCommand and GIT_SSH_COMMAND win,
+  // because that is where a ProxyCommand or a key selection lives. ~/.ssh/config is read either way.
+  if (process.env['GIT_SSH_COMMAND'] === undefined) {
+    const configured = (
+      await git(
+        ctx,
+        ['config', '--get', 'core.sshCommand'],
+        { stdoutOnly: true, env: isolatedGitEnv },
+        checkout,
+      ).catch((error: unknown) => {
+        // `git config --get` exits 1 for a key that is not set; anything else — a timeout, a
+        // broken configuration — is a real failure and must not read as "nothing configured".
+        if (error instanceof BrokerFault && error.exitCode === 1) {
+          return ''
+        }
+        throw new BrokerFault(
+          error instanceof BrokerFault ? error.code : 'unavailable',
+          `gcb.update: reading the ssh configuration failed: ${messageOf(error)}`,
+        )
+      })
+    ).trim()
+    if (configured === '' && process.env['GIT_SSH'] === undefined) {
+      pullEnv['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
     }
   }
   const pull =
@@ -1498,12 +1620,36 @@ async function updateBroker(ctx: OpContext): Promise<string> {
         git(
           ctx,
           ['pull', '--ff-only'],
-          { stdoutOnly: true, timeoutMs: BUILD_TIMEOUT_MS },
+          { stdoutOnly: true, timeoutMs: GCB_PULL_TIMEOUT_MS, env: pullEnv },
           checkout,
         ),
       ),
     )[0] ?? ''
   done.push(`pull: ${pull}`)
+  const sha = (
+    await step('read the commit', () =>
+      git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true, env: isolatedGitEnv }, checkout),
+    )
+  ).trim()
+  if (!COMMIT_ID.test(sha)) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(`gcb.update: ${JSON.stringify(sha)} is not a commit id`, done),
+    )
+  }
+  done.push(`commit: ${sha.slice(0, 12)}`)
+  if (!containerUpdate) {
+    if (hostUpdate) {
+      done.push(
+        `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
+      )
+    }
+    // Configured and deliberately skipped is a different answer from not configured at all.
+    done.push(
+      containerConfigured ? 'container: skipped (target host)' : 'container: not configured',
+    )
+    return done.join('; ')
+  }
   // The named service, not the file: a deployment compose also runs dsh, and this operation must
   // touch only the broker's container.
   const services = linesOf(await step('read the services', () => compose(['config', '--services'])))
@@ -1554,6 +1700,9 @@ async function updateBroker(ctx: OpContext): Promise<string> {
       ),
     )
   }
+  if (hostConfigured && !hostUpdate) {
+    done.push('host: skipped (target container)')
+  }
   await step('build', () =>
     docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
       cwd: checkout,
@@ -1561,6 +1710,13 @@ async function updateBroker(ctx: OpContext): Promise<string> {
     }),
   )
   done.push('build: ok')
+  // The pin comes after a successful build: a build that fails must leave the host broker on the
+  // commit it was running, or the two halves diverge in the very state this operation prevents.
+  if (hostUpdate) {
+    done.push(
+      `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
+    )
+  }
   // The image this operation just built is the one that runs: never build from a compose `build:`
   // stanza, never reach for a registry.
   await step('recreate', () =>
@@ -1621,6 +1777,180 @@ async function updateBroker(ctx: OpContext): Promise<string> {
   )
   done.push(`probe: ${repo} allowed`)
   return done.join('; ')
+}
+
+/* ------------------------------------------------------------------ gcb.update (host half) */
+
+/**
+ * `$HOME/.broker-host`, resolved where it is used: a broker that never updates must start without
+ * it.
+ */
+function defaultDeployDir(): string {
+  try {
+    return path.join(homedir(), '.broker-host')
+  } catch {
+    throw new BrokerFault('unavailable', 'gcb.update: no HOME to find the host broker under')
+  }
+}
+
+/** A commit id, which is all `app.ref` may hold. */
+const COMMIT_ID = /^[0-9a-f]{40}$/u
+
+/** The host broker's directory, checked once so a missing one is named before any work starts. */
+async function hostDeployDir(ctx: OpContext): Promise<string> {
+  const deployDir = ctx.gcbDeployDir ?? defaultDeployDir()
+  const stats = await stat(deployDir).catch(() => null)
+  if (stats === null || !stats.isDirectory()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.update: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's directory`,
+    )
+  }
+  return deployDir
+}
+
+/**
+ * Move the host-side gcb broker to a commit and wait until it runs it.
+ *
+ * The host broker is started by a supervisor that re-stages `~/.broker-host/app` from the commit in
+ * `app.ref` whenever it starts, so an update is: write the pin, stop the process, and let the
+ * supervisor restart it. This does exactly that, and waits for the restarted process and the staged
+ * commit, because "the pin moved" is not "the broker runs it".
+ */
+async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Promise<string> {
+  const pinFile = path.join(deployDir, 'app.ref')
+  const pidFile = path.join(deployDir, 'gcb-host.pid')
+  const stagedFile = path.join(deployDir, 'app', 'STAGED.json')
+
+  const readPid = async (): Promise<number | undefined> => {
+    const text = await readFile(pidFile, 'utf8').catch(() => '')
+    const pid = Number(text.trim())
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+  }
+  const alive = (pid: number | undefined): boolean => {
+    if (pid === undefined) {
+      return false
+    }
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      // Only a confirmed absence is "not running": EPERM means the pid exists under another user,
+      // and treating that as gone would let the pin move past a broker the operation cannot check.
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+        return false
+      }
+      throw new BrokerFault(
+        'unavailable',
+        `gcb.update: cannot check pid ${String(pid)}: ${messageOf(error)}`,
+      )
+    }
+  }
+  const stagedSha = async (): Promise<string | undefined> => {
+    const text = await readFile(stagedFile, 'utf8').catch(() => '')
+    try {
+      const parsed = JSON.parse(text) as { sha?: unknown }
+      return typeof parsed.sha === 'string' ? parsed.sha : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  const before = await readPid()
+  // Asked once: the answer decides both the refusal below and the signal after the pin, and a
+  // second probe after the pin could fail for a reason that no longer has an untouched state.
+  const wasRunning = before !== undefined && alive(before)
+  // A pid file survives a crash, and a recycled pid belongs to somebody else: check it before the
+  // pin moves, so the refusal is the whole effect of a stale file.
+  if (wasRunning && before !== undefined) {
+    // The pid file sits in this deployment's directory, but a recycled pid may belong to another
+    // `idsh-host` whose arguments happen to contain "gcb". The deployment directory is the part
+    // that is this broker's own: a process launched from somewhere else is not stopped.
+    const deployment = path.resolve(deployDir)
+    const realDeployment = await realpath(deployment).catch(() => deployment)
+    const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
+    // The argument must name the deployment directory itself (or a path inside it), compared by
+    // real path: a sibling `${deployment}-elsewhere`, a copy nested under another directory, and a
+    // symlinked spelling all have to be told apart by where they actually lead.
+    const namesDeployment = async (arg: string): Promise<boolean> => {
+      const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg
+      if (!value.startsWith('/')) {
+        return false
+      }
+      for (let current = value; ; current = path.dirname(current)) {
+        if ((await realpath(current).catch(() => current)) === realDeployment) {
+          return true
+        }
+        if (current === path.dirname(current)) {
+          return false
+        }
+      }
+    }
+    let named = false
+    for (const arg of cmdline.split('\0')) {
+      if (await namesDeployment(arg)) {
+        named = true
+        break
+      }
+    }
+    if (!named) {
+      // A supervisor may launch the broker with a relative path from inside the deployment; the
+      // argument then names nothing absolute, but the working directory is the deployment's.
+      const cwd = await readlink(`/proc/${String(before)}/cwd`).catch(() => '')
+      if (cwd !== '') {
+        const realCwd = await realpath(cwd).catch(() => cwd)
+        named = realCwd === realDeployment || realCwd.startsWith(`${realDeployment}/`)
+      }
+    }
+    if (!/gcb/u.test(cmdline) || !named) {
+      throw new BrokerFault(
+        'unavailable',
+        `gcb.update: refusing to stop ${String(before)}: it does not run from ${deployment}`,
+      )
+    }
+  }
+  await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
+  await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
+  if (wasRunning && before !== undefined) {
+    try {
+      process.kill(before, 'SIGTERM')
+    } catch {
+      // It exited between the check and the signal, which is the outcome the signal wanted.
+    }
+  }
+
+  const deadline = Date.now() + GCB_HOST_WAIT_MS
+  const pinned = `app.ref is pinned to ${sha.slice(0, 12)}`
+  try {
+    for (;;) {
+      const pid = await readPid()
+      if (pid !== before && alive(pid) && (await stagedSha()) === sha) {
+        return `pinned ${sha.slice(0, 12)}; host broker ${String(pid)} (was ${before === undefined ? 'not running' : String(before)})`
+      }
+      if (Date.now() >= deadline) {
+        throw new BrokerFault(
+          'unavailable',
+          `the host broker did not stage it within ${String(GCB_HOST_WAIT_MS / 1000)}s; check ${path.join(deployDir, 'gcb-host.log')}`,
+        )
+      }
+      if (ctx.signal?.aborted === true) {
+        throw new BrokerFault('timeout', 'gcb.update: cancelled while waiting for the host broker')
+      }
+      // Clamped: a poll that sleeps past the deadline would let the request's own timeout win, and
+      // that answer is the one without the log path.
+      await new Promise(resolve =>
+        setTimeout(resolve, Math.max(0, Math.min(GCB_HOST_POLL_MS, deadline - Date.now()))),
+      )
+    }
+  } catch (error) {
+    // The pin is the effect that survives whatever went wrong next; an answer without it would
+    // leave the operator thinking nothing changed.
+    const message = messageOf(error)
+    throw new BrokerFault(
+      error instanceof BrokerFault ? error.code : 'unavailable',
+      `${message}; ${pinned}, but the host broker has not confirmed it; re-run gcb.update to converge both`,
+    )
+  }
 }
 
 export const OPS: readonly OpDefinition[] = [
@@ -1985,19 +2315,48 @@ export const OPS: readonly OpDefinition[] = [
 
   {
     name: 'gcb.update',
-    summary: 'Rebuild the credential broker from its checkout and recreate only its container.',
+    summary:
+      'Update the credential broker from its checkout: rebuild and recreate its container, and pin the host-supervised broker to the same commit.',
     confirm: true,
     serial: true,
     // The operation's own deadline has to outlast every step it runs: a pull, a build and a
     // recreate at the build budget, the probe, and the four local queries, or a slow link turns a
     // working update into a timeout halfway through it.
     timeoutMs:
-      GCB_BUILD_STEPS * BUILD_TIMEOUT_MS + PROBE_TIMEOUT_MS + GCB_QUERIES * GCB_QUERY_TIMEOUT_MS,
-    requires: ['gcbCheckout', 'gcbCompose', 'gcbProbeRepo'],
-    input: { type: 'object', properties: {}, additionalProperties: false },
+      GCB_BUILD_STEPS * BUILD_TIMEOUT_MS +
+      PROBE_TIMEOUT_MS +
+      GCB_QUERIES * GCB_QUERY_TIMEOUT_MS +
+      GCB_PRELUDE_STEPS * GCB_QUERY_TIMEOUT_MS +
+      GCB_PULL_TIMEOUT_MS +
+      GCB_HOST_WAIT_MS,
+    requires: ['gcbCheckout'],
+    // One half has to be configured, or the call could only fail after a confirmation: the host
+    // broker (`--gcb-host`) or the container (`--gcb-compose` with `--gcb-probe-repo`).
+    available: ctx =>
+      ctx.gcbHostUpdate === true ||
+      (ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined),
+    input: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          enum: ['both', 'container', 'host'],
+          description:
+            'Which half to update; default both. A half that is not configured is an error when named.',
+        },
+      },
+      additionalProperties: false,
+    },
     run(args, ctx) {
-      rejectUnknown(args, [])
-      return updateBroker(ctx)
+      rejectUnknown(args, ['target'])
+      const target = text(args, 'target', MAX_PATTERN_CHARS) ?? 'both'
+      if (target !== 'both' && target !== 'container' && target !== 'host') {
+        throw new BrokerFault(
+          'bad-argument',
+          `target must be both, container or host, got ${JSON.stringify(target)}`,
+        )
+      }
+      return updateBroker(ctx, target)
     },
   },
   {
@@ -2184,7 +2543,9 @@ export const OPS: readonly OpDefinition[] = [
  */
 const available = (context: OpContext | undefined): readonly OpDefinition[] =>
   OPS.filter(
-    op => op.requires === undefined || op.requires.every(key => context?.[key] !== undefined),
+    op =>
+      (op.requires === undefined || op.requires.every(key => context?.[key] !== undefined)) &&
+      (op.available === undefined || context === undefined || op.available(context)),
   )
 
 export function findOp(name: string, context?: OpContext): OpDefinition | undefined {
