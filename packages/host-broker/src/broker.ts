@@ -108,6 +108,8 @@ export interface BrokerOptions {
   readonly gcbService?: string
   /** The repository `gcb.update` probes for, `owner/name`; the broker's own check after a recreate. */
   readonly gcbProbeRepo?: string
+  /** The client image `gcb.update` rebuilds besides the daemon image. */
+  readonly gcbClientImage?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -273,6 +275,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     ...(options.gcbHostUpdate === true ? { gcbHostUpdate: true } : {}),
     ...(gcbComposeFiles === undefined ? {} : { gcbCompose: gcbComposeFiles }),
     gcbService,
+    ...(options.gcbClientImage === undefined ? {} : { gcbClientImage: options.gcbClientImage }),
     ...(gcbProbeRepo === undefined ? {} : { gcbProbeRepo }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)

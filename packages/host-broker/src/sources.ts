@@ -65,6 +65,8 @@ export interface OpContext {
   readonly gcbHostUpdate?: boolean
   /** The compose file(s) that run the broker. */
   readonly gcbCompose?: readonly string[]
+  /** The client image to rebuild from the same checkout, when the deployment bakes one. */
+  readonly gcbClientImage?: string
   /** The service in those files that runs the broker. */
   readonly gcbService: string
   /** The repository `gcb.update` probes for, `owner/name`. */
@@ -1471,8 +1473,13 @@ const GCB_QUERIES = 5
  * at the default deadline.
  */
 const GCB_PRELUDE_STEPS = 3
-/** The steps that may take the build budget: build and recreate (the pull has its own bound). */
-const GCB_BUILD_STEPS = 2
+/**
+ * The steps that may take the build budget: the image build, the optional client build and the
+ * recreate (the pull has its own bound). The client build is counted even when it is not
+ * configured, because the operation's deadline is fixed at registration and a smaller cap would
+ * turn a slow configured client build into a timeout halfway through.
+ */
+const GCB_BUILD_STEPS = 3
 
 /**
  * Pull the credential broker's checkout, rebuild its container image and pin the host half.
@@ -1710,6 +1717,19 @@ async function updateBroker(
     }),
   )
   done.push('build: ok')
+  // The client image is built from the same commit: a deployment whose container bakes the client
+  // (idsh's dev image) would otherwise keep the old one after the daemon moves. It is built before
+  // the pin for the same reason as the host image — a failure must leave both halves where they were.
+  const clientImage = ctx.gcbClientImage
+  if (clientImage !== undefined) {
+    await step('build the client', () =>
+      docker(ctx, ['build', '--target', 'client', '-t', clientImage, '.'], 'tail', {
+        cwd: checkout,
+        timeoutMs: BUILD_TIMEOUT_MS,
+      }),
+    )
+    done.push(`client: ${clientImage}`)
+  }
   // The pin comes after a successful build: a build that fails must leave the host broker on the
   // commit it was running, or the two halves diverge in the very state this operation prevents.
   if (hostUpdate) {

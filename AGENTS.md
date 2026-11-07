@@ -348,8 +348,8 @@ argv: a declared, read-only binary, its flags and positional shape checked again
 `dryRun` answering the verdict first — `broker.status`/`broker.update`, so the
 broker can replace itself under its supervisor, and `gcb.update`, which pulls the credential
 broker's checkout, optionally pins and restarts the host-supervised broker to the same commit
-(`--gcb-host`), rebuilds and recreates only the named service (one or more compose files) and
-probes it through the deployment's client; `target` limits an update to one half, for the retry
+(`--gcb-host`), rebuilds and recreates only the named service (one or more compose files) — plus
+the client image when `--gcb-client-image` names one — and probes it through the deployment's client; `target` limits an update to one half, for the retry
 after a two-phase failure — and `packages/host-ops` turns that
 table into dsh tools, asking the person first for any operation the table marks `confirm`. A change that
 implements one updates that file, `README.md` and this one in the same pull request — the next

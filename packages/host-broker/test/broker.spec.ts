@@ -4074,6 +4074,9 @@ async function gcbRig(
     files?: number
     /** Configure the host half too, so a failure can be checked against its pin. */
     host?: boolean
+    /** The client image to configure; its build can fail through `clientBuild`. */
+    clientImage?: string
+    clientBuild?: string
   } = {},
 ): Promise<GcbRig> {
   const host = await fakeHost()
@@ -4097,6 +4100,7 @@ async function gcbRig(
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
       arm('config --format json', stub.config, `echo '{"services":{"gcb":{}}}'`),
       arm('up -d --no-deps', stub.up, `touch ${JSON.stringify(replaced)}; exit 0`),
+      arm('build --target client', stub.clientBuild, 'exit 0'),
       arm('build --target', stub.build, 'exit 0'),
       arm(
         'ps -q',
@@ -4157,6 +4161,7 @@ async function gcbRig(
     gcbCheckout,
     gcbCompose: gcbComposeFiles.join(','),
     gcbProbeRepo: 'devockr/idsh',
+    ...(stub.clientImage === undefined ? {} : { gcbClientImage: stub.clientImage }),
     ...(deployDir === undefined ? {} : { gcbDeployDir: deployDir, gcbHostUpdate: true }),
   })
   const connection = client(host.socketPath)
@@ -4214,11 +4219,11 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
-    // The operation outlasts every step it runs: the build and the recreate at the build budget,
-    // the probe, four queries, the bounded pull and the host-broker wait.
+    // The operation outlasts every step it runs: the image, the optional client build and the
+    // recreate at the build budget, the probe, five queries, the bounded pull and the host wait.
     assert.equal(
       update.timeoutMs,
-      2 * BUILD_TIMEOUT_MS +
+      3 * BUILD_TIMEOUT_MS +
         GCB_PROBE_MS +
         GCB_QUERY_COUNT * GCB_QUERY_MS +
         GCB_PRELUDE_STEPS * GCB_QUERY_MS +
@@ -5004,6 +5009,40 @@ void test('gcb.update accepts a broker launched relatively inside the deployment
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
   } finally {
     host?.stop()
+    await rig.close()
+  }
+})
+
+void test('gcb.update rebuilds the client image from the same checkout', async () => {
+  const rig = await gcbRig({ clientImage: 'code-vaults/gcb-client:dev' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /client: code-vaults\/gcb-client:dev/u)
+    const calls = await rig.calls()
+    assert.match(calls, /build --target host -t /u)
+    assert.match(calls, /build --target client -t code-vaults\/gcb-client:dev/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update leaves the host pin alone when the client build fails', async () => {
+  const rig = await gcbRig({
+    host: true,
+    clientImage: 'code-vaults/gcb-client:dev',
+    clientBuild: 'exit 1',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /build the client failed/u)
+    assert.doesNotMatch(await rig.calls(), /up -d --no-deps/u)
+    assert.equal(
+      rig.pinFile === undefined ? '' : (await readFile(rig.pinFile, 'utf8')).trim(),
+      'c'.repeat(COMMIT_CHARS),
+    )
+  } finally {
     await rig.close()
   }
 })
