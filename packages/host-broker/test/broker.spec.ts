@@ -5013,6 +5013,19 @@ void test('gcb.update accepts a broker launched relatively inside the deployment
   }
 })
 
+void test('gcb.update refuses a client image that names the broker image', async () => {
+  const rig = await gcbRig({ clientImage: 'code-vaults/gcb-host:dev' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /the client image and the broker image are both/u)
+    // Refused before either build: a shared tag would replace the image the service runs.
+    assert.doesNotMatch(await rig.calls(), /build --target/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update rebuilds the client image from the same checkout', async () => {
   const rig = await gcbRig({ clientImage: 'code-vaults/gcb-client:dev' })
   try {

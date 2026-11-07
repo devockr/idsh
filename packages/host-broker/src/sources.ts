@@ -1685,6 +1685,18 @@ async function updateBroker(
   }
   const image = images[0]
   done.push(`image: ${image}`)
+  // Two builds sharing a tag means the client build overwrites the daemon image the recreate then
+  // runs: the service would start the client target where it expects the daemon.
+  const clientImage = ctx.gcbClientImage
+  if (clientImage !== undefined && clientImage === image) {
+    throw new BrokerFault(
+      'unavailable',
+      withCompleted(
+        `the client image and the broker image are both ${JSON.stringify(image)}; the client build would replace the image the service runs`,
+        done,
+      ),
+    )
+  }
   // The broker is one container, so a service that asks for replicas is a configuration this cannot
   // verify: `ps -q` lists only running containers, and one stopped replica among two would pass.
   const replicas = await step('read the replica count', async () => {
@@ -1720,7 +1732,6 @@ async function updateBroker(
   // The client image is built from the same commit: a deployment whose container bakes the client
   // (idsh's dev image) would otherwise keep the old one after the daemon moves. It is built before
   // the pin for the same reason as the host image — a failure must leave both halves where they were.
-  const clientImage = ctx.gcbClientImage
   if (clientImage !== undefined) {
     await step('build the client', () =>
       docker(ctx, ['build', '--target', 'client', '-t', clientImage, '.'], 'tail', {

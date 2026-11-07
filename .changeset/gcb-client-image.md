@@ -6,4 +6,6 @@
 the client were built from different places, so a deployment whose container bakes `gcb-client` (the
 dev image does) kept the old client after the daemon moved; with `--gcb-client-image <tag>` the
 operation builds both targets from the commit it pulled, and the client build fails before the host
-pin moves, like the daemon build.
+pin moves, like the daemon build. A client tag equal to the broker image is refused: the two builds
+would share a tag, and the recreate would start the client target. Rebuilding idsh's dev image from
+the new client is `deploy.build` + `deploy.recreate`.
