@@ -1868,7 +1868,17 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
     // that is this broker's own: a process launched from somewhere else is not stopped.
     const deployment = path.resolve(deployDir)
     const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
-    if (!/gcb/u.test(cmdline) || !cmdline.includes(deployment)) {
+    // A complete path component, not a prefix: `${deployDir}-elsewhere` is another deployment.
+    const named = cmdline.split('\0').some(arg => {
+      for (let at = arg.indexOf(deployment); at !== -1; at = arg.indexOf(deployment, at + 1)) {
+        const next = arg[at + deployment.length]
+        if (next === undefined || next === '/') {
+          return true
+        }
+      }
+      return false
+    })
+    if (!/gcb/u.test(cmdline) || !named) {
       throw new BrokerFault(
         'unavailable',
         `gcb.update: refusing to stop ${String(before)}: it does not run from ${deployment}`,

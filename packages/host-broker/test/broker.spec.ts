@@ -5086,6 +5086,29 @@ void test('gcb.update keeps real git on the checkout despite an inherited GIT_DI
   }
 })
 
+void test('gcb.update refuses a pid under a sibling of the deploy directory', async () => {
+  const rig = await hostUpdateRig()
+  // The deploy directory as a string prefix, but a different path component.
+  const sibling = path.join(rig.host.root, '.broker-host-elsewhere')
+  await mkdir(sibling)
+  const script = path.join(sibling, 'gcb-broker.sh')
+  await writeFile(script, 'sleep 300\n')
+  const foreign = spawn('sh', [script], { stdio: 'ignore' })
+  const foreignPid = foreign.pid
+  assert.ok(foreignPid !== undefined)
+  try {
+    await writeFile(rig.pidFile, `${String(foreignPid)}\n`)
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /does not run from/u)
+    assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), 'a'.repeat(COMMIT_CHARS))
+    process.kill(foreignPid, 0)
+  } finally {
+    foreign.kill()
+    await rig.close()
+  }
+})
+
 void test('gcb.update refuses a stale pid that runs elsewhere', async () => {
   const rig = await hostUpdateRig()
   // A live process whose command line mentions gcb but not this deployment's directory.
