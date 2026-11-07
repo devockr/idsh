@@ -4902,32 +4902,32 @@ void test('gcb.update refuses a target it does not know', async () => {
 })
 
 void test('gcb.update stops at the pull when the remote cannot be reached', async () => {
-  process.env['FAIL_PULL'] = '1'
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, false)
-    const message = JSON.stringify(answer.error)
-    assert.match(message, /pull failed/u)
-    assert.match(message, /no route to the remote/u)
-    assert.doesNotMatch(await rig.calls(), /build --target host/u)
+    await withEnv({ FAIL_PULL: '1' }, async () => {
+      const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+      assert.equal(answer.ok, false)
+      const message = JSON.stringify(answer.error)
+      assert.match(message, /pull failed/u)
+      assert.match(message, /no route to the remote/u)
+      assert.doesNotMatch(await rig.calls(), /build --target host/u)
+    })
   } finally {
     await rig.close()
-    delete process.env['FAIL_PULL']
   }
 })
 
 void test('gcb.update refuses a commit that is not one', async () => {
-  process.env['SHA'] = 'not-a-commit'
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /is not a commit id/u)
-    assert.doesNotMatch(await rig.calls(), /build --target host/u)
+    await withEnv({ SHA: 'not-a-commit' }, async () => {
+      const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+      assert.equal(answer.ok, false)
+      assert.match(JSON.stringify(answer.error), /is not a commit id/u)
+      assert.doesNotMatch(await rig.calls(), /build --target host/u)
+    })
   } finally {
     await rig.close()
-    delete process.env['SHA']
   }
 })
 
@@ -4956,31 +4956,34 @@ void test('gcb.update can retry only the host half', async () => {
 })
 
 void test('gcb.update names the status check when it fails', async () => {
-  process.env['FAIL_STATUS'] = '1'
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /reading the checkout status failed/u)
-    assert.match(JSON.stringify(answer.error), /status is unreadable/u)
-    assert.doesNotMatch(await rig.calls(), /pull --ff-only/u)
+    await withEnv({ FAIL_STATUS: '1' }, async () => {
+      const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+      assert.equal(answer.ok, false)
+      assert.match(JSON.stringify(answer.error), /reading the checkout status failed/u)
+      assert.match(JSON.stringify(answer.error), /status is unreadable/u)
+      assert.doesNotMatch(await rig.calls(), /pull --ff-only/u)
+    })
   } finally {
     await rig.close()
-    delete process.env['FAIL_STATUS']
   }
 })
 
 void test('gcb.update refuses a dirty checkout for a container-only run too', async () => {
-  process.env['STATUS'] = ' M src/x.ts\n'
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: { target: 'container' } })
-    assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /local changes/u)
-    assert.doesNotMatch(await rig.calls(), /pull --ff-only/u)
+    await withEnv({ STATUS: ' M src/x.ts\n' }, async () => {
+      const answer = await rig.connection.request({
+        op: 'gcb.update',
+        args: { target: 'container' },
+      })
+      assert.equal(answer.ok, false)
+      assert.match(JSON.stringify(answer.error), /local changes/u)
+      assert.doesNotMatch(await rig.calls(), /pull --ff-only/u)
+    })
   } finally {
     await rig.close()
-    delete process.env['STATUS']
   }
 })
 
@@ -5339,15 +5342,15 @@ void test('gcb.update makes ssh non-interactive when nothing else decides it', a
 })
 
 void test('gcb.update does not read a failed config query as "unset"', async () => {
-  process.env['FAIL_CONFIG'] = '1'
   const rig = await gcbRig()
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /config is unreadable/u)
+    await withEnv({ FAIL_CONFIG: '1' }, async () => {
+      const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+      assert.equal(answer.ok, false)
+      assert.match(JSON.stringify(answer.error), /config is unreadable/u)
+    })
   } finally {
     await rig.close()
-    delete process.env['FAIL_CONFIG']
   }
 })
 
@@ -5462,7 +5465,6 @@ void test('gcb.update pins the host broker and waits for the restarted process',
     assert.equal((await readFile(rig.pinFile, 'utf8')).trim(), newSha)
   } finally {
     host?.stop()
-    delete process.env['STATUS']
     await rig.close()
   }
 })
@@ -5504,15 +5506,15 @@ void test('gcb.update names a host broker directory that is not there', async ()
 
 void test('gcb.update refuses a dirty checkout before it touches either broker', async () => {
   const rig = await hostUpdateRig()
-  process.env['STATUS'] = ' M packages/x.ts'
   try {
-    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
-    assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /local changes/u)
-    // The refusal comes before the network step: nothing was pulled into the checkout.
-    assert.doesNotMatch(await readFile(rig.calls, 'utf8'), /pull --ff-only/u)
+    await withEnv({ STATUS: ' M packages/x.ts' }, async () => {
+      const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+      assert.equal(answer.ok, false)
+      assert.match(JSON.stringify(answer.error), /local changes/u)
+      // The refusal comes before the network step: nothing was pulled into the checkout.
+      assert.doesNotMatch(await readFile(rig.calls, 'utf8'), /pull --ff-only/u)
+    })
   } finally {
-    delete process.env['STATUS']
     await rig.close()
   }
 })
