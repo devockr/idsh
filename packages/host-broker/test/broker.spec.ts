@@ -4122,10 +4122,10 @@ async function gcbRig(
       // git exits 1 for a key that is not set — the branch the operation must read as "unset".
       '  *"status --porcelain"*) if [ -n "$FAIL_STATUS" ]; then echo "status is unreadable" >&2; exit 2; fi; printf "%s" "${STATUS:-}" ;;',
       '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; if [ "${CORE_SSH+x}" != x ]; then exit 1; fi; printf "%s" "$CORE_SSH" ;;',
-      '  *"pull --ff-only"*) printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
+      '  *"pull --ff-only"*) if [ -n "$FAIL_PULL" ]; then echo "no route to the remote" >&2; exit 1; fi; printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
         JSON.stringify(recorded) +
         '; echo "Already up to date." ;;',
-      '  *"rev-parse HEAD"*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;',
+      '  *"rev-parse HEAD"*) printf "%s" "${SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;',
       'esac',
       '',
     ].join('\n'),
@@ -4887,6 +4887,50 @@ async function hostUpdateRig(): Promise<{
   }
 }
 
+void test('gcb.update refuses a target it does not know', async () => {
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.update',
+      args: { target: 'neither' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /target must be both, container or host/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update stops at the pull when the remote cannot be reached', async () => {
+  process.env['FAIL_PULL'] = '1'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /pull failed/u)
+    assert.match(message, /no route to the remote/u)
+    assert.doesNotMatch(await rig.calls(), /build --target host/u)
+  } finally {
+    await rig.close()
+    delete process.env['FAIL_PULL']
+  }
+})
+
+void test('gcb.update refuses a commit that is not one', async () => {
+  process.env['SHA'] = 'not-a-commit'
+  const rig = await gcbRig()
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /is not a commit id/u)
+    assert.doesNotMatch(await rig.calls(), /build --target host/u)
+  } finally {
+    await rig.close()
+    delete process.env['SHA']
+  }
+})
+
 void test('gcb.update can retry only the host half', async () => {
   const rig = await gcbRig({ host: true })
   let host: StandInHost | undefined
@@ -5449,6 +5493,8 @@ void test('gcb.update names a host broker directory that is not there', async ()
     const answer = await connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /missing-broker-home is not a directory/u)
+    // The refusal is before the network step.
+    assert.doesNotMatch(await readFile(rig.calls, 'utf8'), /pull --ff-only/u)
   } finally {
     connection?.close()
     await broker?.close()
