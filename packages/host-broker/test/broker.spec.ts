@@ -4940,6 +4940,27 @@ void test('gcb.update refuses a dirty checkout for a container-only run too', as
   }
 })
 
+void test('gcb.update accepts a broker launched relatively inside the deployment', async () => {
+  const rig = await gcbRig({ host: true })
+  let host: StandInHost | undefined
+  try {
+    host = await standInForHost(
+      {
+        root: rig.host.root,
+        pinFile: rig.pinFile ?? '',
+        pidFile: rig.pidFile ?? '',
+        stagedFile: rig.stagedFile ?? '',
+      },
+      { oldSha: 'c'.repeat(COMMIT_CHARS), newSha: 'a'.repeat(COMMIT_CHARS), relative: true },
+    )
+    const answer = await rig.connection.request({ op: 'gcb.update', args: { target: 'host' } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+  } finally {
+    host?.stop()
+    await rig.close()
+  }
+})
+
 void test('gcb.update can retry only the container half', async () => {
   const rig = await gcbRig({ host: true })
   try {
@@ -5111,8 +5132,8 @@ void test('gcb.update refuses a pid under a sibling of the deploy directory', as
 
 void test('gcb.update refuses a deployment path nested under another directory', async () => {
   const rig = await hostUpdateRig()
-  // The deployment's name sits inside a different tree: containing the string is not being it.
-  const nested = path.join(rig.host.root, 'backup', path.basename(rig.deployDir))
+  // The whole deployment path sits inside a different tree: containing it is not being it.
+  const nested = path.join(rig.host.root, 'backup', path.relative('/', rig.deployDir))
   await mkdir(nested, { recursive: true })
   const script = path.join(nested, 'gcb-broker.sh')
   await writeFile(script, 'sleep 300\n')
@@ -5213,12 +5234,18 @@ interface StandInHost {
  */
 async function standInForHost(
   where: { root: string; pinFile: string; pidFile: string; stagedFile: string },
-  options: { oldSha: string; newSha?: string; barrier?: string },
+  options: { oldSha: string; newSha?: string; barrier?: string; relative?: boolean },
 ): Promise<StandInHost> {
   // Inside the deploy directory: the operation refuses a pid whose command line does not name it.
   const fakeBroker = path.join(path.dirname(where.pinFile), 'gcb-host.sh')
   await writeFile(fakeBroker, 'sleep 300\n')
-  const oldBroker = spawn('sh', [fakeBroker], { stdio: 'ignore' })
+  const oldBroker =
+    options.relative === true
+      ? spawn('sh', ['-c', 'exec sh gcb-host.sh'], {
+          cwd: path.dirname(where.pinFile),
+          stdio: 'ignore',
+        })
+      : spawn('sh', [fakeBroker], { stdio: 'ignore' })
   await writeFile(where.pidFile, `${String(oldBroker.pid)}\n`)
   const supervisor = spawn(
     'sh',

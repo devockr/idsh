@@ -1893,6 +1893,15 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
         break
       }
     }
+    if (!named) {
+      // A supervisor may launch the broker with a relative path from inside the deployment; the
+      // argument then names nothing absolute, but the working directory is the deployment's.
+      const cwd = await readlink(`/proc/${String(before)}/cwd`).catch(() => '')
+      if (cwd !== '') {
+        const realCwd = await realpath(cwd).catch(() => cwd)
+        named = realCwd === realDeployment || realCwd.startsWith(`${realDeployment}/`)
+      }
+    }
     if (!/gcb/u.test(cmdline) || !named) {
       throw new BrokerFault(
         'unavailable',
