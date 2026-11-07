@@ -1867,17 +1867,32 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
     // `idsh-host` whose arguments happen to contain "gcb". The deployment directory is the part
     // that is this broker's own: a process launched from somewhere else is not stopped.
     const deployment = path.resolve(deployDir)
+    const realDeployment = await realpath(deployment).catch(() => deployment)
     const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
-    // A complete path component, not a prefix: `${deployDir}-elsewhere` is another deployment.
-    const named = cmdline.split('\0').some(arg => {
-      for (let at = arg.indexOf(deployment); at !== -1; at = arg.indexOf(deployment, at + 1)) {
-        const next = arg[at + deployment.length]
-        if (next === undefined || next === '/') {
+    // The argument must name the deployment directory itself (or a path inside it), compared by
+    // real path: a sibling `${deployment}-elsewhere`, a copy nested under another directory, and a
+    // symlinked spelling all have to be told apart by where they actually lead.
+    const namesDeployment = async (arg: string): Promise<boolean> => {
+      const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg
+      if (!value.startsWith('/')) {
+        return false
+      }
+      for (let current = value; ; current = path.dirname(current)) {
+        if ((await realpath(current).catch(() => current)) === realDeployment) {
           return true
         }
+        if (current === path.dirname(current)) {
+          return false
+        }
       }
-      return false
-    })
+    }
+    let named = false
+    for (const arg of cmdline.split('\0')) {
+      if (await namesDeployment(arg)) {
+        named = true
+        break
+      }
+    }
     if (!/gcb/u.test(cmdline) || !named) {
       throw new BrokerFault(
         'unavailable',
