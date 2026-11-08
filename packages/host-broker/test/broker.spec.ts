@@ -4167,7 +4167,6 @@ async function gcbRig(
     gcbCheckout,
     gcbCompose: gcbComposeFiles.join(','),
     gcbProbeRepo: 'devockr/idsh',
-    checkout: host.root,
     ...(stub.clientImage === undefined ? {} : { gcbClientImage: stub.clientImage }),
     ...(deployDir === undefined ? {} : { gcbDeployDir: deployDir, gcbHostUpdate: true }),
   })
@@ -4275,8 +4274,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const recorded = await rig.calls()
     assert.match(recorded, /git -C .*gcb pull --ff-only/u)
-    // Relative `--gcb-compose` names resolve against the deployment checkout, not the broker's.
-    assert.match(recorded, /compose -f \/.*gcb-compose-0\.yml config --services/u)
+    assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --services/u)
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --images gcb/u)
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
     assert.match(
