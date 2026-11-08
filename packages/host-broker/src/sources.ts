@@ -1691,32 +1691,7 @@ async function updateBroker(
   // Two builds sharing a tag means the client build overwrites the daemon image the recreate then
   // runs: the service would start the client target where it expects the daemon.
   const clientImage = ctx.gcbClientImage
-  // Two spellings can name the same image: an omitted tag is `latest`, an omitted registry is
-  // `docker.io`, and a bare name lives under `library/`. The comparison is canonical, or a client
-  // build would replace the image the service runs through an equivalent name.
-  const canonical = (reference: string): string => {
-    if (reference.includes('@')) {
-      return reference
-    }
-    // The tag is decided before the registry: a single-component name may carry one too.
-    const slash = reference.lastIndexOf('/')
-    const colon = reference.lastIndexOf(':')
-    const hasTag = colon > slash
-    const name = hasTag ? reference.slice(0, colon) : reference
-    const tag = hasTag ? reference.slice(colon) : ':latest'
-    const parts = name.split('/')
-    const first = parts[0]
-    const hasRegistry =
-      parts.length > 1 && (first.includes('.') || first.includes(':') || first === 'localhost')
-    const registry = hasRegistry ? (first === 'index.docker.io' ? 'docker.io' : first) : 'docker.io'
-    const rest = hasRegistry ? parts.slice(1) : parts
-    // `library/` is Docker Hub's rule only: `ghcr.io/x` and `ghcr.io/library/x` are different.
-    if (registry === 'docker.io' && rest.length === 1) {
-      rest.unshift('library')
-    }
-    return `${registry}/${rest.join('/')}${tag}`
-  }
-  if (clientImage !== undefined && canonical(clientImage) === canonical(image)) {
+  if (clientImage !== undefined && canonicalImage(clientImage) === canonicalImage(image)) {
     throw new BrokerFault(
       'unavailable',
       withCompleted(
@@ -1895,6 +1870,34 @@ function defaultDeployDir(): string {
   } catch {
     throw new BrokerFault('unavailable', 'gcb.update: no HOME to find the host broker under')
   }
+}
+
+/**
+ * The canonical reference Docker would resolve: an omitted tag is `latest`, an omitted registry is
+ * `docker.io`, and a bare name lives under `library/`. Two spellings that resolve to the same
+ * reference name the same image — which is what a tag collision between two builds has to catch.
+ */
+function canonicalImage(reference: string): string {
+  if (reference.includes('@')) {
+    return reference
+  }
+  // The tag is decided before the registry: a single-component name may carry one too.
+  const slash = reference.lastIndexOf('/')
+  const colon = reference.lastIndexOf(':')
+  const hasTag = colon > slash
+  const name = hasTag ? reference.slice(0, colon) : reference
+  const tag = hasTag ? reference.slice(colon) : ':latest'
+  const parts = name.split('/')
+  const first = parts[0]
+  const hasRegistry =
+    parts.length > 1 && (first.includes('.') || first.includes(':') || first === 'localhost')
+  const registry = hasRegistry ? (first === 'index.docker.io' ? 'docker.io' : first) : 'docker.io'
+  const rest = hasRegistry ? parts.slice(1) : parts
+  // `library/` is Docker Hub's rule only: `ghcr.io/x` and `ghcr.io/library/x` are different.
+  if (registry === 'docker.io' && rest.length === 1) {
+    rest.unshift('library')
+  }
+  return `${registry}/${rest.join('/')}${tag}`
 }
 
 /** A commit id, which is all `app.ref` may hold. */
