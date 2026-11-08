@@ -108,6 +108,8 @@ export interface BrokerOptions {
   readonly gcbService?: string
   /** The repository `gcb.update` probes for, `owner/name`; the broker's own check after a recreate. */
   readonly gcbProbeRepo?: string
+  /** The client image `gcb.update` rebuilds besides the daemon image. */
+  readonly gcbClientImage?: string
   /** Requests per operation per minute. Default 60. */
   readonly rateLimitPerMinute?: number
   /** How long one operation may take. Default 10s; clamped to Node's timer ceiling. */
@@ -273,6 +275,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     ...(options.gcbHostUpdate === true ? { gcbHostUpdate: true } : {}),
     ...(gcbComposeFiles === undefined ? {} : { gcbCompose: gcbComposeFiles }),
     gcbService,
+    ...(options.gcbClientImage === undefined ? {} : { gcbClientImage: options.gcbClientImage }),
     ...(gcbProbeRepo === undefined ? {} : { gcbProbeRepo }),
   }
   const limiter = new RateLimiter(rateLimitPerMinute)
@@ -555,6 +558,7 @@ async function answer(
     const requestContext = { ...context, signal: controller.signal }
     release = deployment.release
     let deferred = false
+    let pending: Promise<unknown> | undefined
     try {
       const execution = await execute(
         request,
@@ -563,6 +567,9 @@ async function answer(
         started,
         deadline,
         controller,
+        work => {
+          pending = work
+        },
       )
       deferred = await finish(
         {
@@ -578,9 +585,12 @@ async function answer(
         execution.after,
       )
     } finally {
-      // When the answer carries deferred work, that work's chain releases the lock; otherwise this
-      // request is done as soon as its answer is written.
-      if (!deferred) {
+      // When the answer carries deferred work, that work's chain releases the lock; a timed-out
+      // operation may still be running its own cleanup (a tag restore), so the lock waits for it
+      // rather than letting a second deployment start underneath that cleanup.
+      if (pending !== undefined) {
+        void pending.catch(() => null).finally(releaseOnce)
+      } else if (!deferred) {
         releaseOnce()
       }
     }
@@ -608,6 +618,7 @@ async function execute(
   started: number,
   deadline: number,
   controller?: AbortController,
+  onPending?: (work: Promise<unknown>) => void,
 ): Promise<Capped & Pick<Execution, 'after'>> {
   // Resolve before limiting: a caller-chosen name must not get a bucket of its own, or the limit
   // would only bound repeats of one spelling and the map would grow without limit.
@@ -627,7 +638,7 @@ async function execute(
   const raw =
     definition === undefined
       ? describeOps(context, request.args)
-      : await runOp(definition, request.args, context, deadline, controller)
+      : await runOp(definition, request.args, context, deadline, controller, onPending)
   const value: Execution = typeof raw === 'string' ? { text: raw } : raw
   const capped =
     definition === undefined ? capOutput(value.text) : capOutput(value.text, definition.keep)
@@ -675,29 +686,27 @@ function runOp(
   context: OpContext,
   deadline: number,
   controller?: AbortController,
+  onPending?: (work: Promise<unknown>) => void,
 ): Promise<Execution | string> {
   const running = op.run(args, context)
-  const bounded = withTimeout(running, Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS)
-  // A timed-out operation is also stopped: the program's group is killed through the signal, so it
-  // cannot keep working (or retag an image) after the answer.
-  void bounded.catch(() => controller?.abort())
-  return bounded
-}
-
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    // The context clamps the operation timeout, so `ms` stays under Node's ceiling here.
+  const ms = Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS
+  return new Promise<Execution | string>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new BrokerFault('timeout', `no answer within ${ms} ms`))
+      // The answer is a timeout, but the work is not necessarily done: it may be running a cleanup
+      // the abort cannot cancel. `onPending` lets the caller keep the deployment lock until it
+      // settles, while the caller still gets its answer now.
+      onPending?.(running)
+      controller?.abort()
+      reject(new BrokerFault('timeout', `no answer within ${String(ms)} ms`))
     }, ms)
-    work.then(
+    running.then(
       value => {
         clearTimeout(timer)
         resolve(value)
       },
       (error: unknown) => {
         clearTimeout(timer)
-        reject(error instanceof Error ? error : new Error(String(error)))
+        reject(error)
       },
     )
   })

@@ -47,6 +47,8 @@ const GCB_PROBE_MS = 60_000
 const GCB_PULL_MS = 60_000
 /** How often the host-half wait looks again; the barrier test relies on it. */
 const GCB_POLL_MS = 2_000
+/** A FIFO log must be refused immediately, not through the five-second backstop. */
+const FIFO_REFUSAL_MS = 3_000
 /** How long the barrier test waits for the stand-in supervisor to publish its replacement. */
 const REPLACEMENT_WAIT_MS = 5_000
 const GCB_HOST_WAIT_MS = 300_000
@@ -54,7 +56,7 @@ const GCB_HOST_WAIT_MS = 300_000
 const GCB_PRELUDE_STEPS = 3
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, replicas, ps and inspect. */
-const GCB_QUERY_COUNT = 5
+const GCB_QUERY_COUNT = 8
 /** How long the test gives the deploy lock to free before it gives up: patience, not a duration. */
 const LOCK_WAIT_MS = 5_000
 /** The interval between two attempts while waiting for the lock. */
@@ -2726,6 +2728,57 @@ esac
   }
 })
 
+void test('a build refuses a FIFO where its log belongs', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  inspect) echo '${ROLLBACK_TARGET}' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  // A FIFO where the build log belongs: opening it must fail, not hold the deployment.
+  execFileSync('mkfifo', [path.join(host.root, 'build.log')])
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const started = Date.now()
+    const answer = await connection.request({ op: 'deploy.build', args: { sha: 'aaaaaaaa' } })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /FIFO or socket with no reader/u)
+    // The nonblocking open fails immediately, not through the five-second backstop.
+    assert.ok(Date.now() - started < FIFO_REFUSAL_MS)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('a failed answer leaves no tag behind', async () => {
   const host = await fakeHost()
   const dockerLog = path.join(host.root, 'docker.log')
@@ -4074,6 +4127,13 @@ async function gcbRig(
     files?: number
     /** Configure the host half too, so a failure can be checked against its pin. */
     host?: boolean
+    /** The client image to configure; its build can fail through `clientBuild`. */
+    clientImage?: string
+    clientBuild?: string
+    /** What the running service's image id is read as, for the restore path. */
+    previousImage?: string
+    /** How the restore's `docker tag` ends, e.g. `exit 1` to make the restore fail. */
+    tag?: string
   } = {},
 ): Promise<GcbRig> {
   const host = await fakeHost()
@@ -4097,6 +4157,7 @@ async function gcbRig(
       arm('config --images', stub.images, 'echo "code-vaults/gcb-host:dev"'),
       arm('config --format json', stub.config, `echo '{"services":{"gcb":{}}}'`),
       arm('up -d --no-deps', stub.up, `touch ${JSON.stringify(replaced)}; exit 0`),
+      arm('build --target client', stub.clientBuild, 'exit 0'),
       arm('build --target', stub.build, 'exit 0'),
       arm(
         'ps -q',
@@ -4104,6 +4165,8 @@ async function gcbRig(
         `if [ -e ${JSON.stringify(replaced)} ]; then echo def456; else echo abc123; fi`,
       ),
       arm('gcb probe', stub.probe, 'exit 0'),
+      arm('inspect --format {{.Image}}', stub.previousImage, 'echo oldimage'),
+      arm('tag ', stub.tag, 'exit 0'),
       arm('inspect', stub.inspect, 'echo "running healthy"'),
       'esac',
       '',
@@ -4157,6 +4220,7 @@ async function gcbRig(
     gcbCheckout,
     gcbCompose: gcbComposeFiles.join(','),
     gcbProbeRepo: 'devockr/idsh',
+    ...(stub.clientImage === undefined ? {} : { gcbClientImage: stub.clientImage }),
     ...(deployDir === undefined ? {} : { gcbDeployDir: deployDir, gcbHostUpdate: true }),
   })
   const connection = client(host.socketPath)
@@ -4203,6 +4267,49 @@ void test('gcb.update is offered only when its three values are configured', asy
   }
 })
 
+void test('gcb.update says when there was no image to restore', async () => {
+  // No running container before the update: the tag moves, but there is nothing to restore.
+  const rig = await gcbRig({ up: 'exit 1', ps: 'exit 0' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /recreate failed/u)
+    assert.match(message, /no running image was recorded, so the tag was not restored/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update reports a failed tag restore', async () => {
+  const rig = await gcbRig({ up: 'exit 1', tag: 'exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /recreate failed/u)
+    // The recovery failure and the image it should have gone back to are both named.
+    assert.match(message, /restoring oldimage to code-vaults\/gcb-host:dev failed/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update restores the broker tag when the recreate fails', async () => {
+  const rig = await gcbRig({ up: 'exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /recreate failed/u)
+    // The tag the service runs is the one it had, and the answer says so.
+    assert.match(await rig.calls(), /tag oldimage code-vaults\/gcb-host:dev/u)
+    assert.match(message, /the tag is back on oldimage/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update pulls, builds the one image and probes the deployment', async () => {
   const rig = await gcbRig()
   try {
@@ -4214,11 +4321,11 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     const update = ops.find(op => op.name === 'gcb.update')
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
-    // The operation outlasts every step it runs: the build and the recreate at the build budget,
-    // the probe, four queries, the bounded pull and the host-broker wait.
+    // The operation outlasts every step it runs: the image, the optional client build and the
+    // recreate at the build budget, the probe, the local queries, the bounded pull and the host wait.
     assert.equal(
       update.timeoutMs,
-      2 * BUILD_TIMEOUT_MS +
+      3 * BUILD_TIMEOUT_MS +
         GCB_PROBE_MS +
         GCB_QUERY_COUNT * GCB_QUERY_MS +
         GCB_PRELUDE_STEPS * GCB_QUERY_MS +
@@ -4246,10 +4353,10 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
       /compose -f .*gcb-compose-0\.yml up(?! -d --no-deps --no-build --pull never --wait gcb$)/mu,
     )
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml ps -q gcb/u)
-    // The recreate replaces the container: the state read must be the new one, not the one that
-    // was running before it.
-    assert.match(recorded, /inspect --format .* def456/u)
-    assert.doesNotMatch(recorded, /inspect --format .* abc123/u)
+    // The image read happens before the recreate (so a failure can restore the tag), and the state
+    // read is the new container's, not the one that was running before it.
+    assert.match(recorded, /inspect --format \{\{\.Image\}\} abc123/u)
+    assert.match(recorded, /inspect --format \{\{.State\.Status\}\}.* def456/u)
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
     // The identity is the process's, not a hard-coded value a compose call happens to carry.
     const identities = recorded.split('\n').filter(line => line.startsWith('identity '))
@@ -5004,6 +5111,102 @@ void test('gcb.update accepts a broker launched relatively inside the deployment
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
   } finally {
     host?.stop()
+    await rig.close()
+  }
+})
+
+void test('gcb.update refuses a client image that names the broker image', async () => {
+  const rig = await gcbRig({ clientImage: 'code-vaults/gcb-host:dev' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /name the same image/u)
+    // Refused before either build: a shared tag would replace the image the service runs.
+    assert.doesNotMatch(await rig.calls(), /build --target/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update keeps library/ to Docker Hub', async () => {
+  // ghcr.io/x and ghcr.io/library/x are different images; only Docker Hub has a library namespace.
+  const rig = await gcbRig({
+    images: 'echo ghcr.io/library/gcb-host:latest',
+    clientImage: 'ghcr.io/gcb-host:latest',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const calls = await rig.calls()
+    assert.match(calls, /build --target client -t ghcr\.io\/gcb-host:latest/u)
+    assert.match(calls, /build --target host -t ghcr\.io\/library\/gcb-host:latest/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update treats the registry prefix as part of the name', async () => {
+  const rig = await gcbRig({
+    images: 'echo docker.io/code-vaults/gcb-host:latest',
+    clientImage: 'code-vaults/gcb-host:latest',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /name the same image/u)
+    assert.doesNotMatch(await rig.calls(), /build --target/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update treats an omitted client tag as latest', async () => {
+  // `code-vaults/gcb-host` and `code-vaults/gcb-host:latest` are the same image.
+  const rig = await gcbRig({
+    images: 'echo code-vaults/gcb-host:latest',
+    clientImage: 'code-vaults/gcb-host',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /name the same image/u)
+    assert.doesNotMatch(await rig.calls(), /build --target/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update rebuilds the client image from the same checkout', async () => {
+  const rig = await gcbRig({ clientImage: 'code-vaults/gcb-client:dev' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /client: code-vaults\/gcb-client:dev/u)
+    const calls = await rig.calls()
+    assert.match(calls, /build --target host -t /u)
+    assert.match(calls, /build --target client -t code-vaults\/gcb-client:dev/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update leaves the host pin alone when the client build fails', async () => {
+  const rig = await gcbRig({
+    host: true,
+    clientImage: 'code-vaults/gcb-client:dev',
+    clientBuild: 'exit 1',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /build the client failed/u)
+    assert.doesNotMatch(await rig.calls(), /build --target host/u)
+    assert.doesNotMatch(await rig.calls(), /up -d --no-deps/u)
+    assert.equal(
+      rig.pinFile === undefined ? '' : (await readFile(rig.pinFile, 'utf8')).trim(),
+      'c'.repeat(COMMIT_CHARS),
+    )
+  } finally {
     await rig.close()
   }
 })

@@ -40,6 +40,9 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --gcb-service <name>   The service in those files that runs the broker (default gcb)
   --gcb-probe-repo <repo>
                          Repository gcb.update probes after recreating (owner/name)
+  --gcb-client-image <tag>
+                         Also rebuild the credential broker's client image from the same
+                         checkout (for a deployment whose container bakes gcb-client)
   --rate-limit <n>       Requests per operation per minute (default 60)
   --exec-timeout <ms>    How long one operation may take (default 10000)
   -h, --help             Show this help
@@ -97,6 +100,7 @@ function optionsFrom(
     ...(values['gcb-host'] === true ? { gcbHostUpdate: true } : {}),
     ...(text('gcb-compose') === undefined ? {} : { gcbCompose: text('gcb-compose') }),
     ...(text('gcb-service') === undefined ? {} : { gcbService: text('gcb-service') }),
+    ...(text('gcb-client-image') === undefined ? {} : { gcbClientImage: text('gcb-client-image') }),
     ...(text('gcb-probe-repo') === undefined ? {} : { gcbProbeRepo: text('gcb-probe-repo') }),
     // The supervisor restarts the process once it has drained; that is the self-update hand-off.
     stop: () => handlers.shutdown?.(),
@@ -132,6 +136,7 @@ async function main(): Promise<void> {
       'gcb-compose': { type: 'string' },
       'gcb-service': { type: 'string' },
       'gcb-probe-repo': { type: 'string' },
+      'gcb-client-image': { type: 'string' },
       'rate-limit': { type: 'string' },
       'exec-timeout': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
