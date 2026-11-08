@@ -8,11 +8,12 @@
  */
 import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { access, appendFile, chmod, lstat, mkdir, rm, stat, unlink } from 'node:fs/promises'
+import { access, chmod, lstat, mkdir, rm, stat, unlink } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
 import packageJson from '../package.json' with { type: 'json' }
+import { openAppendLog } from './append-log.ts'
 import {
   AFTER_RESPONSE_DELAY_MS,
   BUILD_KEY_CHARS,
@@ -720,10 +721,15 @@ function boundedArgs(args: Record<string, unknown>): string {
     : `${encoded.slice(0, MAX_AUDIT_ARGS_CHARS)}…`
 }
 
-function appendAudit(file: string, record: Record<string, unknown>): Promise<void> {
-  // `appendFile` writes the whole line (looping over partial writes) and creates the file with
-  // `FILE_MODE`; the startup chmod covers a file that rotation installed.
-  return appendFile(file, `${JSON.stringify(record)}\n`, { mode: FILE_MODE })
+async function appendAudit(file: string, record: Record<string, unknown>): Promise<void> {
+  // A FIFO or socket where the audit file belongs must not hang the request that writes it: the
+  // shared open is nonblocking and bounded, and only a regular file is accepted.
+  const handle = await openAppendLog(file)
+  try {
+    await handle.write(`${JSON.stringify(record)}\n`)
+  } finally {
+    await handle.close()
+  }
 }
 
 /**

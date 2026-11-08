@@ -9,11 +9,10 @@
  * yet, so there is no path guard to get wrong.
  */
 import { spawn } from 'node:child_process'
-import { constants, existsSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import {
   appendFile,
   chmod,
-  type FileHandle,
   lstat,
   readdir,
   mkdir,
@@ -30,6 +29,7 @@ import {
 import { homedir } from 'node:os'
 import path from 'node:path'
 
+import { openAppendLog } from './append-log.ts'
 import {
   BUILD_TIMEOUT_MS,
   COMPOSE_TIMEOUT_MS,
@@ -159,62 +159,6 @@ interface RunOptions {
   readonly stdoutOnly?: boolean
   /** Called when the program wrote more than the retained window, so the answer is a prefix. */
   readonly onTruncated?: () => void
-}
-
-/** How long opening a log may take: an unresponsive path would otherwise hold the operation. */
-const LOG_OPEN_TIMEOUT_MS = 5_000
-
-/**
- * Open an append-only log, and refuse anything that is not a regular file. The open is nonblocking
- * so a FIFO cannot sit in the thread pool; a FIFO with no reader fails with ENXIO, one with a
- * reader opens and is then rejected by the file-type check. The timeout stays as a backstop for a
- * path that never answers at all.
- */
-async function openLog(file: string): Promise<FileHandle> {
-  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NONBLOCK
-  const pending = open(file, flags, FILE_MODE)
-  let timer: NodeJS.Timeout | undefined
-  let handle: FileHandle
-  try {
-    handle = await new Promise<FileHandle>((resolve, reject) => {
-      timer = setTimeout(() => {
-        reject(
-          new BrokerFault(
-            'unavailable',
-            `${file} did not open within ${String(LOG_OPEN_TIMEOUT_MS / 1000)}s; an unresponsive path would hold the deployment`,
-          ),
-        )
-      }, LOG_OPEN_TIMEOUT_MS)
-      pending.then(resolve, reject)
-    })
-  } catch (error) {
-    // The backstop can fire while the open is still pending (a path that answers after the bound):
-    // close the handle if it ever arrives instead of leaking it.
-    void pending.then(
-      opened => opened.close().catch(() => null),
-      () => null,
-    )
-    if ((error as NodeJS.ErrnoException).code === 'ENXIO') {
-      throw new BrokerFault(
-        'unavailable',
-        `${file} is a FIFO or socket with no reader; a log must be a regular file`,
-      )
-    }
-    throw error
-  } finally {
-    if (timer !== undefined) {
-      clearTimeout(timer)
-    }
-  }
-  try {
-    if (!(await handle.stat()).isFile()) {
-      throw new BrokerFault('unavailable', `${file} is not a regular file; a log must be one`)
-    }
-    return handle
-  } catch (error) {
-    await handle.close().catch(() => null)
-    throw error
-  }
 }
 
 /**
@@ -660,7 +604,7 @@ async function composeDetached(
   args: readonly string[],
 ): Promise<number | undefined> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
-  const log = await openLog(logPath)
+  const log = await openAppendLog(logPath)
   try {
     await log.chmod(FILE_MODE)
     // The real compose interpolates UID/GID, which the broker's own environment does not
@@ -3083,7 +3027,7 @@ async function buildImage(
   // One file per build: a job follows exactly the log its own call writes.
   const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
   // Create the log before the first program: a silent failure still leaves the file behind.
-  const log = await openLog(logPath)
+  const log = await openAppendLog(logPath)
   try {
     await log.chmod(FILE_MODE)
   } finally {

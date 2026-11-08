@@ -1000,6 +1000,28 @@ void test('deploy.versions names an unavailable probe and still answers', async 
   }
 })
 
+void test('a request is refused, not hung, when the audit file is a FIFO', async () => {
+  const host = await fakeHost()
+  execFileSync('mkfifo', [host.auditPath])
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const started = Date.now()
+    const answer = await connection.request({ op: 'broker.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /audit log could not be written/u)
+    assert.ok(Date.now() - started < FIFO_REFUSAL_MS)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('a docker call that exceeds the deadline answers timeout', async () => {
   const host = await fakeHost()
   const dockerPath = path.join(host.root, 'docker')
