@@ -1850,11 +1850,13 @@ async function updateBroker(
       }
     }
     // A timed-out request already has its answer, so the restore outcome has no answer to ride on:
-    // it goes to the broker's stderr (its log), or an unsuccessful recovery would be silent.
+    // it goes to the broker's stderr (its log), or an unsuccessful recovery would be silent. A
+    // failure that can still be answered says that there was nothing to restore.
+    if (restoreNote === undefined) {
+      restoreNote = 'no running image was recorded, so the tag was not restored'
+    }
     if (ctx.signal?.aborted === true) {
-      process.stderr.write(
-        `gcb.update: request timed out; ${restoreNote ?? 'no running image was recorded to restore'}\n`,
-      )
+      process.stderr.write(`gcb.update: request timed out; ${restoreNote}\n`)
     }
     const failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))

@@ -4214,6 +4214,20 @@ void test('gcb.update is offered only when its three values are configured', asy
   }
 })
 
+void test('gcb.update says when there was no image to restore', async () => {
+  // No running container before the update: the tag moves, but there is nothing to restore.
+  const rig = await gcbRig({ up: 'exit 1', ps: 'exit 0' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /recreate failed/u)
+    assert.match(message, /no running image was recorded, so the tag was not restored/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update reports a failed tag restore', async () => {
   const rig = await gcbRig({ up: 'exit 1', tag: 'exit 1' })
   try {
