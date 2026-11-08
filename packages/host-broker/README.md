@@ -197,7 +197,8 @@ to escape, nothing that can backtrack.
   for it, then run the operation again; nothing queues. When the answer's deadline passes, the
   request's signal stops the program it started. `gcb.update` is the exception: its tag restore
   ignores the signal so the tag can go back, and the deployment lock is held until that cleanup
-  settles — a timed-out update can therefore retag after its `timeout` answer. `broker.status` does
+  settles — a timed-out update can therefore retag after its `timeout` answer, and its restore
+  outcome is written to the broker's stderr (its log), since the answer has already gone. `broker.status` does
   not expose that lock; on a broker that offers `gcb.update`, probe it with a request whose `target`
   is invalid — `unavailable` means the lock is held, `bad-argument` means it was free at that moment,
   and a broker without that operation answers `unknown-op` — rather than with a real deployment
