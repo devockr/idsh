@@ -118,6 +118,13 @@ request.
 from the parsed values rather than forwarded, the lookup uses a fixed PATH rather than the broker's
 inherited one, and `dryRun: true` answers the policy verdict without executing.
 
+`broker.update` from a checkout runs `git pull`, `pnpm install` and
+`pnpm --filter @idsh/host-broker build`; under an npm prefix it installs the published package
+there instead.
+
+`deploy.versions` uses fixed probes — the broker deliberately exposes no arbitrary exec — which
+is why it answers versions rather than arbitrary paths inside the image.
+
 `deploy.build` takes the six root-surface files from `main` and the rest from the requested commit,
 records the previous image id for `deploy.rollback`, and then removes every `idsh.keep=1` image that
 is neither the image it produced nor that recorded target. What it could not remove, could not list
