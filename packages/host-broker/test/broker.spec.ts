@@ -4233,9 +4233,11 @@ void test('gcb.update restores the broker tag when the recreate fails', async ()
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /recreate failed/u)
-    // The tag the service runs is the one it had: no recreate verified the new image.
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /recreate failed/u)
+    // The tag the service runs is the one it had, and the answer says so.
     assert.match(await rig.calls(), /tag oldimage code-vaults\/gcb-host:dev/u)
+    assert.match(message, /the tag is back on oldimage/u)
   } finally {
     await rig.close()
   }

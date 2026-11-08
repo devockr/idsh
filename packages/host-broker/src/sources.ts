@@ -1857,7 +1857,7 @@ async function updateBroker(
   } catch (error) {
     // Independent of the request's signal: cancellation is one way to fail here, and the tag still
     // has to go back. It keeps the same bound, so a hung restore cannot hold the answer.
-    let restoreFailure: string | undefined
+    let restoreNote: string | undefined
     if (previousImage !== undefined && previousImage !== '') {
       const restoreCtx = { ...ctx }
       delete (restoreCtx as { signal?: AbortSignal }).signal
@@ -1866,16 +1866,18 @@ async function updateBroker(
           stdoutOnly: true,
           timeoutMs: GCB_QUERY_TIMEOUT_MS,
         })
+        // Reported on success too: otherwise the answer reads as if the new image stayed in place.
+        restoreNote = `the tag is back on ${previousImage}`
       } catch (tagError) {
         // A silent failed restore leaves the tag on an image no recreate verified; say so with the
         // image it should have gone back to.
-        restoreFailure = `restoring ${previousImage} to ${image} failed: ${messageOf(tagError)}`
+        restoreNote = `restoring ${previousImage} to ${image} failed: ${messageOf(tagError)}`
       }
     }
     const failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
-    if (restoreFailure !== undefined) {
-      throw new BrokerFault(failure.code, `${failure.message}; ${restoreFailure}`)
+    if (restoreNote !== undefined) {
+      throw new BrokerFault(failure.code, `${failure.message}; ${restoreNote}`)
     }
     throw failure
   }
