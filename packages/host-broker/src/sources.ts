@@ -217,6 +217,25 @@ async function openLog(file: string): Promise<FileHandle> {
 }
 
 /**
+ * Put the tag back on the image the service was running, ignoring the request's signal — cancelling
+ * is one way to fail here, and the tag still has to go back. The returned note is what the answer
+ * says, on success and on failure alike.
+ */
+async function restoreTag(ctx: OpContext, previousImage: string, image: string): Promise<string> {
+  const restoreCtx = { ...ctx }
+  delete (restoreCtx as { signal?: AbortSignal }).signal
+  try {
+    await docker(restoreCtx, ['tag', previousImage, image], 'head', {
+      stdoutOnly: true,
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
+    return `the tag is back on ${previousImage}`
+  } catch (error) {
+    return `restoring ${previousImage} to ${image} failed: ${messageOf(error)}`
+  }
+}
+
+/**
  * Run one fixed program with fixed arguments.
  *
  * No shell and no caller-supplied argv; both pipes are collected in arrival order, so a log that
@@ -1886,40 +1905,18 @@ async function updateBroker(
     done.push(`probe: ${repo} allowed`)
     return done.join('; ')
   } catch (error) {
-    // Independent of the request's signal: cancellation is one way to fail here, and the tag still
-    // has to go back. It keeps the same bound, so a hung restore cannot hold the answer.
-    let restoreNote: string | undefined
-    if (previousImage !== undefined && previousImage !== '') {
-      const restoreCtx = { ...ctx }
-      delete (restoreCtx as { signal?: AbortSignal }).signal
-      try {
-        await docker(restoreCtx, ['tag', previousImage, image], 'head', {
-          stdoutOnly: true,
-          timeoutMs: GCB_QUERY_TIMEOUT_MS,
-        })
-        // Reported on success too: otherwise the answer reads as if the new image stayed in place.
-        restoreNote = `the tag is back on ${previousImage}`
-      } catch (tagError) {
-        // A silent failed restore leaves the tag on an image no recreate verified; say so with the
-        // image it should have gone back to.
-        restoreNote = `restoring ${previousImage} to ${image} failed: ${messageOf(tagError)}`
-      }
-    }
+    const restoreNote =
+      previousImage === undefined || previousImage === ''
+        ? 'no running image was recorded, so the tag was not restored'
+        : await restoreTag(ctx, previousImage, image)
     // A timed-out request already has its answer, so the restore outcome has no answer to ride on:
-    // it goes to the broker's stderr (its log), or an unsuccessful recovery would be silent. A
-    // failure that can still be answered says that there was nothing to restore.
-    if (restoreNote === undefined) {
-      restoreNote = 'no running image was recorded, so the tag was not restored'
-    }
+    // it goes to the broker's stderr (its log), or an unsuccessful recovery would be silent.
     if (ctx.signal?.aborted === true) {
       process.stderr.write(`gcb.update: request timed out; ${restoreNote}\n`)
     }
     const failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
-    if (restoreNote !== undefined) {
-      throw new BrokerFault(failure.code, `${failure.message}; ${restoreNote}`)
-    }
-    throw failure
+    throw new BrokerFault(failure.code, `${failure.message}; ${restoreNote}`)
   }
 }
 
