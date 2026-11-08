@@ -4236,7 +4236,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.ok(update !== undefined)
     assert.equal(update.confirm, true)
     // The operation outlasts every step it runs: the image, the optional client build and the
-    // recreate at the build budget, the probe, five queries, the bounded pull and the host wait.
+    // recreate at the build budget, the probe, the local queries, the bounded pull and the host wait.
     assert.equal(
       update.timeoutMs,
       3 * BUILD_TIMEOUT_MS +
