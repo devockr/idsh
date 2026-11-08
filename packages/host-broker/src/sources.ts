@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import {
   appendFile,
   chmod,
+  type FileHandle,
   lstat,
   readdir,
   mkdir,
@@ -158,6 +159,42 @@ interface RunOptions {
   readonly stdoutOnly?: boolean
   /** Called when the program wrote more than the retained window, so the answer is a prefix. */
   readonly onTruncated?: () => void
+}
+
+/** How long opening a log may take: a FIFO without a reader would otherwise hold the operation. */
+const LOG_OPEN_TIMEOUT_MS = 5_000
+
+/**
+ * Open an append-only log, but not forever: a path that is a FIFO (or otherwise never becomes
+ * writable) blocks `open`, and a serial operation holding it would block every later deployment.
+ */
+async function openLog(file: string): Promise<FileHandle> {
+  const pending = open(file, 'a', FILE_MODE)
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await new Promise<FileHandle>((resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new BrokerFault(
+            'unavailable',
+            `${file} did not open within ${String(LOG_OPEN_TIMEOUT_MS / 1000)}s; a FIFO or unresponsive path would hold the deployment`,
+          ),
+        )
+      }, LOG_OPEN_TIMEOUT_MS)
+      pending.then(resolve, reject)
+    })
+  } catch (error) {
+    // A refused open may still complete later (a FIFO with a late reader): do not leak the handle.
+    void pending.then(
+      handle => handle.close().catch(() => null),
+      () => null,
+    )
+    throw error
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer)
+    }
+  }
 }
 
 /**
@@ -584,7 +621,7 @@ async function composeDetached(
   args: readonly string[],
 ): Promise<number | undefined> {
   const logPath = path.join(ctx.stateDir, 'compose.log')
-  const log = await open(logPath, 'a', FILE_MODE)
+  const log = await openLog(logPath)
   try {
     await log.chmod(FILE_MODE)
     // The real compose interpolates UID/GID, which the broker's own environment does not
@@ -3029,7 +3066,7 @@ async function buildImage(
   // One file per build: a job follows exactly the log its own call writes.
   const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
   // Create the log before the first program: a silent failure still leaves the file behind.
-  const log = await open(logPath, 'a', FILE_MODE)
+  const log = await openLog(logPath)
   try {
     await log.chmod(FILE_MODE)
   } finally {

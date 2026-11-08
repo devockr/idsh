@@ -146,9 +146,11 @@ and the daemon image with the tag the compose service names. Once that image exi
 (pin, recreate, probe) restores the tag to the image the service was running when one was recorded;
 a broker-build failure does not restore, because the tag never moved. A restored tag does not replace
 a container the recreate already started: a restart keeps that container's image, so running the
-restored tag means recreating that one service with the same `-f` files in the same order (absolute:
-the broker resolved them against its own working directory when it started) and `up -d --no-deps
---no-build --pull never <--gcb-service>`,
+restored tag means checking the answer — or the broker log, after a timeout — for `the tag is back
+on <id>` first: if the restore failed or was skipped, the tag still points at the new image and a
+recreate will not return to the old one. When it did go back, recreate that one service with the same
+`-f` files in the same order (absolute: the broker resolved them against its own working directory
+when it started) and `up -d --no-deps --no-build --pull never <--gcb-service>`,
 run from `--gcb-checkout`, where `gcb.update` runs compose, so a relative `COMPOSE_ENV_FILES`
 resolves the same (`.env` comes from the first `-f` file's directory either way) — and with the
 environment it used (the compose file needs `GCB_IMAGE`, and `UID`/`GID` for the broker's user).
