@@ -690,7 +690,7 @@ function runOp(
 ): Promise<Execution | string> {
   const running = op.run(args, context)
   const ms = Math.max(1, deadline - Date.now()) + TIMEOUT_SLACK_MS
-  return new Promise((resolve, reject) => {
+  return new Promise<Execution | string>((resolve, reject) => {
     const timer = setTimeout(() => {
       // The answer is a timeout, but the work is not necessarily done: it may be running a cleanup
       // the abort cannot cancel. `onPending` lets the caller keep the deployment lock until it
@@ -704,7 +704,7 @@ function runOp(
         clearTimeout(timer)
         resolve(value)
       },
-      error => {
+      (error: unknown) => {
         clearTimeout(timer)
         reject(error)
       },
