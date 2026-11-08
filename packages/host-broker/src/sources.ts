@@ -188,7 +188,8 @@ async function openLog(file: string): Promise<FileHandle> {
       pending.then(resolve, reject)
     })
   } catch (error) {
-    // A refused open may still complete later (a FIFO with a late reader): do not leak the handle.
+    // The backstop can fire while the open is still pending (a path that answers after the bound):
+    // close the handle if it ever arrives instead of leaking it.
     void pending.then(
       opened => opened.close().catch(() => null),
       () => null,
@@ -196,7 +197,7 @@ async function openLog(file: string): Promise<FileHandle> {
     if ((error as NodeJS.ErrnoException).code === 'ENXIO') {
       throw new BrokerFault(
         'unavailable',
-        `${file} is a FIFO with no reader; a log must be a regular file`,
+        `${file} is a FIFO or socket with no reader; a log must be a regular file`,
       )
     }
     throw error

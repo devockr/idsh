@@ -2770,7 +2770,7 @@ esac
     const started = Date.now()
     const answer = await connection.request({ op: 'deploy.build', args: { sha: 'aaaaaaaa' } })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /FIFO with no reader/u)
+    assert.match(JSON.stringify(answer.error), /FIFO or socket with no reader/u)
     // The nonblocking open fails immediately, not through the five-second backstop.
     assert.ok(Date.now() - started < FIFO_REFUSAL_MS)
   } finally {
