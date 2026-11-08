@@ -193,9 +193,10 @@ to escape, nothing that can backtrack.
   request's signal stops the program it started. `gcb.update` is the exception: its tag restore
   ignores the signal so the tag can go back, and the deployment lock is held until that cleanup
   settles — a timed-out update can therefore retag after its `timeout` answer. `broker.status` does
-  not expose that lock; probe it with a `gcb.update` request whose `target` is invalid — `unavailable`
-  means the lock is held, `bad-argument` means it was free at that moment — rather than with a real
-  deployment request, and wait for the lock to free before manual recovery.
+  not expose that lock; on a broker that offers `gcb.update`, probe it with a request whose `target`
+  is invalid — `unavailable` means the lock is held, `bad-argument` means it was free at that moment,
+  and a broker without that operation answers `unknown-op` — rather than with a real deployment
+  request, and wait for the lock to free before manual recovery.
 - **Buffer**: one program may write 1 MiB. Past that a tail operation keeps the last 1 MiB (the
   oldest bytes are dropped) and a head operation the first 1 MiB (the newest are), then the answer
   cap keeps the newest lines for a log and the first ones otherwise, always saying `truncated`.
