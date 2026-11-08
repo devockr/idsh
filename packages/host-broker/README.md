@@ -144,7 +144,10 @@ It then builds the client image first when `--gcb-client-image` names one (a can
 equal to the broker image is refused, because the build would replace the image the service runs),
 and the daemon image with the tag the compose service names. Once that image exists, a later failure
 (pin, recreate, probe) restores the tag to the image the service was running when one was recorded;
-a broker-build failure does not restore, because the tag never moved. A restored tag does not replace
+a broker-build failure does not restore — the tag normally moves only when a build succeeds, but a build
+that times out or is cancelled after Docker tagged the image can leave it moved: wait for the
+deployment lock to clear, check the tag, and put it back on the image the service runs if it moved.
+A restored tag does not replace
 a container the recreate already started: a restart keeps that container's image, so running the
 restored tag means checking the answer — or the broker log, after a timeout — for `the tag is back
 on <id>` first: if the restore failed or was skipped, the tag still points at the new image and a
