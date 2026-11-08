@@ -1560,6 +1560,38 @@ const GCB_PRELUDE_STEPS = 3
  */
 const GCB_BUILD_STEPS = 3
 
+/** Add or remove one allowlist entry through the staged gcb host CLI, which owns the file. */
+async function editAllowlist(
+  ctx: OpContext,
+  action: 'add' | 'remove',
+  host: string,
+  repo: string,
+): Promise<string> {
+  const deployDir = await hostDeployDir(ctx)
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const config = path.join(deployDir, 'config', 'broker.config.yml')
+  const staged = await stat(cli).catch(() => null)
+  if (staged === null || !staged.isFile()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.allow: ${cli} is not staged; run gcb.update --gcb-host first`,
+    )
+  }
+  const configured = await stat(config).catch(() => null)
+  if (configured === null || !configured.isFile()) {
+    throw new BrokerFault('unavailable', `gcb.allow: ${config} is not there`)
+  }
+  // The staged tree is source, not built output: the development condition is what makes its
+  // package exports resolve, the same way the host broker itself is started.
+  await runFixed(
+    ctx,
+    process.execPath,
+    ['--conditions=development', cli, 'config', 'allow', action, host, repo, '--config', config],
+    { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+  )
+  return `${action === 'add' ? 'allowed' : 'removed'} ${host}/${repo}; the daemon reloads when the file is replaced`
+}
+
 /**
  * Pull the credential broker's checkout, rebuild its container image and pin the host half.
  *
@@ -2480,6 +2512,45 @@ export const OPS: readonly OpDefinition[] = [
           )
         },
       }
+    },
+  },
+
+  {
+    name: 'gcb.allow',
+    summary: 'Add or remove one credential-broker allowlist entry through the staged host CLI.',
+    confirm: true,
+    serial: true,
+    // The staged tree and the configuration are the host-supervised deployment's; a broker without
+    // that half has neither, so the operation is not offered.
+    available: ctx => ctx.gcbHostUpdate === true,
+    input: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'remove'] },
+        host: { type: 'string', description: 'Host as gcb records it; default github.com.' },
+        repo: { type: 'string', description: 'The exact owner/name entry to change.' },
+      },
+      required: ['action', 'repo'],
+      additionalProperties: false,
+    },
+    run(args, ctx) {
+      rejectUnknown(args, ['action', 'host', 'repo'])
+      const action = text(args, 'action', MAX_PATTERN_CHARS)
+      if (action !== 'add' && action !== 'remove') {
+        throw new BrokerFault('bad-argument', 'action must be add or remove')
+      }
+      const host = text(args, 'host', MAX_PATTERN_CHARS) ?? 'github.com'
+      if (!/^[A-Za-z0-9][A-Za-z0-9.-]*$/u.test(host)) {
+        throw new BrokerFault(
+          'bad-argument',
+          `host must be a hostname, got ${JSON.stringify(host)}`,
+        )
+      }
+      const repo = text(args, 'repo', MAX_PATTERN_CHARS) ?? ''
+      if (!/^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/u.test(repo)) {
+        throw new BrokerFault('bad-argument', 'repo must be owner/name')
+      }
+      return editAllowlist(ctx, action, host, repo)
     },
   },
 

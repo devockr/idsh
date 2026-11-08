@@ -4242,6 +4242,47 @@ async function gcbRig(
   }
 }
 
+void test('gcb.allow changes one entry through the staged host CLI', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const recorded = path.join(rig.host.root, 'allow.log')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await mkdir(path.join(deployDir, 'config'), { recursive: true })
+  await writeFile(path.join(deployDir, 'config', 'broker.config.yml'), 'hosts: {}\n')
+  await writeFile(
+    cli,
+    `require('node:fs').writeFileSync(${JSON.stringify(recorded)}, process.argv.slice(2).join(' '))\n`,
+  )
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /allowed github\.com\/un-ts\/sh-syntax/u)
+    const argv = await readFile(recorded, 'utf8')
+    assert.match(argv, /config allow add github\.com un-ts\/sh-syntax --config /u)
+    assert.match(argv, /config\/broker\.config\.yml$/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.allow names a staged CLI that is missing', async () => {
+  const rig = await gcbRig({ host: true })
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'remove', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /is not staged; run gcb\.update --gcb-host first/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update is offered only when its three values are configured', async () => {
   const host = await fakeHost()
   const broker = await startBroker({
