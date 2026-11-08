@@ -147,11 +147,11 @@ and the daemon image with the tag the compose service names. Once that image exi
 a broker-build failure does not restore, because the tag never moved. A restored tag does not replace
 a container the recreate already started: a restart keeps that container's image, so running the
 restored tag means recreating that one service — same `-f` files in the same order as
-`--gcb-compose`, `up -d --no-deps --no-build --pull never <--gcb-service>` — run from
-`--gcb-checkout` with the same `-f` arguments (or their resolved paths), so relative `.env` and
-`COMPOSE_ENV_FILES` entries resolve as they did for the update, and with the environment it used
-(the compose file needs `GCB_IMAGE`, and `UID`/`GID` for the broker's user) — while a retry
-rebuilds the daemon image and replaces the tag again.
+`--gcb-compose`, `up -d --no-deps --no-build --pull never <--gcb-service>` — with the same
+`-f` files, absolute or resolved against the deployment checkout (`gcb.update` resolves them
+there, so `.env` and `COMPOSE_ENV_FILES` behave the same), and with the environment it used (the
+compose file needs `GCB_IMAGE`, and `UID`/`GID` for the broker's user) — while a retry rebuilds
+the daemon image and replaces the tag again.
 `deploy.build` reads the default `code-vaults/gcb-client:dev` tag, so a client built under another
 tag has to be retagged to that default before the dev image picks it up.
 

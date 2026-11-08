@@ -1525,7 +1525,14 @@ async function updateBroker(
   // One prefix for every `compose` call: a deployment that renders a base file plus an overlay is
   // the same set of files everywhere here. Compose interpolates UID and GID, and the broker's own
   // environment may not carry them.
-  const composeArgs = ['compose', ...(composeFiles ?? []).flatMap(file => ['-f', file])]
+  // The compose files are the deployment's, so a relative name is resolved against the deployment
+  // checkout — not against the credential broker's checkout, which is where the commands run.
+  const composeArgs = [
+    'compose',
+    ...(composeFiles ?? [])
+      .map(file => path.resolve(ctx.checkout ?? process.cwd(), file))
+      .flatMap(file => ['-f', file]),
+  ]
   const uid = process.getuid?.()
   const gid = process.getgid?.()
   const composeEnv: NodeJS.ProcessEnv = {
