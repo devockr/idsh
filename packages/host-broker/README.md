@@ -147,6 +147,8 @@ and the daemon image with the tag the compose service names. Once that image exi
 a broker-build failure does not restore — the tag normally moves only when a build succeeds, but a build
 that times out or is cancelled after Docker tagged the image can leave it moved: wait for the
 deployment lock to clear, check the tag, and put it back on the image the service runs if it moved.
+The client build has the same edge: a cancelled or timed-out one can have moved the
+`--gcb-client-image` tag, so check that tag points where intended before a later `deploy.build`.
 A restored tag does not replace
 a container the recreate already started: a restart keeps that container's image, so running the
 restored tag means checking the answer — or the broker log, after a timeout — for `the tag is back
