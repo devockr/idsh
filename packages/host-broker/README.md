@@ -145,8 +145,9 @@ equal to the broker image is refused, because the build would replace the image 
 and the daemon image with the tag the compose service names. Once that image exists, a later failure
 (pin, recreate, probe) restores the tag to the image the service was running when one was recorded;
 a broker-build failure does not restore, because the tag never moved. A restored tag does not replace
-a container the recreate already started: a restart starts the restored image, while a retry is
-another update that rebuilds the daemon image and replaces the tag again.
+a container the recreate already started: a restart keeps that container's image, so running the
+restored tag means recreating the service without building or pulling it (`docker compose up -d
+--no-build --pull never`), while a retry rebuilds the daemon image and replaces the tag again.
 `deploy.build` reads the default `code-vaults/gcb-client:dev` tag, so a client built under another
 tag has to be retagged to that default before the dev image picks it up.
 
