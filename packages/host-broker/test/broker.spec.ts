@@ -47,6 +47,8 @@ const GCB_PROBE_MS = 60_000
 const GCB_PULL_MS = 60_000
 /** How often the host-half wait looks again; the barrier test relies on it. */
 const GCB_POLL_MS = 2_000
+/** A FIFO log must be refused immediately, not through the five-second backstop. */
+const FIFO_REFUSAL_MS = 3_000
 /** How long the barrier test waits for the stand-in supervisor to publish its replacement. */
 const REPLACEMENT_WAIT_MS = 5_000
 const GCB_HOST_WAIT_MS = 300_000
@@ -2722,6 +2724,57 @@ esac
   } finally {
     building.close()
     rolling.close()
+    await broker.close()
+  }
+})
+
+void test('a build refuses a FIFO where its log belongs', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"refs/heads/*"*) echo 'aaaaaaaa11111111111111111111111111111111 refs/heads/main' ;;
+  *" clone "*) for last; do :; done; mkdir -p "$last" ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+case "$1" in
+  inspect) echo '${ROLLBACK_TARGET}' ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  await writeFile(path.join(host.root, 'rollback'), `${ROLLBACK_TARGET}\n`)
+  // A FIFO where the build log belongs: opening it must fail, not hold the deployment.
+  execFileSync('mkfifo', [path.join(host.root, 'build.log')])
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const started = Date.now()
+    const answer = await connection.request({ op: 'deploy.build', args: { sha: 'aaaaaaaa' } })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /FIFO with no reader/u)
+    // The nonblocking open fails immediately, not through the five-second backstop.
+    assert.ok(Date.now() - started < FIFO_REFUSAL_MS)
+  } finally {
+    connection.close()
     await broker.close()
   }
 })

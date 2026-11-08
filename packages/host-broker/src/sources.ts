@@ -9,7 +9,7 @@
  * yet, so there is no path guard to get wrong.
  */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { constants, existsSync } from 'node:fs'
 import {
   appendFile,
   chmod,
@@ -161,23 +161,27 @@ interface RunOptions {
   readonly onTruncated?: () => void
 }
 
-/** How long opening a log may take: a FIFO without a reader would otherwise hold the operation. */
+/** How long opening a log may take: an unresponsive path would otherwise hold the operation. */
 const LOG_OPEN_TIMEOUT_MS = 5_000
 
 /**
- * Open an append-only log, but not forever: a path that is a FIFO (or otherwise never becomes
- * writable) blocks `open`, and a serial operation holding it would block every later deployment.
+ * Open an append-only log, and refuse anything that is not a regular file. The open is nonblocking
+ * so a FIFO cannot sit in the thread pool; a FIFO with no reader fails with ENXIO, one with a
+ * reader opens and is then rejected by the file-type check. The timeout stays as a backstop for a
+ * path that never answers at all.
  */
 async function openLog(file: string): Promise<FileHandle> {
-  const pending = open(file, 'a', FILE_MODE)
+  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NONBLOCK
+  const pending = open(file, flags, FILE_MODE)
   let timer: NodeJS.Timeout | undefined
+  let handle: FileHandle
   try {
-    return await new Promise<FileHandle>((resolve, reject) => {
+    handle = await new Promise<FileHandle>((resolve, reject) => {
       timer = setTimeout(() => {
         reject(
           new BrokerFault(
             'unavailable',
-            `${file} did not open within ${String(LOG_OPEN_TIMEOUT_MS / 1000)}s; a FIFO or unresponsive path would hold the deployment`,
+            `${file} did not open within ${String(LOG_OPEN_TIMEOUT_MS / 1000)}s; an unresponsive path would hold the deployment`,
           ),
         )
       }, LOG_OPEN_TIMEOUT_MS)
@@ -186,14 +190,29 @@ async function openLog(file: string): Promise<FileHandle> {
   } catch (error) {
     // A refused open may still complete later (a FIFO with a late reader): do not leak the handle.
     void pending.then(
-      handle => handle.close().catch(() => null),
+      opened => opened.close().catch(() => null),
       () => null,
     )
+    if ((error as NodeJS.ErrnoException).code === 'ENXIO') {
+      throw new BrokerFault(
+        'unavailable',
+        `${file} is a FIFO with no reader; a log must be a regular file`,
+      )
+    }
     throw error
   } finally {
     if (timer !== undefined) {
       clearTimeout(timer)
     }
+  }
+  try {
+    if (!(await handle.stat()).isFile()) {
+      throw new BrokerFault('unavailable', `${file} is not a regular file; a log must be one`)
+    }
+    return handle
+  } catch (error) {
+    await handle.close().catch(() => null)
+    throw error
   }
 }
 
