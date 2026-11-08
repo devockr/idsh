@@ -726,9 +726,17 @@ async function appendAudit(file: string, record: Record<string, unknown>): Promi
   // shared open is nonblocking and bounded, and only a regular file is accepted.
   const handle = await openAppendLog(file)
   try {
-    // `appendFile` writes the whole record, looping over partial writes, rather than trusting one
-    // `write` to consume the buffer.
-    await handle.appendFile(`${JSON.stringify(record)}\n`)
+    const around = (await handle.stat()).size
+    try {
+      // `appendFile` writes the whole record, looping over partial writes, rather than trusting one
+      // `write` to consume the buffer.
+      await handle.appendFile(`${JSON.stringify(record)}\n`)
+    } catch (error) {
+      // A write can stop half a line in (disk full, a quota, an I/O error). The request fails either
+      // way; putting the file back to its length keeps the next record parseable.
+      await handle.truncate(around).catch(() => null)
+      throw error
+    }
   } finally {
     await handle.close()
   }
