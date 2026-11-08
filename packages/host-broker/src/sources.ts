@@ -1466,8 +1466,11 @@ const withCompleted = (message: string, done: readonly string[]): string =>
 const PROBE_TIMEOUT_MS = 60_000
 /** How long each local docker query in `gcb.update` may take; they run in milliseconds. */
 const GCB_QUERY_TIMEOUT_MS = 10_000
-/** The local queries `gcb.update` runs: services, images, replicas, ps and inspect. */
-const GCB_QUERIES = 5
+/**
+ * The local queries `gcb.update` runs: services, images, replicas, the running container and its
+ * image, ps and inspect.
+ */
+const GCB_QUERIES = 7
 /**
  * The git reads around the pull — the optional status check, the ssh-config query and the commit —
  * at the default deadline.
@@ -1688,16 +1691,25 @@ async function updateBroker(
   // Two builds sharing a tag means the client build overwrites the daemon image the recreate then
   // runs: the service would start the client target where it expects the daemon.
   const clientImage = ctx.gcbClientImage
-  // A reference without a tag is `latest`: the two spellings name the same image and would still
-  // share a tag, so the comparison is on the normalized reference.
-  const tagged = (reference: string): string => {
+  // Two spellings can name the same image: an omitted tag is `latest`, an omitted registry is
+  // `docker.io`, and a bare name lives under `library/`. The comparison is canonical, or a client
+  // build would replace the image the service runs through an equivalent name.
+  const canonical = (reference: string): string => {
     if (reference.includes('@')) {
       return reference
     }
-    const slash = reference.lastIndexOf('/')
-    return reference.lastIndexOf(':') > slash ? reference : `${reference}:latest`
+    let name = reference.replace(/^index\.docker\.io\//u, 'docker.io/')
+    const first = name.split('/')[0]
+    if (!first.includes('.') && !first.includes(':') && first !== 'localhost') {
+      name = `docker.io/${name}`
+    }
+    const parts = name.split('/')
+    if (parts.length === 2) {
+      name = `${parts[0]}/library/${parts[1]}`
+    }
+    return name.lastIndexOf(':') > name.lastIndexOf('/') ? name : `${name}:latest`
   }
-  if (clientImage !== undefined && tagged(clientImage) === tagged(image)) {
+  if (clientImage !== undefined && canonical(clientImage) === canonical(image)) {
     throw new BrokerFault(
       'unavailable',
       withCompleted(
@@ -1731,16 +1743,26 @@ async function updateBroker(
   if (hostConfigured && !hostUpdate) {
     done.push('host: skipped (target container)')
   }
-  await step('build', () =>
-    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
-      cwd: checkout,
-      timeoutMs: BUILD_TIMEOUT_MS,
-    }),
+  // The image the service currently runs: a failure after the daemon build must not leave the tag
+  // pointing at an image no recreate ever verified.
+  const running = linesOf(
+    await step('read the running container', () => compose(['ps', '-q', service])),
   )
-  done.push('build: ok')
+  let previousImage: string | undefined
+  if (running.length === 1) {
+    previousImage = (
+      await step('read the running image', () =>
+        docker(ctx, ['inspect', '--format', '{{.Image}}', running[0]], 'head', {
+          stdoutOnly: true,
+          timeoutMs: GCB_QUERY_TIMEOUT_MS,
+        }),
+      )
+    ).trim()
+  }
   // The client image is built from the same commit: a deployment whose container bakes the client
-  // (idsh's dev image) would otherwise keep the old one after the daemon moves. It is built before
-  // the pin for the same reason as the host image — a failure must leave both halves where they were.
+  // (idsh's dev image) would otherwise keep the old one after the daemon moves. It goes before the
+  // daemon image so a client failure cannot leave the tag the service runs replaced — and before
+  // the pin, for the same reason the daemon build is.
   if (clientImage !== undefined) {
     await step('build the client', () =>
       docker(ctx, ['build', '--target', 'client', '-t', clientImage, '.'], 'tail', {
@@ -1750,73 +1772,90 @@ async function updateBroker(
     )
     done.push(`client: ${clientImage}`)
   }
-  // The pin comes after a successful build: a build that fails must leave the host broker on the
-  // commit it was running, or the two halves diverge in the very state this operation prevents.
-  if (hostUpdate) {
-    done.push(
-      `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
-    )
-  }
-  // The image this operation just built is the one that runs: never build from a compose `build:`
-  // stanza, never reach for a registry.
-  await step('recreate', () =>
-    compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service], {
+  await step('build', () =>
+    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
       cwd: checkout,
-      env: composeEnv,
       timeoutMs: BUILD_TIMEOUT_MS,
     }),
   )
-  done.push(`recreate: up -d --no-deps --no-build --pull never --wait ${service}`)
-  const ids = linesOf(await step('list the container', () => compose(['ps', '-q', service])))
-  if (ids.length !== 1) {
-    throw new BrokerFault(
-      'unavailable',
-      withCompleted(
-        ids.length === 0
-          ? 'the broker container is not running after the recreate'
-          : `the broker service runs ${String(ids.length)} containers; gcb.update expects one`,
-        done,
-      ),
+  done.push('build: ok')
+  // The pin comes after a successful build: a build that fails must leave the host broker on the
+  // commit it was running, or the two halves diverge in the very state this operation prevents.
+  try {
+    if (hostUpdate) {
+      done.push(
+        `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
+      )
+    }
+    // The image this operation just built is the one that runs: never build from a compose `build:`
+    // stanza, never reach for a registry.
+    await step('recreate', () =>
+      compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service], {
+        cwd: checkout,
+        env: composeEnv,
+        timeoutMs: BUILD_TIMEOUT_MS,
+      }),
     )
-  }
-  const states = await step('inspect the container state', () =>
-    Promise.all(
-      ids.map(id =>
-        docker(
-          ctx,
-          [
-            'inspect',
-            '--format',
-            '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
-            id,
-          ],
-          'head',
-          { stdoutOnly: true, timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    done.push(`recreate: up -d --no-deps --no-build --pull never --wait ${service}`)
+    const ids = linesOf(await step('list the container', () => compose(['ps', '-q', service])))
+    if (ids.length !== 1) {
+      throw new BrokerFault(
+        'unavailable',
+        withCompleted(
+          ids.length === 0
+            ? 'the broker container is not running after the recreate'
+            : `the broker service runs ${String(ids.length)} containers; gcb.update expects one`,
+          done,
+        ),
+      )
+    }
+    const states = await step('inspect the container state', () =>
+      Promise.all(
+        ids.map(id =>
+          docker(
+            ctx,
+            [
+              'inspect',
+              '--format',
+              '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
+              id,
+            ],
+            'head',
+            { stdoutOnly: true, timeoutMs: GCB_QUERY_TIMEOUT_MS },
+          ),
         ),
       ),
-    ),
-  )
-  const state = states.map(entry => entry.trim()).join(', ')
-  const unhealthy = states
-    .map(entry => entry.trim())
-    .filter(entry => !/^running(?: healthy)?$/u.test(entry))
-  if (unhealthy.length > 0) {
-    throw new BrokerFault(
-      'unavailable',
-      withCompleted(`the broker container is ${unhealthy.join(', ')}; state: ${state}`, done),
     )
+    const state = states.map(entry => entry.trim()).join(', ')
+    const unhealthy = states
+      .map(entry => entry.trim())
+      .filter(entry => !/^running(?: healthy)?$/u.test(entry))
+    if (unhealthy.length > 0) {
+      throw new BrokerFault(
+        'unavailable',
+        withCompleted(`the broker container is ${unhealthy.join(', ')}; state: ${state}`, done),
+      )
+    }
+    done.push(`state: ${state}`)
+    // State is not reachability: the probe asks the broker through the client the deployment uses, so
+    // "updated" means "a push would be issued a credential". It mints a token, so it gets its own
+    // budget rather than the ten-second default.
+    await step('probe', () =>
+      docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
+        timeoutMs: PROBE_TIMEOUT_MS,
+      }),
+    )
+    done.push(`probe: ${repo} allowed`)
+    return done.join('; ')
+  } catch (error) {
+    if (previousImage !== undefined && previousImage !== '') {
+      await docker(ctx, ['tag', previousImage, image], 'head', {
+        stdoutOnly: true,
+        timeoutMs: GCB_QUERY_TIMEOUT_MS,
+      }).catch(() => null)
+    }
+    throw error
   }
-  done.push(`state: ${state}`)
-  // State is not reachability: the probe asks the broker through the client the deployment uses, so
-  // "updated" means "a push would be issued a credential". It mints a token, so it gets its own
-  // budget rather than the ten-second default.
-  await step('probe', () =>
-    docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
-      timeoutMs: PROBE_TIMEOUT_MS,
-    }),
-  )
-  done.push(`probe: ${repo} allowed`)
-  return done.join('; ')
 }
 
 /* ------------------------------------------------------------------ gcb.update (host half) */

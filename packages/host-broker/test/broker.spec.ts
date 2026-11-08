@@ -54,7 +54,7 @@ const GCB_HOST_WAIT_MS = 300_000
 const GCB_PRELUDE_STEPS = 3
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, replicas, ps and inspect. */
-const GCB_QUERY_COUNT = 5
+const GCB_QUERY_COUNT = 7
 /** How long the test gives the deploy lock to free before it gives up: patience, not a duration. */
 const LOCK_WAIT_MS = 5_000
 /** The interval between two attempts while waiting for the lock. */
@@ -4077,6 +4077,8 @@ async function gcbRig(
     /** The client image to configure; its build can fail through `clientBuild`. */
     clientImage?: string
     clientBuild?: string
+    /** What the running service's image id is read as, for the restore path. */
+    previousImage?: string
   } = {},
 ): Promise<GcbRig> {
   const host = await fakeHost()
@@ -4108,6 +4110,7 @@ async function gcbRig(
         `if [ -e ${JSON.stringify(replaced)} ]; then echo def456; else echo abc123; fi`,
       ),
       arm('gcb probe', stub.probe, 'exit 0'),
+      arm('inspect --format {{.Image}}', stub.previousImage, 'echo oldimage'),
       arm('inspect', stub.inspect, 'echo "running healthy"'),
       'esac',
       '',
@@ -4208,6 +4211,19 @@ void test('gcb.update is offered only when its three values are configured', asy
   }
 })
 
+void test('gcb.update restores the broker tag when the recreate fails', async () => {
+  const rig = await gcbRig({ up: 'exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /recreate failed/u)
+    // The tag the service runs is the one it had: no recreate verified the new image.
+    assert.match(await rig.calls(), /tag oldimage code-vaults\/gcb-host:dev/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update pulls, builds the one image and probes the deployment', async () => {
   const rig = await gcbRig()
   try {
@@ -4251,10 +4267,10 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
       /compose -f .*gcb-compose-0\.yml up(?! -d --no-deps --no-build --pull never --wait gcb$)/mu,
     )
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml ps -q gcb/u)
-    // The recreate replaces the container: the state read must be the new one, not the one that
-    // was running before it.
-    assert.match(recorded, /inspect --format .* def456/u)
-    assert.doesNotMatch(recorded, /inspect --format .* abc123/u)
+    // The image read happens before the recreate (so a failure can restore the tag), and the state
+    // read is the new container's, not the one that was running before it.
+    assert.match(recorded, /inspect --format \{\{\.Image\}\} abc123/u)
+    assert.match(recorded, /inspect --format \{\{.State\.Status\}\}.* def456/u)
     assert.match(recorded, /exec dsh gcb probe --repo devockr\/idsh/u)
     // The identity is the process's, not a hard-coded value a compose call happens to carry.
     const identities = recorded.split('\n').filter(line => line.startsWith('identity '))
@@ -5026,6 +5042,21 @@ void test('gcb.update refuses a client image that names the broker image', async
   }
 })
 
+void test('gcb.update treats the registry prefix as part of the name', async () => {
+  const rig = await gcbRig({
+    images: 'echo docker.io/code-vaults/gcb-host:latest',
+    clientImage: 'code-vaults/gcb-host:latest',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /the client image and the broker image are both/u)
+    assert.doesNotMatch(await rig.calls(), /build --target/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update treats an omitted client tag as latest', async () => {
   // `code-vaults/gcb-host` and `code-vaults/gcb-host:latest` are the same image.
   const rig = await gcbRig({
@@ -5066,6 +5097,7 @@ void test('gcb.update leaves the host pin alone when the client build fails', as
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(JSON.stringify(answer.error), /build the client failed/u)
+    assert.doesNotMatch(await rig.calls(), /build --target host/u)
     assert.doesNotMatch(await rig.calls(), /up -d --no-deps/u)
     assert.equal(
       rig.pinFile === undefined ? '' : (await readFile(rig.pinFile, 'utf8')).trim(),
