@@ -1698,22 +1698,29 @@ async function updateBroker(
     if (reference.includes('@')) {
       return reference
     }
-    let name = reference.replace(/^index\.docker\.io\//u, 'docker.io/')
-    const first = name.split('/')[0]
-    if (!first.includes('.') && !first.includes(':') && first !== 'localhost') {
-      name = `docker.io/${name}`
-    }
+    // The tag is decided before the registry: a single-component name may carry one too.
+    const slash = reference.lastIndexOf('/')
+    const colon = reference.lastIndexOf(':')
+    const hasTag = colon > slash
+    const name = hasTag ? reference.slice(0, colon) : reference
+    const tag = hasTag ? reference.slice(colon) : ':latest'
     const parts = name.split('/')
-    if (parts.length === 2) {
-      name = `${parts[0]}/library/${parts[1]}`
+    const first = parts[0]
+    const hasRegistry =
+      parts.length > 1 && (first.includes('.') || first.includes(':') || first === 'localhost')
+    const registry = hasRegistry ? (first === 'index.docker.io' ? 'docker.io' : first) : 'docker.io'
+    const rest = hasRegistry ? parts.slice(1) : parts
+    // `library/` is Docker Hub's rule only: `ghcr.io/x` and `ghcr.io/library/x` are different.
+    if (registry === 'docker.io' && rest.length === 1) {
+      rest.unshift('library')
     }
-    return name.lastIndexOf(':') > name.lastIndexOf('/') ? name : `${name}:latest`
+    return `${registry}/${rest.join('/')}${tag}`
   }
   if (clientImage !== undefined && canonical(clientImage) === canonical(image)) {
     throw new BrokerFault(
       'unavailable',
       withCompleted(
-        `the client image and the broker image are both ${JSON.stringify(image)}; the client build would replace the image the service runs`,
+        `the client image (${JSON.stringify(clientImage)}) and the broker image (${JSON.stringify(image)}) name the same image; the client build would replace the image the service runs`,
         done,
       ),
     )
@@ -1848,17 +1855,29 @@ async function updateBroker(
     done.push(`probe: ${repo} allowed`)
     return done.join('; ')
   } catch (error) {
+    // Independent of the request's signal: cancellation is one way to fail here, and the tag still
+    // has to go back. It keeps the same bound, so a hung restore cannot hold the answer.
+    let restoreFailure: string | undefined
     if (previousImage !== undefined && previousImage !== '') {
-      // Independent of the request's signal: cancellation is one way to fail here, and the tag
-      // still has to go back. It keeps the same bound, so a hung restore cannot hold the answer.
       const restoreCtx = { ...ctx }
       delete (restoreCtx as { signal?: AbortSignal }).signal
-      await docker(restoreCtx, ['tag', previousImage, image], 'head', {
-        stdoutOnly: true,
-        timeoutMs: GCB_QUERY_TIMEOUT_MS,
-      }).catch(() => null)
+      try {
+        await docker(restoreCtx, ['tag', previousImage, image], 'head', {
+          stdoutOnly: true,
+          timeoutMs: GCB_QUERY_TIMEOUT_MS,
+        })
+      } catch (tagError) {
+        // A silent failed restore leaves the tag on an image no recreate verified; say so with the
+        // image it should have gone back to.
+        restoreFailure = `restoring ${previousImage} to ${image} failed: ${messageOf(tagError)}`
+      }
     }
-    throw error
+    const failure =
+      error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
+    if (restoreFailure !== undefined) {
+      throw new BrokerFault(failure.code, `${failure.message}; ${restoreFailure}`)
+    }
+    throw failure
   }
 }
 

@@ -4079,6 +4079,8 @@ async function gcbRig(
     clientBuild?: string
     /** What the running service's image id is read as, for the restore path. */
     previousImage?: string
+    /** How the restore's `docker tag` ends, e.g. `exit 1` to make the restore fail. */
+    tag?: string
   } = {},
 ): Promise<GcbRig> {
   const host = await fakeHost()
@@ -4111,6 +4113,7 @@ async function gcbRig(
       ),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect --format {{.Image}}', stub.previousImage, 'echo oldimage'),
+      arm('tag ', stub.tag, 'exit 0'),
       arm('inspect', stub.inspect, 'echo "running healthy"'),
       'esac',
       '',
@@ -4208,6 +4211,20 @@ void test('gcb.update is offered only when its three values are configured', asy
   } finally {
     connection.close()
     await broker.close()
+  }
+})
+
+void test('gcb.update reports a failed tag restore', async () => {
+  const rig = await gcbRig({ up: 'exit 1', tag: 'exit 1' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /recreate failed/u)
+    // The recovery failure and the image it should have gone back to are both named.
+    assert.match(message, /restoring oldimage to code-vaults\/gcb-host:dev failed/u)
+  } finally {
+    await rig.close()
   }
 })
 
@@ -5034,9 +5051,26 @@ void test('gcb.update refuses a client image that names the broker image', async
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /the client image and the broker image are both/u)
+    assert.match(JSON.stringify(answer.error), /name the same image/u)
     // Refused before either build: a shared tag would replace the image the service runs.
     assert.doesNotMatch(await rig.calls(), /build --target/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update keeps library/ to Docker Hub', async () => {
+  // ghcr.io/x and ghcr.io/library/x are different images; only Docker Hub has a library namespace.
+  const rig = await gcbRig({
+    images: 'echo ghcr.io/library/gcb-host:latest',
+    clientImage: 'ghcr.io/gcb-host:latest',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const calls = await rig.calls()
+    assert.match(calls, /build --target client -t ghcr\.io\/gcb-host:latest/u)
+    assert.match(calls, /build --target host -t ghcr\.io\/library\/gcb-host:latest/u)
   } finally {
     await rig.close()
   }
@@ -5050,7 +5084,7 @@ void test('gcb.update treats the registry prefix as part of the name', async () 
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /the client image and the broker image are both/u)
+    assert.match(JSON.stringify(answer.error), /name the same image/u)
     assert.doesNotMatch(await rig.calls(), /build --target/u)
   } finally {
     await rig.close()
@@ -5066,7 +5100,7 @@ void test('gcb.update treats an omitted client tag as latest', async () => {
   try {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /the client image and the broker image are both/u)
+    assert.match(JSON.stringify(answer.error), /name the same image/u)
     assert.doesNotMatch(await rig.calls(), /build --target/u)
   } finally {
     await rig.close()
