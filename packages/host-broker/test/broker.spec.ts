@@ -54,7 +54,7 @@ const GCB_HOST_WAIT_MS = 300_000
 const GCB_PRELUDE_STEPS = 3
 const GCB_QUERY_MS = 10_000
 /** The queries gcb.update runs: services, images, replicas, ps and inspect. */
-const GCB_QUERY_COUNT = 7
+const GCB_QUERY_COUNT = 8
 /** How long the test gives the deploy lock to free before it gives up: patience, not a duration. */
 const LOCK_WAIT_MS = 5_000
 /** The interval between two attempts while waiting for the lock. */

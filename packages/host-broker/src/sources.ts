@@ -1468,9 +1468,9 @@ const PROBE_TIMEOUT_MS = 60_000
 const GCB_QUERY_TIMEOUT_MS = 10_000
 /**
  * The local queries `gcb.update` runs: services, images, replicas, the running container and its
- * image, ps and inspect.
+ * image, ps, inspect and the restore of a failed update.
  */
-const GCB_QUERIES = 7
+const GCB_QUERIES = 8
 /**
  * The git reads around the pull — the optional status check, the ssh-config query and the commit —
  * at the default deadline.
@@ -1849,7 +1849,11 @@ async function updateBroker(
     return done.join('; ')
   } catch (error) {
     if (previousImage !== undefined && previousImage !== '') {
-      await docker(ctx, ['tag', previousImage, image], 'head', {
+      // Independent of the request's signal: cancellation is one way to fail here, and the tag
+      // still has to go back. It keeps the same bound, so a hung restore cannot hold the answer.
+      const restoreCtx = { ...ctx }
+      delete (restoreCtx as { signal?: AbortSignal }).signal
+      await docker(restoreCtx, ['tag', previousImage, image], 'head', {
         stdoutOnly: true,
         timeoutMs: GCB_QUERY_TIMEOUT_MS,
       }).catch(() => null)
