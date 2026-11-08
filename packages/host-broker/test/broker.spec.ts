@@ -5026,6 +5026,22 @@ void test('gcb.update refuses a client image that names the broker image', async
   }
 })
 
+void test('gcb.update treats an omitted client tag as latest', async () => {
+  // `code-vaults/gcb-host` and `code-vaults/gcb-host:latest` are the same image.
+  const rig = await gcbRig({
+    images: 'echo code-vaults/gcb-host:latest',
+    clientImage: 'code-vaults/gcb-host',
+  })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /the client image and the broker image are both/u)
+    assert.doesNotMatch(await rig.calls(), /build --target/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.update rebuilds the client image from the same checkout', async () => {
   const rig = await gcbRig({ clientImage: 'code-vaults/gcb-client:dev' })
   try {

@@ -1688,7 +1688,16 @@ async function updateBroker(
   // Two builds sharing a tag means the client build overwrites the daemon image the recreate then
   // runs: the service would start the client target where it expects the daemon.
   const clientImage = ctx.gcbClientImage
-  if (clientImage !== undefined && clientImage === image) {
+  // A reference without a tag is `latest`: the two spellings name the same image and would still
+  // share a tag, so the comparison is on the normalized reference.
+  const tagged = (reference: string): string => {
+    if (reference.includes('@')) {
+      return reference
+    }
+    const slash = reference.lastIndexOf('/')
+    return reference.lastIndexOf(':') > slash ? reference : `${reference}:latest`
+  }
+  if (clientImage !== undefined && tagged(clientImage) === tagged(image)) {
     throw new BrokerFault(
       'unavailable',
       withCompleted(
