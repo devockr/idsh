@@ -108,6 +108,7 @@ request.
 | `deploy.source`   | resolves a build request — branch tip and `main` sha, or `main` alone — without building; the `preview` of `deploy.build` and `deploy.main`                                    |
 | `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                |
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                            |
+| `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                       |
 | `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                    |
 | `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                       |
 | `ops.describe`    | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table                                                          |
@@ -120,6 +121,9 @@ request.
 atomic replace, so the daemon reloads without a restart; an entry that is not exact (`owner/name`,
 no glob or URL) is refused by that command. It is offered only when the broker was started with
 `--gcb-host`, because only then is the staged tree there; a broker without it answers `unknown-op`.
+The staged tree has to be a gcb that has `config allow` (gcb#103): an older one answers with its own
+`config check|edit` usage, which never says it is old — `gcb.update --gcb-host` is what stages a
+newer one.
 
 `run` takes one declared binary — `ping`, `dig`, `traceroute`, `ip addr/route/neigh`, `ss`,
 `df`, `free`, `uptime` — with one declared spelling per flag and no path yet. The argv is rebuilt

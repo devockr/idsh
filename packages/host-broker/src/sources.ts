@@ -1567,7 +1567,7 @@ async function editAllowlist(
   host: string,
   repo: string,
 ): Promise<string> {
-  const deployDir = await hostDeployDir(ctx)
+  const deployDir = await hostDeployDir(ctx, 'gcb.allow')
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
   const config = path.join(deployDir, 'config', 'broker.config.yml')
   const staged = await stat(cli).catch(() => null)
@@ -1583,12 +1583,19 @@ async function editAllowlist(
   }
   // The staged tree is source, not built output: the development condition is what makes its
   // package exports resolve, the same way the host broker itself is started.
-  await runFixed(
-    ctx,
-    process.execPath,
-    ['--conditions=development', cli, 'config', 'allow', action, host, repo, '--config', config],
-    { timeoutMs: GCB_QUERY_TIMEOUT_MS },
-  )
+  try {
+    await runFixed(
+      ctx,
+      process.execPath,
+      ['--conditions=development', cli, 'config', 'allow', action, host, repo, '--config', config],
+      { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+  } catch (error) {
+    throw new BrokerFault(
+      error instanceof BrokerFault ? error.code : 'unavailable',
+      `gcb.allow: ${action} failed: ${messageOf(error)}`,
+    )
+  }
   return `${action === 'add' ? 'allowed' : 'removed'} ${host}/${repo}; the daemon reloads when the file is replaced`
 }
 
@@ -1995,17 +2002,22 @@ function canonicalImage(reference: string): string {
   return `${registry}/${rest.join('/')}${tag}`
 }
 
+/** A hostname as gcb records it. */
+const GCB_HOST_ID = /^[A-Za-z0-9][A-Za-z0-9.-]*$/u
+/** One exact `owner/name` entry, which is what the allowlist holds. */
+const GCB_REPO_ID = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/u
+
 /** A commit id, which is all `app.ref` may hold. */
 const COMMIT_ID = /^[0-9a-f]{40}$/u
 
 /** The host broker's directory, checked once so a missing one is named before any work starts. */
-async function hostDeployDir(ctx: OpContext): Promise<string> {
+async function hostDeployDir(ctx: OpContext, op = 'gcb.update'): Promise<string> {
   const deployDir = ctx.gcbDeployDir ?? defaultDeployDir()
   const stats = await stat(deployDir).catch(() => null)
   if (stats === null || !stats.isDirectory()) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.update: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's directory`,
+      `${op}: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's directory`,
     )
   }
   return deployDir
@@ -2540,14 +2552,14 @@ export const OPS: readonly OpDefinition[] = [
         throw new BrokerFault('bad-argument', 'action must be add or remove')
       }
       const host = text(args, 'host', MAX_PATTERN_CHARS) ?? 'github.com'
-      if (!/^[A-Za-z0-9][A-Za-z0-9.-]*$/u.test(host)) {
+      if (!GCB_HOST_ID.test(host)) {
         throw new BrokerFault(
           'bad-argument',
           `host must be a hostname, got ${JSON.stringify(host)}`,
         )
       }
       const repo = text(args, 'repo', MAX_PATTERN_CHARS) ?? ''
-      if (!/^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/u.test(repo)) {
+      if (!GCB_REPO_ID.test(repo)) {
         throw new BrokerFault('bad-argument', 'repo must be owner/name')
       }
       return editAllowlist(ctx, action, host, repo)

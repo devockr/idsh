@@ -351,9 +351,8 @@ broker's checkout, optionally pins and restarts the host-supervised broker to th
 (`--gcb-host`), rebuilds and recreates only the named service (one or more compose files) — plus
 the client image when `--gcb-client-image` names one (a tag equal to the broker image is refused;
 rebuilding idsh's dev image from that client is `deploy.build` + `deploy.recreate`, not this
-operation; the client is built first, and a later failure attempts to restore the tag the service ran when one was recorded) — and probes it through the deployment's client; `gcb.allow` edits one allowlist entry through the staged
-host CLI's typed `config allow`; `target` limits an update to one half, for the retry
-after a two-phase failure — and `packages/host-ops` turns that
-table into dsh tools, asking the person first for any operation the table marks `confirm`. A change that
+operation; the client is built first, and a later failure attempts to restore the tag the service ran when one was recorded) — and probes it through the deployment's client; `target` limits an update to one half, for the retry
+after a two-phase failure; `gcb.allow` edits one allowlist entry through the staged host CLI's typed
+`config allow` — and `packages/host-ops` turns that table into dsh tools, asking the person first for any operation the table marks `confirm`. A change that
 implements one updates that file, `README.md` and this one in the same pull request — the next
 session reads the repository, not the private notes the plan came from.

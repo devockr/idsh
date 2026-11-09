@@ -4269,6 +4269,52 @@ void test('gcb.allow changes one entry through the staged host CLI', async () =>
   }
 })
 
+void test('gcb.allow is not offered without the host half', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: { protocol: 1 } })
+    const ops = describedTable(described.result).ops
+    assert.equal(
+      ops.find(op => op.name === 'gcb.allow'),
+      undefined,
+    )
+    const answer = await connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'unknown-op')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.allow names a configuration that is not there', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(cli, 'process.exit(0)\n')
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /config\/broker\.config\.yml is not there/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.allow names a staged CLI that is missing', async () => {
   const rig = await gcbRig({ host: true })
   try {
