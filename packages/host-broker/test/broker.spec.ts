@@ -4308,6 +4308,9 @@ if (args[0] === 'host' && args[1] === 'status') {
 `,
   )
   try {
+    const described = await rig.connection.request({ op: 'ops.describe', args: { protocol: 1 } })
+    const describedOp = describedTable(described.result).ops.find(op => op.name === 'gcb.allow')
+    assert.equal(describedOp?.confirm, true)
     const answer = await rig.connection.request({
       op: 'gcb.allow',
       args: { action: 'add', repo: 'un-ts/sh-syntax' },
