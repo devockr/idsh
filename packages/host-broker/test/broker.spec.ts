@@ -4242,6 +4242,36 @@ async function gcbRig(
   }
 }
 
+void test('gcb.allow edits the file the running daemon was started with', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const recorded = path.join(rig.host.root, 'allow.log')
+  const custom = path.join(rig.host.root, 'custom-broker.yml')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(custom, 'hosts: {}\n')
+  await writeFile(
+    cli,
+    `require('node:fs').writeFileSync(${JSON.stringify(recorded)}, process.argv.slice(2).join(' '))\n`,
+  )
+  // A live process whose command line names the daemon's --config; the pid file is the pointer the
+  // operation follows to it.
+  const daemon = spawn('sh', ['-c', 'sleep 60', '--config', custom], { stdio: 'ignore' })
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(daemon.pid)}\n`)
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const argv = await readFile(recorded, 'utf8')
+    assert.ok(argv.endsWith(` --config ${custom}`), argv)
+  } finally {
+    daemon.kill()
+    await rig.close()
+  }
+})
+
 void test('gcb.allow changes one entry through the staged host CLI', async () => {
   const rig = await gcbRig({ host: true })
   const deployDir = path.dirname(rig.pinFile ?? '')

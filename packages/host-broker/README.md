@@ -115,9 +115,12 @@ request.
 ### Operation notes
 
 `gcb.allow` writes the configuration through gcb's own typed command — `config allow add|remove
-<host> <owner/name> --config <deploy-dir>/config/broker.config.yml` — run from the staged tree
+<host> <owner/name> --config <file>` — run from the staged tree
 (`node --conditions=development <deploy-dir>/app/packages/host/bin/gcb.js`). The write is gcb's
-atomic replace, so the daemon reloads without a restart; an entry that is not exact (`owner/name`,
+atomic replace, so the daemon reloads without a restart. `<file>` is the one the running host daemon
+was started with, read from its `gcb-host.pid` command line, so editing a different file than the
+live one is not possible; without a pid, `<deploy-dir>/config/broker.config.yml` is the fallback.
+An entry that is not exact (`owner/name`,
 no glob or URL) is refused by that command. `--gcb-host` and `--gcb-checkout` are **broker startup options**, not arguments of this or any
 operation: a broker started with them is the one that can stage a tree, and one started without
 `--gcb-host` does not offer `gcb.allow` at all (`unknown-op`). The staged tree has to be a gcb that
