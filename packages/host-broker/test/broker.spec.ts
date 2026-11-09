@@ -4253,6 +4253,39 @@ async function gcbRig(
   }
 }
 
+void test('gcb.allow prefers the configuration the daemon reports', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const recorded = path.join(rig.host.root, 'allow.log')
+  const reported = path.join(rig.host.root, 'reported-broker.yml')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(reported, 'hosts: {}\n')
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(process.pid)}\n`)
+  await writeFile(
+    cli,
+    `const fs = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === 'host' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify([{ pid: ${String(process.pid)}, config: ${JSON.stringify(reported)} }]))
+} else {
+  fs.writeFileSync(${JSON.stringify(recorded)}, args.join(' '))
+}
+`,
+  )
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const argv = await readFile(recorded, 'utf8')
+    assert.ok(argv.endsWith(` --config ${reported}`), argv)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.allow edits the configured file', async () => {
   const rig = await gcbRig({ host: true, gcbConfig: true })
   const deployDir = path.dirname(rig.pinFile ?? '')

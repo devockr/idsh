@@ -1562,6 +1562,42 @@ const GCB_PRELUDE_STEPS = 3
  */
 const GCB_BUILD_STEPS = 3
 
+/**
+ * The configuration the host daemon reports. gcb 0.7.0's `host status` names the file a daemon
+ * loaded, which is authoritative when present; until the daemon has loaded it (the status reports
+ * `null` before the first allowlist use) the caller's explicit path or the conventional one is
+ * used.
+ */
+async function reportedConfig(
+  ctx: OpContext,
+  cli: string,
+  deployDir: string,
+): Promise<string | undefined> {
+  const pidText = await readFile(path.join(deployDir, 'gcb-host.pid'), 'utf8').catch(() => '')
+  const pid = Number(pidText.trim())
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return undefined
+  }
+  try {
+    const output = await runFixed(
+      ctx,
+      process.execPath,
+      ['--conditions=development', cli, 'host', 'status'],
+      { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+    const parsed: unknown = JSON.parse(output)
+    const entries = Array.isArray(parsed) ? parsed : [parsed]
+    const match = entries.find(
+      entry =>
+        typeof entry === 'object' && entry !== null && (entry as { pid?: unknown }).pid === pid,
+    )
+    const config = (match as { config?: unknown } | undefined)?.config
+    return typeof config === 'string' && config !== '' ? config : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Add or remove one allowlist entry through the staged gcb host CLI, which owns the file. */
 async function editAllowlist(
   ctx: OpContext,
@@ -1571,7 +1607,10 @@ async function editAllowlist(
 ): Promise<string> {
   const deployDir = await hostDeployDir(ctx, 'gcb.allow')
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
-  const config = ctx.gcbConfig ?? path.join(deployDir, 'config', 'broker.config.yml')
+  const config =
+    ctx.gcbConfig ??
+    (await reportedConfig(ctx, cli, deployDir)) ??
+    path.join(deployDir, 'config', 'broker.config.yml')
   const staged = await stat(cli).catch(() => null)
   if (staged === null || !staged.isFile()) {
     throw new BrokerFault(
