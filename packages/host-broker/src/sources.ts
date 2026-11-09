@@ -1560,21 +1560,30 @@ const GCB_PRELUDE_STEPS = 3
  */
 const GCB_BUILD_STEPS = 3
 
+/** What `gcb host status` said about the daemon this deployment runs. */
+type HostStatusResult =
+  | { config: string }
+  | { reason: 'no-pid' }
+  | { reason: 'failed'; message: string }
+  | { reason: 'no-entry'; pid: number; pids: number[] }
+  | { reason: 'null'; pid: number }
+
 /**
- * The configuration the host daemon reports. gcb 0.7.1's `host status` names the file the daemon
- * loaded at startup, which is the authoritative answer; without it there is nothing to edit, so the
- * operation fails rather than guessing a path.
+ * What the host daemon reports about its configuration, with the reason it could not answer kept
+ * distinct: a missing pid, a failed command, an entry for another pid, a null config and a path are
+ * five different situations and get five different answers.
  */
 async function reportedConfig(
   ctx: OpContext,
   cli: string,
   deployDir: string,
-): Promise<string | undefined> {
+): Promise<HostStatusResult> {
   const pidText = await readFile(path.join(deployDir, 'gcb-host.pid'), 'utf8').catch(() => '')
   const pid = Number(pidText.trim())
   if (!Number.isInteger(pid) || pid <= 0) {
-    return undefined
+    return { reason: 'no-pid' }
   }
+  let entries: { pid?: unknown; config?: unknown }[]
   try {
     const output = await runFixed(
       ctx,
@@ -1583,16 +1592,24 @@ async function reportedConfig(
       { timeoutMs: GCB_QUERY_TIMEOUT_MS },
     )
     const parsed: unknown = JSON.parse(output)
-    const candidates: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
-    const entries = candidates.filter(
+    entries = (Array.isArray(parsed) ? parsed : [parsed]).filter(
       (entry): entry is { pid?: unknown; config?: unknown } =>
         typeof entry === 'object' && entry !== null,
     )
-    const config = entries.find(entry => entry.pid === pid)?.config
-    return typeof config === 'string' && config !== '' ? config : undefined
-  } catch {
-    return undefined
+  } catch (error) {
+    return { reason: 'failed', message: messageOf(error) }
   }
+  const match = entries.find(entry => entry.pid === pid)
+  if (match === undefined) {
+    return {
+      reason: 'no-entry',
+      pid,
+      pids: entries.flatMap(entry => (typeof entry.pid === 'number' ? [entry.pid] : [])),
+    }
+  }
+  return typeof match.config === 'string' && match.config !== ''
+    ? { config: match.config }
+    : { reason: 'null', pid }
 }
 
 /** Add or remove one allowlist entry through the staged gcb host CLI, which owns the file. */
@@ -1611,13 +1628,19 @@ async function editAllowlist(
       `gcb.allow: ${cli} is not staged; start the broker with --gcb-host and --gcb-checkout, then run gcb.update (target host, or both)`,
     )
   }
-  const config = await reportedConfig(ctx, cli, deployDir)
-  if (config === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'gcb.allow: gcb host status does not report a configuration; is the host daemon running?',
-    )
+  const reported = await reportedConfig(ctx, cli, deployDir)
+  if (!('config' in reported)) {
+    const message =
+      reported.reason === 'no-pid'
+        ? 'gcb-host.pid is missing or does not name a pid; start the host daemon (gcb.update --gcb-host)'
+        : reported.reason === 'failed'
+          ? `gcb host status failed: ${reported.message}`
+          : reported.reason === 'no-entry'
+            ? `gcb host status has no entry for pid ${String(reported.pid)} (it reports ${reported.pids.length === 0 ? 'none' : reported.pids.join(', ')}); is gcb-host.pid stale?`
+            : `gcb host status reports no configuration for pid ${String(reported.pid)}; is the host daemon running?`
+    throw new BrokerFault('unavailable', `gcb.allow: ${message}`)
   }
+  const config = reported.config
   const configured = await stat(config).catch(() => null)
   if (configured === null || !configured.isFile()) {
     throw new BrokerFault('unavailable', `gcb.allow: ${config} is not there`)

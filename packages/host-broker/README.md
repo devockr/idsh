@@ -117,15 +117,17 @@ request.
 `gcb.allow` writes the configuration through gcb's own typed command — `config allow add|remove
 <host> <owner/name> --config <file>` — run from the staged tree
 (`node --conditions=development <deploy-dir>/app/packages/host/bin/gcb.js`). The write is gcb's
-atomic replace, so the daemon reloads without a restart. `<file>` is the configuration `gcb host status` reports for the daemon in `gcb-host.pid` (gcb
-0.7.1+ answers from startup). Without a reported configuration the operation answers
-`does not report a configuration; is the host daemon running?` rather than guessing a path.
+atomic replace, so the daemon reloads without a restart. `<file>` is the configuration `gcb host
+status` reports for the daemon in `gcb-host.pid`. When that cannot answer, the error names which
+part failed — no pid file, a failed `host status`, no entry for that pid (with the pids it does
+report), or a null configuration — rather than guessing a path.
 An entry that is not exact (`owner/name`,
 no glob or URL) is refused by that command. `--gcb-host` and `--gcb-checkout` are **broker startup options**, not arguments of this or any
 operation: a broker started with them is the one that can stage a tree, and one started without
 `--gcb-host` does not offer `gcb.allow` at all (`unknown-op`). The staged tree has to be a gcb that
-has `config allow` (gcb#103); an older one answers with its own `config check|edit` usage, which
-never says it is old — run `gcb.update` (target `host`, or the default both) to stage a newer one.
+has `config allow` (gcb#103) and reports the configuration from startup (`host status`, gcb 0.7.1+);
+an older one answers with its own usage or with no configuration — run `gcb.update` (target `host`,
+or the default both) to stage the current one.
 
 `run` takes one declared binary — `ping`, `dig`, `traceroute`, `ip addr/route/neigh`, `ss`,
 `df`, `free`, `uptime` — with one declared spelling per flag and no path yet. The argv is rebuilt

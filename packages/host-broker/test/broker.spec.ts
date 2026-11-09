@@ -4338,19 +4338,67 @@ void test('gcb.allow is not offered without the host half', async () => {
   }
 })
 
-void test('gcb.allow fails when the daemon reports no configuration', async () => {
+void test('gcb.allow names a status that reports a null configuration', async () => {
   const rig = await gcbRig({ host: true })
   const deployDir = path.dirname(rig.pinFile ?? '')
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
   await mkdir(path.dirname(cli), { recursive: true })
-  await writeFile(cli, 'process.exit(0)\n')
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(process.pid)}\n`)
+  await writeFile(
+    cli,
+    `process.stdout.write(JSON.stringify([{ pid: ${String(process.pid)}, config: null }]))\n`,
+  )
   try {
     const answer = await rig.connection.request({
       op: 'gcb.allow',
       args: { action: 'add', repo: 'un-ts/sh-syntax' },
     })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /does not report a configuration/u)
+    assert.match(JSON.stringify(answer.error), /reports no configuration for pid/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.allow names a failed host status', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(process.pid)}\n`)
+  await writeFile(cli, 'process.stderr.write("no socket"); process.exit(1)\n')
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /gcb host status failed: .*no socket/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.allow names a status that has no entry for the pid', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), '424242\n')
+  await writeFile(
+    cli,
+    `process.stdout.write(JSON.stringify([{ pid: 1, config: '/x' }, { pid: 2, config: '/y' }]))\n`,
+  )
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /has no entry for pid 424242/u)
+    assert.match(message, /it reports 1, 2/u)
+    assert.match(message, /gcb-host\.pid stale/u)
   } finally {
     await rig.close()
   }
