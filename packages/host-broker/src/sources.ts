@@ -1592,7 +1592,8 @@ async function reportedConfig(
       { timeoutMs: GCB_QUERY_TIMEOUT_MS },
     )
     const parsed: unknown = JSON.parse(output)
-    entries = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+    const candidates: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
+    entries = candidates.filter(
       (entry): entry is { pid?: unknown; config?: unknown } =>
         typeof entry === 'object' && entry !== null,
     )
