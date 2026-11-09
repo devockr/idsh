@@ -62,6 +62,8 @@ export interface OpContext {
   readonly gcbCheckout?: string
   /** The host broker's own directory: `app.ref`, its pid file and the staged export. */
   readonly gcbDeployDir?: string
+  /** The configuration gcb.allow edits; the deployment's conventional path when absent. */
+  readonly gcbConfig?: string
   /** Whether `gcb.update` also moves the host-supervised broker to the same commit. */
   readonly gcbHostUpdate?: boolean
   /** The compose file(s) that run the broker. */
@@ -1560,27 +1562,6 @@ const GCB_PRELUDE_STEPS = 3
  */
 const GCB_BUILD_STEPS = 3
 
-/**
- * The configuration the running host daemon was started with. The daemon is the one holding the
- * live allowlist; its command line is the only place that says which file that is. Without a pid
- * (or a `--config` in it), the deployment's conventional path is the answer.
- */
-async function daemonConfig(deployDir: string): Promise<string> {
-  const fallback = path.join(deployDir, 'config', 'broker.config.yml')
-  const pidText = await readFile(path.join(deployDir, 'gcb-host.pid'), 'utf8').catch(() => '')
-  const pid = Number(pidText.trim())
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return fallback
-  }
-  const cmdline = await readFile(`/proc/${String(pid)}/cmdline`, 'utf8').catch(() => '')
-  const args = cmdline.split('\0')
-  const at = args.indexOf('--config')
-  const inline = args.find(arg => arg.startsWith('--config='))
-  const chosen =
-    at >= 0 && args[at + 1] !== undefined ? args[at + 1] : inline?.slice('--config='.length)
-  return chosen === undefined || chosen === '' ? fallback : chosen
-}
-
 /** Add or remove one allowlist entry through the staged gcb host CLI, which owns the file. */
 async function editAllowlist(
   ctx: OpContext,
@@ -1590,7 +1571,7 @@ async function editAllowlist(
 ): Promise<string> {
   const deployDir = await hostDeployDir(ctx, 'gcb.allow')
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
-  const config = await daemonConfig(deployDir)
+  const config = ctx.gcbConfig ?? path.join(deployDir, 'config', 'broker.config.yml')
   const staged = await stat(cli).catch(() => null)
   if (staged === null || !staged.isFile()) {
     throw new BrokerFault(

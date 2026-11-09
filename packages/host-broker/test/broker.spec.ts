@@ -4109,6 +4109,8 @@ interface GcbRig {
   /** The pid file and staged export, when the rig also configured the host half. */
   pidFile?: string
   stagedFile?: string
+  /** The custom configuration, when the rig gave the broker one. */
+  customConfig?: string
   close(): Promise<void>
 }
 
@@ -4127,6 +4129,8 @@ async function gcbRig(
     files?: number
     /** Configure the host half too, so a failure can be checked against its pin. */
     host?: boolean
+    /** Give the broker a custom --gcb-config file beside the state directory. */
+    gcbConfig?: boolean
     /** The client image to configure; its build can fail through `clientBuild`. */
     clientImage?: string
     clientBuild?: string
@@ -4203,6 +4207,11 @@ async function gcbRig(
     await writeFile(path.join(deployDir, 'app.ref'), `${oldSha}\n`)
     await writeFile(path.join(deployDir, 'app', 'STAGED.json'), JSON.stringify({ sha: oldSha }))
   }
+  const customConfig =
+    stub.gcbConfig === true ? path.join(host.root, 'custom-broker.yml') : undefined
+  if (customConfig !== undefined) {
+    await writeFile(customConfig, 'hosts: {}\n')
+  }
   const gcbComposeFiles = Array.from({ length: stub.files ?? 1 }, (_, index) =>
     path.join(host.root, `gcb-compose-${String(index)}.yml`),
   )
@@ -4221,6 +4230,7 @@ async function gcbRig(
     gcbCompose: gcbComposeFiles.join(','),
     gcbProbeRepo: 'devockr/idsh',
     ...(stub.clientImage === undefined ? {} : { gcbClientImage: stub.clientImage }),
+    ...(customConfig === undefined ? {} : { gcbConfig: customConfig }),
     ...(deployDir === undefined ? {} : { gcbDeployDir: deployDir, gcbHostUpdate: true }),
   })
   const connection = client(host.socketPath)
@@ -4234,6 +4244,7 @@ async function gcbRig(
           pidFile: path.join(deployDir, 'gcb-host.pid'),
           stagedFile: path.join(deployDir, 'app', 'STAGED.json'),
         }),
+    ...(customConfig === undefined ? {} : { customConfig }),
     calls: () => readFile(recorded, 'utf8'),
     async close() {
       connection.close()
@@ -4242,22 +4253,16 @@ async function gcbRig(
   }
 }
 
-void test('gcb.allow edits the file the running daemon was started with', async () => {
-  const rig = await gcbRig({ host: true })
+void test('gcb.allow edits the configured file', async () => {
+  const rig = await gcbRig({ host: true, gcbConfig: true })
   const deployDir = path.dirname(rig.pinFile ?? '')
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
   const recorded = path.join(rig.host.root, 'allow.log')
-  const custom = path.join(rig.host.root, 'custom-broker.yml')
   await mkdir(path.dirname(cli), { recursive: true })
-  await writeFile(custom, 'hosts: {}\n')
   await writeFile(
     cli,
     `require('node:fs').writeFileSync(${JSON.stringify(recorded)}, process.argv.slice(2).join(' '))\n`,
   )
-  // A live process whose command line names the daemon's --config; the pid file is the pointer the
-  // operation follows to it.
-  const daemon = spawn('sh', ['-c', 'sleep 60', '--config', custom], { stdio: 'ignore' })
-  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(daemon.pid)}\n`)
   try {
     const answer = await rig.connection.request({
       op: 'gcb.allow',
@@ -4265,9 +4270,8 @@ void test('gcb.allow edits the file the running daemon was started with', async 
     })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const argv = await readFile(recorded, 'utf8')
-    assert.ok(argv.endsWith(` --config ${custom}`), argv)
+    assert.ok(argv.endsWith(` --config ${rig.customConfig ?? ''}`), argv)
   } finally {
-    daemon.kill()
     await rig.close()
   }
 })

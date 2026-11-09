@@ -100,6 +100,7 @@ export interface BrokerOptions {
    * reported as `unavailable` — a broker that never updates must not need a HOME at boot.
    */
   readonly gcbDeployDir?: string
+  readonly gcbConfig?: string
   /** Whether `gcb.update` also pins the host-supervised broker to the commit it built. */
   readonly gcbHostUpdate?: boolean
   /** The compose file(s) that run the broker, comma-separated; `gcb.update` handles one service. */
@@ -208,6 +209,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   // Kept absent when it was not given: only `gcb.update`'s host half reads it, and it resolves the
   // default and reports a missing directory itself.
   const gcbDeployDir = options.gcbDeployDir
+  const gcbConfig = options.gcbConfig
   const gcbComposeFiles = await composeFiles(options.gcbCompose)
   const gcbService = options.gcbService ?? 'gcb'
   if (!/^\w[\w.-]*$/u.test(gcbService)) {
@@ -272,6 +274,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     ...(checkout === undefined ? {} : { checkout }),
     ...(gcbCheckout === undefined ? {} : { gcbCheckout }),
     ...(gcbDeployDir === undefined ? {} : { gcbDeployDir }),
+    ...(gcbConfig === undefined ? {} : { gcbConfig }),
     ...(options.gcbHostUpdate === true ? { gcbHostUpdate: true } : {}),
     ...(gcbComposeFiles === undefined ? {} : { gcbCompose: gcbComposeFiles }),
     gcbService,

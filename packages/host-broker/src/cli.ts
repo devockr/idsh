@@ -32,6 +32,7 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
                           also the source broker.update rebuilds from when the CLI runs inside it
   --gcb-checkout <dir>   The credential broker's checkout; gcb.update pulls it, rebuilds
                           the container image from it and pins the host broker to it
+  --gcb-config <path>    The file gcb.allow edits; default <deploy-dir>/config/broker.config.yml
   --gcb-deploy-dir <dir> The host broker's own directory, holding app.ref and gcb-host.pid
                           (default $HOME/.broker-host)
   --gcb-host             gcb.update also pins the host-supervised broker to the commit it built,
@@ -96,6 +97,7 @@ function optionsFrom(
     ...(text('npm') === undefined ? {} : { npmPath: text('npm') }),
     ...(text('checkout') === undefined ? {} : { checkout: text('checkout') }),
     ...(text('gcb-checkout') === undefined ? {} : { gcbCheckout: text('gcb-checkout') }),
+    ...(text('gcb-config') === undefined ? {} : { gcbConfig: text('gcb-config') }),
     ...(text('gcb-deploy-dir') === undefined ? {} : { gcbDeployDir: text('gcb-deploy-dir') }),
     ...(values['gcb-host'] === true ? { gcbHostUpdate: true } : {}),
     ...(text('gcb-compose') === undefined ? {} : { gcbCompose: text('gcb-compose') }),
@@ -131,6 +133,7 @@ async function main(): Promise<void> {
       npm: { type: 'string' },
       checkout: { type: 'string' },
       'gcb-checkout': { type: 'string' },
+      'gcb-config': { type: 'string' },
       'gcb-deploy-dir': { type: 'string' },
       'gcb-host': { type: 'boolean' },
       'gcb-compose': { type: 'string' },
