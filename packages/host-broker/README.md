@@ -119,8 +119,10 @@ request.
 (`node --conditions=development <deploy-dir>/app/packages/host/bin/gcb.js`). The write is gcb's
 atomic replace, so the daemon reloads without a restart. `<file>` is the configuration `gcb host
 status` reports for the daemon in `gcb-host.pid`. When that cannot answer, the error names which
-part failed — no pid file, a failed `host status`, no entry for that pid (with the pids it does
-report), or a null configuration — rather than guessing a path.
+part failed — no pid file, a pid that does not run from this deployment, a failed `host status`,
+no entry for that pid (with the pids it does report), or a null configuration — rather than guessing
+a path. The pid is trusted only after the same command-line/working-directory check `gcb.update` uses
+before it stops that process, so a stale pid file cannot point the edit at another daemon's file.
 An entry that is not exact (`owner/name`,
 no glob or URL) is refused by that command. `--gcb-host` and `--gcb-checkout` are **broker startup options**, not arguments of this or any
 operation: a broker started with them is the one that can stage a tree, and one started without

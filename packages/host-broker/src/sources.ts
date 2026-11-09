@@ -1565,6 +1565,7 @@ type HostStatusResult =
   | { config: string }
   | { reason: 'no-pid' }
   | { reason: 'failed'; message: string }
+  | { reason: 'not-ours'; pid: number }
   | { reason: 'no-entry'; pid: number; pids: number[] }
   | { reason: 'null'; pid: number }
 
@@ -1582,6 +1583,9 @@ async function reportedConfig(
   const pid = Number(pidText.trim())
   if (!Number.isInteger(pid) || pid <= 0) {
     return { reason: 'no-pid' }
+  }
+  if (!(await ownsDeployment(deployDir, pid))) {
+    return { reason: 'not-ours', pid }
   }
   let entries: { pid?: unknown; config?: unknown }[]
   try {
@@ -1636,9 +1640,11 @@ async function editAllowlist(
         ? 'gcb-host.pid is missing or does not name a pid; start the host daemon (gcb.update --gcb-host)'
         : reported.reason === 'failed'
           ? `gcb host status failed: ${reported.message}`
-          : reported.reason === 'no-entry'
-            ? `gcb host status has no entry for pid ${String(reported.pid)} (it reports ${reported.pids.length === 0 ? 'none' : reported.pids.join(', ')}); is gcb-host.pid stale?`
-            : `gcb host status reports no configuration for pid ${String(reported.pid)}; is the host daemon running?`
+          : reported.reason === 'not-ours'
+            ? `pid ${String(reported.pid)} does not run from this deployment; is gcb-host.pid stale?`
+            : reported.reason === 'no-entry'
+              ? `gcb host status has no entry for pid ${String(reported.pid)} (it reports ${reported.pids.length === 0 ? 'none' : reported.pids.join(', ')}); is gcb-host.pid stale?`
+              : `gcb host status reports no configuration for pid ${String(reported.pid)}; is the host daemon running?`
     throw new BrokerFault('unavailable', `gcb.allow: ${message}`)
   }
   const config = reported.config
@@ -2096,6 +2102,45 @@ async function hostDeployDir(ctx: OpContext, op = 'gcb.update'): Promise<string>
  * supervisor restart it. This does exactly that, and waits for the restarted process and the staged
  * commit, because "the pin moved" is not "the broker runs it".
  */
+/**
+ * Whether a pid is this deployment's gcb host: its command line mentions gcb and names the
+ * deployment (or a path inside it), or its working directory is inside the deployment. A pid file
+ * survives a crash and a pid can be recycled, so a matching number alone is not ownership.
+ */
+async function ownsDeployment(deployDir: string, pid: number): Promise<boolean> {
+  const deployment = path.resolve(deployDir)
+  const realDeployment = await realpath(deployment).catch(() => deployment)
+  const cmdline = await readFile(`/proc/${String(pid)}/cmdline`, 'utf8').catch(() => '')
+  if (!/gcb/u.test(cmdline)) {
+    return false
+  }
+  const namesDeployment = async (arg: string): Promise<boolean> => {
+    const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg
+    if (!value.startsWith('/')) {
+      return false
+    }
+    for (let current = value; ; current = path.dirname(current)) {
+      if ((await realpath(current).catch(() => current)) === realDeployment) {
+        return true
+      }
+      if (current === path.dirname(current)) {
+        return false
+      }
+    }
+  }
+  for (const arg of cmdline.split('\0')) {
+    if (await namesDeployment(arg)) {
+      return true
+    }
+  }
+  const cwd = await readlink(`/proc/${String(pid)}/cwd`).catch(() => '')
+  if (cwd === '') {
+    return false
+  }
+  const realCwd = await realpath(cwd).catch(() => cwd)
+  return realCwd === realDeployment || realCwd.startsWith(`${realDeployment}/`)
+}
+
 async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Promise<string> {
   const pinFile = path.join(deployDir, 'app.ref')
   const pidFile = path.join(deployDir, 'gcb-host.pid')
@@ -2141,52 +2186,11 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
   const wasRunning = before !== undefined && alive(before)
   // A pid file survives a crash, and a recycled pid belongs to somebody else: check it before the
   // pin moves, so the refusal is the whole effect of a stale file.
-  if (wasRunning && before !== undefined) {
-    // The pid file sits in this deployment's directory, but a recycled pid may belong to another
-    // `idsh-host` whose arguments happen to contain "gcb". The deployment directory is the part
-    // that is this broker's own: a process launched from somewhere else is not stopped.
-    const deployment = path.resolve(deployDir)
-    const realDeployment = await realpath(deployment).catch(() => deployment)
-    const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
-    // The argument must name the deployment directory itself (or a path inside it), compared by
-    // real path: a sibling `${deployment}-elsewhere`, a copy nested under another directory, and a
-    // symlinked spelling all have to be told apart by where they actually lead.
-    const namesDeployment = async (arg: string): Promise<boolean> => {
-      const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg
-      if (!value.startsWith('/')) {
-        return false
-      }
-      for (let current = value; ; current = path.dirname(current)) {
-        if ((await realpath(current).catch(() => current)) === realDeployment) {
-          return true
-        }
-        if (current === path.dirname(current)) {
-          return false
-        }
-      }
-    }
-    let named = false
-    for (const arg of cmdline.split('\0')) {
-      if (await namesDeployment(arg)) {
-        named = true
-        break
-      }
-    }
-    if (!named) {
-      // A supervisor may launch the broker with a relative path from inside the deployment; the
-      // argument then names nothing absolute, but the working directory is the deployment's.
-      const cwd = await readlink(`/proc/${String(before)}/cwd`).catch(() => '')
-      if (cwd !== '') {
-        const realCwd = await realpath(cwd).catch(() => cwd)
-        named = realCwd === realDeployment || realCwd.startsWith(`${realDeployment}/`)
-      }
-    }
-    if (!/gcb/u.test(cmdline) || !named) {
-      throw new BrokerFault(
-        'unavailable',
-        `gcb.update: refusing to stop ${String(before)}: it does not run from ${deployment}`,
-      )
-    }
+  if (wasRunning && before !== undefined && !(await ownsDeployment(deployDir, before))) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.update: refusing to stop ${String(before)}: it does not run from ${path.resolve(deployDir)}`,
+    )
   }
   await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
   await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
