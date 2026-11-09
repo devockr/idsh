@@ -135,7 +135,9 @@ builds do not accumulate.
 would be built. `deploy.build` and `deploy.main` use it as their `preview`, so the confirmation
 asks about the resolved source rather than the request.
 
-`gcb.update` fetches `--gcb-checkout` from `origin` (`git fetch --prune origin`, 60 s,
+`gcb.update` fetches `--gcb-checkout` from `origin` (`git fetch --prune origin
++refs/heads/main:refs/remotes/origin/main`, so a single-branch clone still gets a fresh
+`origin/main`; 60 s,
 `GIT_TERMINAL_PROMPT=0`, plus `BatchMode` when none of `GIT_SSH`, `GIT_SSH_COMMAND` or
 `core.sshCommand` is configured — a configured command is left to avoid prompts itself; the remote's
 configuration decides ssh or HTTPS, and the proxy) and detaches at `origin/main`. That checkout is a

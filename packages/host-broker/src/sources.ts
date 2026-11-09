@@ -1707,7 +1707,7 @@ async function updateBroker(
     await step('fetch', () =>
       git(
         ctx,
-        ['fetch', '--prune', 'origin'],
+        ['fetch', '--prune', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
         { stdoutOnly: true, timeoutMs: GCB_PULL_TIMEOUT_MS, env: pullEnv },
         checkout,
       ),
