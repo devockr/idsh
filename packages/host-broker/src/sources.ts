@@ -1560,6 +1560,116 @@ const GCB_PRELUDE_STEPS = 3
  */
 const GCB_BUILD_STEPS = 3
 
+/** What `gcb host status` said about the daemon this deployment runs. */
+type HostStatusResult =
+  | { config: string }
+  | { reason: 'no-pid' }
+  | { reason: 'failed'; message: string }
+  | { reason: 'not-ours'; pid: number }
+  | { reason: 'no-entry'; pid: number; pids: number[] }
+  | { reason: 'null'; pid: number }
+
+/**
+ * What the host daemon reports about its configuration, with the reason it could not answer kept
+ * distinct: a missing pid, a failed command, an entry for another pid, a null config and a path are
+ * five different situations and get five different answers.
+ */
+async function reportedConfig(
+  ctx: OpContext,
+  cli: string,
+  deployDir: string,
+): Promise<HostStatusResult> {
+  const pidText = await readFile(path.join(deployDir, 'gcb-host.pid'), 'utf8').catch(() => '')
+  const pid = Number(pidText.trim())
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { reason: 'no-pid' }
+  }
+  if (!(await ownsDeployment(deployDir, pid))) {
+    return { reason: 'not-ours', pid }
+  }
+  let entries: { pid?: unknown; config?: unknown }[]
+  try {
+    const output = await runFixed(
+      ctx,
+      process.execPath,
+      ['--conditions=development', cli, 'host', 'status'],
+      { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+    const parsed: unknown = JSON.parse(output)
+    const candidates: unknown[] = Array.isArray(parsed) ? parsed : [parsed]
+    entries = candidates.filter(
+      (entry): entry is { pid?: unknown; config?: unknown } =>
+        typeof entry === 'object' && entry !== null,
+    )
+  } catch (error) {
+    return { reason: 'failed', message: messageOf(error) }
+  }
+  const match = entries.find(entry => entry.pid === pid)
+  if (match === undefined) {
+    return {
+      reason: 'no-entry',
+      pid,
+      pids: entries.flatMap(entry => (typeof entry.pid === 'number' ? [entry.pid] : [])),
+    }
+  }
+  return typeof match.config === 'string' && match.config !== ''
+    ? { config: match.config }
+    : { reason: 'null', pid }
+}
+
+/** Add or remove one allowlist entry through the staged gcb host CLI, which owns the file. */
+async function editAllowlist(
+  ctx: OpContext,
+  action: 'add' | 'remove',
+  host: string,
+  repo: string,
+): Promise<string> {
+  const deployDir = await hostDeployDir(ctx, 'gcb.allow')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const staged = await stat(cli).catch(() => null)
+  if (staged === null || !staged.isFile()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.allow: ${cli} is not staged; start the broker with --gcb-host and --gcb-checkout, then run gcb.update (target host, or both)`,
+    )
+  }
+  const reported = await reportedConfig(ctx, cli, deployDir)
+  if (!('config' in reported)) {
+    const message =
+      reported.reason === 'no-pid'
+        ? 'gcb-host.pid is missing or does not name a pid; start the host daemon (gcb.update --gcb-host)'
+        : reported.reason === 'failed'
+          ? `gcb host status failed: ${reported.message}`
+          : reported.reason === 'not-ours'
+            ? `pid ${String(reported.pid)} does not run from this deployment; is gcb-host.pid stale?`
+            : reported.reason === 'no-entry'
+              ? `gcb host status has no entry for pid ${String(reported.pid)} (it reports ${reported.pids.length === 0 ? 'none' : reported.pids.join(', ')}); is gcb-host.pid stale?`
+              : `gcb host status reports no configuration for pid ${String(reported.pid)}; is the host daemon running?`
+    throw new BrokerFault('unavailable', `gcb.allow: ${message}`)
+  }
+  const config = reported.config
+  const configured = await stat(config).catch(() => null)
+  if (configured === null || !configured.isFile()) {
+    throw new BrokerFault('unavailable', `gcb.allow: ${config} is not there`)
+  }
+  // The staged tree is source, not built output: the development condition is what makes its
+  // package exports resolve, the same way the host broker itself is started.
+  try {
+    await runFixed(
+      ctx,
+      process.execPath,
+      ['--conditions=development', cli, 'config', 'allow', action, host, repo, '--config', config],
+      { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+  } catch (error) {
+    throw new BrokerFault(
+      error instanceof BrokerFault ? error.code : 'unavailable',
+      `gcb.allow: ${action} failed: ${messageOf(error)}`,
+    )
+  }
+  return `${action === 'add' ? 'allowed' : 'removed'} ${host}/${repo}; the daemon reloads when the file is replaced`
+}
+
 /**
  * Pull the credential broker's checkout, rebuild its container image and pin the host half.
  *
@@ -1973,17 +2083,22 @@ function canonicalImage(reference: string): string {
   return `${registry}/${rest.join('/')}${tag}`
 }
 
+/** A hostname as gcb records it. */
+const GCB_HOST_ID = /^[A-Za-z0-9][A-Za-z0-9.-]*$/u
+/** One exact `owner/name` entry, which is what the allowlist holds. */
+const GCB_REPO_ID = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/u
+
 /** A commit id, which is all `app.ref` may hold. */
 const COMMIT_ID = /^[0-9a-f]{40}$/u
 
 /** The host broker's directory, checked once so a missing one is named before any work starts. */
-async function hostDeployDir(ctx: OpContext): Promise<string> {
+async function hostDeployDir(ctx: OpContext, op = 'gcb.update'): Promise<string> {
   const deployDir = ctx.gcbDeployDir ?? defaultDeployDir()
   const stats = await stat(deployDir).catch(() => null)
   if (stats === null || !stats.isDirectory()) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.update: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's directory`,
+      `${op}: ${deployDir} is not a directory; set --gcb-deploy-dir to the host broker's directory`,
     )
   }
   return deployDir
@@ -1997,6 +2112,45 @@ async function hostDeployDir(ctx: OpContext): Promise<string> {
  * supervisor restart it. This does exactly that, and waits for the restarted process and the staged
  * commit, because "the pin moved" is not "the broker runs it".
  */
+/**
+ * Whether a pid is this deployment's gcb host: its command line mentions gcb and names the
+ * deployment (or a path inside it), or its working directory is inside the deployment. A pid file
+ * survives a crash and a pid can be recycled, so a matching number alone is not ownership.
+ */
+async function ownsDeployment(deployDir: string, pid: number): Promise<boolean> {
+  const deployment = path.resolve(deployDir)
+  const realDeployment = await realpath(deployment).catch(() => deployment)
+  const cmdline = await readFile(`/proc/${String(pid)}/cmdline`, 'utf8').catch(() => '')
+  if (!/gcb/u.test(cmdline)) {
+    return false
+  }
+  const namesDeployment = async (arg: string): Promise<boolean> => {
+    const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg
+    if (!value.startsWith('/')) {
+      return false
+    }
+    for (let current = value; ; current = path.dirname(current)) {
+      if ((await realpath(current).catch(() => current)) === realDeployment) {
+        return true
+      }
+      if (current === path.dirname(current)) {
+        return false
+      }
+    }
+  }
+  for (const arg of cmdline.split('\0')) {
+    if (await namesDeployment(arg)) {
+      return true
+    }
+  }
+  const cwd = await readlink(`/proc/${String(pid)}/cwd`).catch(() => '')
+  if (cwd === '') {
+    return false
+  }
+  const realCwd = await realpath(cwd).catch(() => cwd)
+  return realCwd === realDeployment || realCwd.startsWith(`${realDeployment}/`)
+}
+
 async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Promise<string> {
   const pinFile = path.join(deployDir, 'app.ref')
   const pidFile = path.join(deployDir, 'gcb-host.pid')
@@ -2042,52 +2196,11 @@ async function pinHostBroker(ctx: OpContext, deployDir: string, sha: string): Pr
   const wasRunning = before !== undefined && alive(before)
   // A pid file survives a crash, and a recycled pid belongs to somebody else: check it before the
   // pin moves, so the refusal is the whole effect of a stale file.
-  if (wasRunning && before !== undefined) {
-    // The pid file sits in this deployment's directory, but a recycled pid may belong to another
-    // `idsh-host` whose arguments happen to contain "gcb". The deployment directory is the part
-    // that is this broker's own: a process launched from somewhere else is not stopped.
-    const deployment = path.resolve(deployDir)
-    const realDeployment = await realpath(deployment).catch(() => deployment)
-    const cmdline = await readFile(`/proc/${String(before)}/cmdline`, 'utf8').catch(() => '')
-    // The argument must name the deployment directory itself (or a path inside it), compared by
-    // real path: a sibling `${deployment}-elsewhere`, a copy nested under another directory, and a
-    // symlinked spelling all have to be told apart by where they actually lead.
-    const namesDeployment = async (arg: string): Promise<boolean> => {
-      const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg
-      if (!value.startsWith('/')) {
-        return false
-      }
-      for (let current = value; ; current = path.dirname(current)) {
-        if ((await realpath(current).catch(() => current)) === realDeployment) {
-          return true
-        }
-        if (current === path.dirname(current)) {
-          return false
-        }
-      }
-    }
-    let named = false
-    for (const arg of cmdline.split('\0')) {
-      if (await namesDeployment(arg)) {
-        named = true
-        break
-      }
-    }
-    if (!named) {
-      // A supervisor may launch the broker with a relative path from inside the deployment; the
-      // argument then names nothing absolute, but the working directory is the deployment's.
-      const cwd = await readlink(`/proc/${String(before)}/cwd`).catch(() => '')
-      if (cwd !== '') {
-        const realCwd = await realpath(cwd).catch(() => cwd)
-        named = realCwd === realDeployment || realCwd.startsWith(`${realDeployment}/`)
-      }
-    }
-    if (!/gcb/u.test(cmdline) || !named) {
-      throw new BrokerFault(
-        'unavailable',
-        `gcb.update: refusing to stop ${String(before)}: it does not run from ${deployment}`,
-      )
-    }
+  if (wasRunning && before !== undefined && !(await ownsDeployment(deployDir, before))) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.update: refusing to stop ${String(before)}: it does not run from ${path.resolve(deployDir)}`,
+    )
   }
   await writeFile(`${pinFile}.${String(process.pid)}.tmp`, `${sha}\n`, { mode: FILE_MODE })
   await rename(`${pinFile}.${String(process.pid)}.tmp`, pinFile)
@@ -2490,6 +2603,45 @@ export const OPS: readonly OpDefinition[] = [
           )
         },
       }
+    },
+  },
+
+  {
+    name: 'gcb.allow',
+    summary: 'Add or remove one credential-broker allowlist entry through the staged host CLI.',
+    confirm: true,
+    serial: true,
+    // The staged tree and the configuration are the host-supervised deployment's; a broker without
+    // that half has neither, so the operation is not offered.
+    available: ctx => ctx.gcbHostUpdate === true,
+    input: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'remove'] },
+        host: { type: 'string', description: 'Host as gcb records it; default github.com.' },
+        repo: { type: 'string', description: 'The exact owner/name entry to change.' },
+      },
+      required: ['action', 'repo'],
+      additionalProperties: false,
+    },
+    run(args, ctx) {
+      rejectUnknown(args, ['action', 'host', 'repo'])
+      const action = text(args, 'action', MAX_PATTERN_CHARS)
+      if (action !== 'add' && action !== 'remove') {
+        throw new BrokerFault('bad-argument', 'action must be add or remove')
+      }
+      const host = text(args, 'host', MAX_PATTERN_CHARS) ?? 'github.com'
+      if (!GCB_HOST_ID.test(host)) {
+        throw new BrokerFault(
+          'bad-argument',
+          `host must be a hostname, got ${JSON.stringify(host)}`,
+        )
+      }
+      const repo = text(args, 'repo', MAX_PATTERN_CHARS) ?? ''
+      if (!GCB_REPO_ID.test(repo)) {
+        throw new BrokerFault('bad-argument', 'repo must be owner/name')
+      }
+      return editAllowlist(ctx, action, host, repo)
     },
   },
 

@@ -108,10 +108,28 @@ request.
 | `deploy.source`   | resolves a build request — branch tip and `main` sha, or `main` alone — without building; the `preview` of `deploy.build` and `deploy.main`                                    |
 | `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                |
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                            |
+| `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                       |
 | `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                    |
 | `ops.describe`    | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table                                                          |
 
 ### Operation notes
+
+`gcb.allow` writes the configuration through gcb's own typed command — `config allow add|remove
+<host> <owner/name> --config <file>` — run from the staged tree
+(`node --conditions=development <deploy-dir>/app/packages/host/bin/gcb.js`). The write is gcb's
+atomic replace, so the daemon reloads without a restart. `<file>` is the configuration `gcb host
+status` reports for the daemon in `gcb-host.pid`. When that cannot answer, the error names which
+part failed — no pid file, a pid that does not run from this deployment, a failed `host status`,
+no entry for that pid (with the pids it does report), or a null configuration — rather than guessing
+a path. The pid is trusted only after the same command-line/working-directory check `gcb.update` uses
+before it stops that process, so a stale pid file cannot point the edit at another daemon's file.
+An entry that is not exact (`owner/name`,
+no glob or URL) is refused by that command. `--gcb-host` and `--gcb-checkout` are **broker startup options**, not arguments of this or any
+operation: a broker started with them is the one that can stage a tree, and one started without
+`--gcb-host` does not offer `gcb.allow` at all (`unknown-op`). The staged tree has to be a gcb that
+has `config allow` (gcb#103) and reports the configuration from startup (`host status`, gcb 0.7.1+);
+an older one answers with its own usage or with no configuration — run `gcb.update` (target `host`,
+or the default both) to stage the current one.
 
 `run` takes one declared binary — `ping`, `dig`, `traceroute`, `ip addr/route/neigh`, `ss`,
 `df`, `free`, `uptime` — with one declared spelling per flag and no path yet. The argv is rebuilt
