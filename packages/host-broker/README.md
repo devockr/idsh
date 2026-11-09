@@ -110,7 +110,6 @@ request.
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                            |
 | `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                       |
 | `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                    |
-| `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                       |
 | `ops.describe`    | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table                                                          |
 
 ### Operation notes
@@ -119,11 +118,11 @@ request.
 <host> <owner/name> --config <deploy-dir>/config/broker.config.yml` — run from the staged tree
 (`node --conditions=development <deploy-dir>/app/packages/host/bin/gcb.js`). The write is gcb's
 atomic replace, so the daemon reloads without a restart; an entry that is not exact (`owner/name`,
-no glob or URL) is refused by that command. It is offered only when the broker was started with
-`--gcb-host`, because only then is the staged tree there; a broker without it answers `unknown-op`.
-The staged tree has to be a gcb that has `config allow` (gcb#103): an older one answers with its own
-`config check|edit` usage, which never says it is old — `gcb.update --gcb-host` is what stages a
-newer one.
+no glob or URL) is refused by that command. `--gcb-host` and `--gcb-checkout` are **broker startup options**, not arguments of this or any
+operation: a broker started with them is the one that can stage a tree, and one started without
+`--gcb-host` does not offer `gcb.allow` at all (`unknown-op`). The staged tree has to be a gcb that
+has `config allow` (gcb#103); an older one answers with its own `config check|edit` usage, which
+never says it is old — run `gcb.update` (target `host`, or the default both) to stage a newer one.
 
 `run` takes one declared binary — `ping`, `dig`, `traceroute`, `ip addr/route/neigh`, `ss`,
 `df`, `free`, `uptime` — with one declared spelling per flag and no path yet. The argv is rebuilt

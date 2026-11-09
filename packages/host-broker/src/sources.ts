@@ -1574,7 +1574,7 @@ async function editAllowlist(
   if (staged === null || !staged.isFile()) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.allow: ${cli} is not staged; run gcb.update --gcb-host first`,
+      `gcb.allow: ${cli} is not staged; start the broker with --gcb-host and --gcb-checkout, then run gcb.update (target host, or both)`,
     )
   }
   const configured = await stat(config).catch(() => null)

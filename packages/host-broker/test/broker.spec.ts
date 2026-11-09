@@ -4323,7 +4323,10 @@ void test('gcb.allow names a staged CLI that is missing', async () => {
       args: { action: 'remove', repo: 'un-ts/sh-syntax' },
     })
     assert.equal(answer.ok, false)
-    assert.match(JSON.stringify(answer.error), /is not staged; run gcb\.update --gcb-host first/u)
+    assert.match(
+      JSON.stringify(answer.error),
+      /is not staged; start the broker with --gcb-host and --gcb-checkout/u,
+    )
   } finally {
     await rig.close()
   }
