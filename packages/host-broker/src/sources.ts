@@ -1700,18 +1700,28 @@ async function updateBroker(
       pullEnv['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes -o ConnectTimeout=10'
     }
   }
-  const pull =
-    linesOf(
-      await step('pull', () =>
-        git(
-          ctx,
-          ['pull', '--ff-only'],
-          { stdoutOnly: true, timeoutMs: GCB_PULL_TIMEOUT_MS, env: pullEnv },
-          checkout,
-        ),
+  // The checkout is a build input, not a branch someone works on: fetch the remote and detach at
+  // its tip. A checkout left on a deleted feature branch (or any other branch) then still updates,
+  // where `pull --ff-only` would refuse to name a merge ref that no longer exists.
+  const fetched = linesOf(
+    await step('fetch', () =>
+      git(
+        ctx,
+        ['fetch', '--prune', 'origin'],
+        { stdoutOnly: true, timeoutMs: GCB_PULL_TIMEOUT_MS, env: pullEnv },
+        checkout,
       ),
-    )[0] ?? ''
-  done.push(`pull: ${pull}`)
+    ),
+  )
+  await step('checkout', () =>
+    git(
+      ctx,
+      ['checkout', '--detach', '--quiet', 'origin/main'],
+      { stdoutOnly: true, env: pullEnv },
+      checkout,
+    ),
+  )
+  done.push(`fetch: origin/main${fetched.length === 0 ? '' : ' (fetched)'}`)
   const sha = (
     await step('read the commit', () =>
       git(ctx, ['rev-parse', 'HEAD'], { stdoutOnly: true, env: isolatedGitEnv }, checkout),

@@ -4185,9 +4185,10 @@ async function gcbRig(
       // git exits 1 for a key that is not set — the branch the operation must read as "unset".
       '  *"status --porcelain"*) if [ -n "$FAIL_STATUS" ]; then echo "status is unreadable" >&2; exit 2; fi; printf "%s" "${STATUS:-}" ;;',
       '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; if [ "${CORE_SSH+x}" != x ]; then exit 1; fi; printf "%s" "$CORE_SSH" ;;',
-      '  *"pull --ff-only"*) if [ -n "$FAIL_PULL" ]; then echo "no route to the remote" >&2; exit 1; fi; printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
+      '  *"fetch --prune origin"*) if [ -n "$FAIL_PULL" ]; then echo "no route to the remote" >&2; exit 1; fi; printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
         JSON.stringify(recorded) +
-        '; echo "Already up to date." ;;',
+        ' ;;',
+      '  *"checkout --detach --quiet origin/main"*) : ;;',
       '  *"rev-parse HEAD"*) printf "%s" "${SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;',
       'esac',
       '',
@@ -4340,7 +4341,7 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     )
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const recorded = await rig.calls()
-    assert.match(recorded, /git -C .*gcb pull --ff-only/u)
+    assert.match(recorded, /git -C .*gcb fetch --prune origin/u)
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --services/u)
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --images gcb/u)
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
@@ -4447,7 +4448,7 @@ void test('gcb.update refuses a compose that has no such service', async () => {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /has no service "gcb"; it has other, third/u)
-    assert.match(answer.error?.message ?? '', /completed: pull: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main/u)
   } finally {
     await rig.close()
   }
@@ -4599,7 +4600,7 @@ void test('gcb.update refuses a service that declares a scale', async () => {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
-    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main.*; image: /u)
     // Refused before either side effect, like the `deploy.replicas` form.
     const recorded = await rig.calls()
     assert.doesNotMatch(recorded, /^(?:build |compose -f .* up )/mu)
@@ -4617,7 +4618,7 @@ void test('gcb.update refuses a service that declares replicas', async () => {
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
     // Refused before the build: the completed list ends at the image the compose names.
-    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main.*; image: /u)
     assert.doesNotMatch(answer.error?.message ?? '', /build: ok/u)
     // Refused before either side effect: no build, no recreate.
     const recorded = await rig.calls()
@@ -4634,7 +4635,7 @@ void test('gcb.update stops at the step whose build failed', async () => {
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /gcb\.update: build failed/u)
     assert.match(answer.error?.message ?? '', /no space left on device/u)
-    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main.*; image: /u)
   } finally {
     await rig.close()
   }
@@ -4949,7 +4950,8 @@ async function hostUpdateRig(): Promise<{
       '#!/bin/sh',
       `printf '%s\\n' "$*" >> "\${CALLS}"`,
       'case "$*" in',
-      '  *"pull --ff-only"*) echo "Already up to date." ;;',
+      '  *"fetch --prune origin"*) : ;;',
+      '  *"checkout --detach --quiet origin/main"*) : ;;',
       '  *"status --porcelain"*) printf "%s" "$STATUS" ;;',
       `  *"rev-parse HEAD"*) echo "${'b'.repeat(COMMIT_CHARS)}" ;;`,
       'esac',
@@ -5008,14 +5010,14 @@ void test('gcb.update refuses a target it does not know', async () => {
   }
 })
 
-void test('gcb.update stops at the pull when the remote cannot be reached', async () => {
+void test('gcb.update stops at the fetch when the remote cannot be reached', async () => {
   const rig = await gcbRig()
   try {
     await withEnv({ FAIL_PULL: '1' }, async () => {
       const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
       assert.equal(answer.ok, false)
       const message = JSON.stringify(answer.error)
-      assert.match(message, /pull failed/u)
+      assert.match(message, /fetch failed/u)
       assert.match(message, /no route to the remote/u)
       assert.doesNotMatch(await rig.calls(), /build --target host/u)
     })
