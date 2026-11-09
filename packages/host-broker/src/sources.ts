@@ -62,8 +62,6 @@ export interface OpContext {
   readonly gcbCheckout?: string
   /** The host broker's own directory: `app.ref`, its pid file and the staged export. */
   readonly gcbDeployDir?: string
-  /** The configuration gcb.allow edits; the deployment's conventional path when absent. */
-  readonly gcbConfig?: string
   /** Whether `gcb.update` also moves the host-supervised broker to the same commit. */
   readonly gcbHostUpdate?: boolean
   /** The compose file(s) that run the broker. */
@@ -1562,6 +1560,42 @@ const GCB_PRELUDE_STEPS = 3
  */
 const GCB_BUILD_STEPS = 3
 
+/**
+ * The configuration the host daemon reports. gcb 0.7.1's `host status` names the file the daemon
+ * loaded at startup, which is the authoritative answer; without it there is nothing to edit, so the
+ * operation fails rather than guessing a path.
+ */
+async function reportedConfig(
+  ctx: OpContext,
+  cli: string,
+  deployDir: string,
+): Promise<string | undefined> {
+  const pidText = await readFile(path.join(deployDir, 'gcb-host.pid'), 'utf8').catch(() => '')
+  const pid = Number(pidText.trim())
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return undefined
+  }
+  try {
+    const output = await runFixed(
+      ctx,
+      process.execPath,
+      ['--conditions=development', cli, 'host', 'status'],
+      { timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+    const parsed: unknown = JSON.parse(output)
+    const entries: { pid?: unknown; config?: unknown }[] = (
+      Array.isArray(parsed) ? parsed : [parsed]
+    ).filter(
+      (entry): entry is { pid?: unknown; config?: unknown } =>
+        typeof entry === 'object' && entry !== null,
+    )
+    const config = entries.find(entry => entry.pid === pid)?.config
+    return typeof config === 'string' && config !== '' ? config : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Add or remove one allowlist entry through the staged gcb host CLI, which owns the file. */
 async function editAllowlist(
   ctx: OpContext,
@@ -1571,12 +1605,18 @@ async function editAllowlist(
 ): Promise<string> {
   const deployDir = await hostDeployDir(ctx, 'gcb.allow')
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
-  const config = ctx.gcbConfig ?? path.join(deployDir, 'config', 'broker.config.yml')
   const staged = await stat(cli).catch(() => null)
   if (staged === null || !staged.isFile()) {
     throw new BrokerFault(
       'unavailable',
       `gcb.allow: ${cli} is not staged; start the broker with --gcb-host and --gcb-checkout, then run gcb.update (target host, or both)`,
+    )
+  }
+  const config = await reportedConfig(ctx, cli, deployDir)
+  if (config === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.allow: gcb host status does not report a configuration; is the host daemon running?',
     )
   }
   const configured = await stat(config).catch(() => null)

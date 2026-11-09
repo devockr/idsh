@@ -117,10 +117,9 @@ request.
 `gcb.allow` writes the configuration through gcb's own typed command — `config allow add|remove
 <host> <owner/name> --config <file>` — run from the staged tree
 (`node --conditions=development <deploy-dir>/app/packages/host/bin/gcb.js`). The write is gcb's
-atomic replace, so the daemon reloads without a restart. `<file>` is the broker's `--gcb-config` (a startup option), defaulting to
-`<deploy-dir>/config/broker.config.yml` — pass the file the host daemon was started with. gcb 0.7.0
-reports `config: null` until its daemon has loaded the file, so the explicit option is what the
-deployment uses; gcb#118 asks for a status that answers from the start.
+atomic replace, so the daemon reloads without a restart. `<file>` is the configuration `gcb host status` reports for the daemon in `gcb-host.pid` (gcb
+0.7.1+ answers from startup). Without a reported configuration the operation answers
+`does not report a configuration; is the host daemon running?` rather than guessing a path.
 An entry that is not exact (`owner/name`,
 no glob or URL) is refused by that command. `--gcb-host` and `--gcb-checkout` are **broker startup options**, not arguments of this or any
 operation: a broker started with them is the one that can stage a tree, and one started without
