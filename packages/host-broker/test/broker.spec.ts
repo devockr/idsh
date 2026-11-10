@@ -4188,7 +4188,7 @@ async function gcbRig(
       '  *"fetch --prune origin"*) if [ -n "$FAIL_PULL" ]; then echo "no route to the remote" >&2; exit 1; fi; printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
         JSON.stringify(recorded) +
         ' ;;',
-      '  *"checkout --detach --quiet origin/main"*) : ;;',
+      '  *"checkout --detach --quiet refs/remotes/origin/main"*) : ;;',
       '  *"rev-parse HEAD"*) printf "%s" "${SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;',
       'esac',
       '',
@@ -5173,7 +5173,7 @@ async function hostUpdateRig(): Promise<{
       `printf '%s\\n' "$*" >> "\${CALLS}"`,
       'case "$*" in',
       '  *"fetch --prune origin"*) : ;;',
-      '  *"checkout --detach --quiet origin/main"*) : ;;',
+      '  *"checkout --detach --quiet refs/remotes/origin/main"*) : ;;',
       '  *"status --porcelain"*) printf "%s" "$STATUS" ;;',
       `  *"rev-parse HEAD"*) echo "${'b'.repeat(COMMIT_CHARS)}" ;;`,
       'esac',
