@@ -283,11 +283,11 @@ recreate, so a candidate whose recreate fails and rolls back stays labelled unti
 retires it — failures cannot accumulate past that build. The image the build produced, the
 recorded target and the current base are never removed **by the broker**, and the host's prune keeps
 every image the broker built, so after a successful dev build's sweep at most three of those are on
-disk; a removal that fails is reported in the build answer and retried by the next sweep. That is the
-guarantee for images built here. A base-only build does not sweep (it has no dev image to
-compare against), so it adds the base and leaves any earlier
-labelled base for the next dev build's sweep to retire. A target recorded as
-`<repo>@sha256:<manifest digest>` was not built here, carries no label, and the
+disk; a removal that fails is reported in the build answer and retried by the next sweep. That is
+the guarantee for images built here. A base-only build does not sweep (it has no dev image to
+compare against), so it adds the base and leaves any earlier labelled base for the next dev build's
+sweep to retire. A target recorded as `<repo>@sha256:<manifest digest>` was not built here, carries
+no label, and the
 host's filter selects it like any other image: it does not need retention, because that reference
 can be pulled again. The pre-rollback check is what makes that safe — if the target is gone, the
 loud failure becomes one `docker pull`, not a rollback that starts something else. The broker's tag
