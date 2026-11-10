@@ -311,17 +311,22 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
       },
     })
   })
+  let bound = false
   try {
     await listen(server, options.socketPath)
+    bound = true
     await chmod(options.socketPath, SOCKET_MODE)
   } catch (error) {
-    // The socket may be reachable to someone else; do not leave it listening behind a failure, and
-    // do not keep the audit lock a broker that never started.
+    // The socket may be reachable to someone else; do not leave it listening behind a failure. Only
+    // a socket this server bound is ours to unlink — a failed listen means the file belongs to the
+    // broker already serving it.
     for (const socket of sockets) {
       socket.destroy()
     }
     await new Promise<void>(resolve => server.close(() => resolve())).catch(() => null)
-    await unlink(options.socketPath).catch(() => null)
+    if (bound) {
+      await unlink(options.socketPath).catch(() => null)
+    }
     throw error
   }
 

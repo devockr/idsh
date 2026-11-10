@@ -605,6 +605,14 @@ void test('a live socket is not taken over, and a non-socket path is refused', a
     }),
     /already listening/u,
   )
+  // The failed start must not unlink the socket the serving broker owns.
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.status', args: {} })
+    assert.equal(answer.ok, true)
+  } finally {
+    connection.close()
+  }
   await first.close()
 
   // A path that is not a socket is never replaced: another program's file is not ours to unlink.
