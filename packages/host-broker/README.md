@@ -155,7 +155,8 @@ bookkeeping — the base stage does not run the packages. It carries the `idsh.k
 prune keeps it, and the dev sweep keeps the base id explicitly, so a later `target: dev` build still
 has its parent.
 
-`deploy.source` runs the same resolution as the build — the log id and the source — and names what
+`deploy.source` runs the same resolution as the build — the log id and the source, or main alone for a
+`target: base` build, where it answers `main at <sha> (base build)` — and names what
 would be built. `deploy.build` and `deploy.main` use it as their `preview`, so the confirmation
 asks about the resolved source rather than the request.
 

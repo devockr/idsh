@@ -117,8 +117,8 @@ doubt.
 ## Deploying
 
 Rebuilding the container is how the profile's bundle list takes effect. `entrypoint.sh` and the
-`Dockerfile` live in `:base`, so they need a `deploy.build` with `target: base` first (or `pnpm
-dev`, which rebuilds base and dev in one call), then a `dev` build, then the recreate. It also kills whatever is running inside it — including an agent session (sessions
+`Dockerfile` live in `:base`, so they need a `deploy.build` with `target: base` first, then a `dev` build, then the recreate
+(`pnpm dev` does both builds on the host, leaving the recreate). It also kills whatever is running inside it — including an agent session (sessions
 live in the state directory, so the conversation survives, the process does not).
 
 - **The broker and the plugin are two lifecycles.** The plugin ships in the image; the broker runs

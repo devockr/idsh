@@ -973,8 +973,9 @@ const ROOT_SURFACE = [
 /** Run inside the build container; the host argv is fixed and no caller input reaches it. */
 const BUILD_COMMAND = 'pnpm install --frozen-lockfile && pnpm build'
 
-/** The image that carries node and pnpm for the build step. */
+/** The image that carries node and pnpm for the build step, and the parent of :dev. */
 const BUILD_BASE_IMAGE = 'devockr/idsh:base'
+/** The container a dev build runs in: the base image itself, by the same tag. */
 const BUILD_CONTAINER = BUILD_BASE_IMAGE
 /** The values `target` accepts, shared by the schema and the parser. */
 const BUILD_TARGETS = ['dev', 'base'] as const
