@@ -1040,7 +1040,7 @@ void test('concurrent requests leave one whole audit line each', async () => {
     assert.equal(one.ok, true)
     assert.equal(two.ok, true)
     const lines = (await readFile(host.auditPath, 'utf8')).split('\n').filter(line => line !== '')
-    assert.ok(lines.length >= 2)
+    assert.equal(lines.length, 2)
     for (const line of lines) {
       assert.doesNotThrow(() => JSON.parse(line))
     }
