@@ -721,7 +721,25 @@ function boundedArgs(args: Record<string, unknown>): string {
     : `${encoded.slice(0, MAX_AUDIT_ARGS_CHARS)}…`
 }
 
-async function appendAudit(file: string, record: Record<string, unknown>): Promise<void> {
+/**
+ * Write one audit line, serialized with every other write in this process.
+ *
+ * The broker is one process per socket, so a single promise chain is a complete lock: the size a
+ * failed write rolls back to can never be behind another request's successful append, which a
+ * per-connection queue would not prevent.
+ */
+let auditTail: Promise<void> = Promise.resolve()
+
+/** Append one audit record, after every earlier append in this process has settled. */
+function appendAudit(file: string, record: Record<string, unknown>): Promise<void> {
+  const next = auditTail.then(() => writeAudit(file, record))
+  // Keep the chain alive after a failure; the failed call still sees its own rejection.
+  auditTail = next.catch(() => undefined)
+  return next
+}
+
+/** Append one audit record; the caller has the audit lock. */
+async function writeAudit(file: string, record: Record<string, unknown>): Promise<void> {
   // A FIFO or socket where the audit file belongs must not hang the request that writes it: the
   // shared open is nonblocking and bounded, and only a regular file is accepted.
   const handle = await openAppendLog(file)
@@ -733,7 +751,8 @@ async function appendAudit(file: string, record: Record<string, unknown>): Promi
       await handle.appendFile(`${JSON.stringify(record)}\n`)
     } catch (error) {
       // A write can stop half a line in (disk full, a quota, an I/O error). The request fails either
-      // way; putting the file back to its length keeps the next record parseable.
+      // way; putting the file back to its length keeps the next record parseable — and no other
+      // append can have moved past `around`, because this runs under the audit lock.
       await handle.truncate(around).catch(() => null)
       throw error
     }

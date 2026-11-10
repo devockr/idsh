@@ -1022,6 +1022,35 @@ void test('a request is refused, not hung, when the audit file is a FIFO', async
   }
 })
 
+void test('concurrent requests leave one whole audit line each', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const first = client(host.socketPath)
+  const second = client(host.socketPath)
+  try {
+    const [one, two] = await Promise.all([
+      first.request({ op: 'broker.status', args: {} }),
+      second.request({ op: 'broker.status', args: {} }),
+    ])
+    assert.equal(one.ok, true)
+    assert.equal(two.ok, true)
+    const lines = (await readFile(host.auditPath, 'utf8')).split('\n').filter(line => line !== '')
+    assert.ok(lines.length >= 2)
+    for (const line of lines) {
+      assert.doesNotThrow(() => JSON.parse(line))
+    }
+  } finally {
+    first.close()
+    second.close()
+    await broker.close()
+  }
+})
+
 void test('a docker call that exceeds the deadline answers timeout', async () => {
   const host = await fakeHost()
   const dockerPath = path.join(host.root, 'docker')
