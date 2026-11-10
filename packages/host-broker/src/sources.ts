@@ -980,6 +980,7 @@ const BUILD_CONTAINER = 'devockr/idsh:base'
 const KEEP_LABEL = 'idsh.keep=1'
 
 const BUILD_IMAGE = 'devockr/idsh:dev'
+const BUILD_BASE_IMAGE = 'devockr/idsh:base'
 
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
 
@@ -2427,17 +2428,28 @@ export const OPS: readonly OpDefinition[] = [
           type: 'string',
           description: 'Log id this build writes as build-<log>.log; the client follows it.',
         },
+        target: {
+          type: 'string',
+          enum: ['dev', 'base'],
+          description:
+            'dev (default) builds the :dev image; base rebuilds devockr/idsh:base first.',
+        },
       },
       additionalProperties: false,
     },
     async run(args, ctx) {
-      rejectUnknown(args, ['pr', 'sha', 'log'])
+      rejectUnknown(args, ['pr', 'sha', 'log', 'target'])
       const log = optionalLog(args)
+      const target = text(args, 'target', MAX_PATTERN_CHARS) ?? 'dev'
+      if (target !== 'dev' && target !== 'base') {
+        throw new BrokerFault('bad-argument', 'target must be dev or base')
+      }
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveBuildSource(ctx, args, deadline)
-      const { previous, failed } = await buildInto(ctx, source, deadline, log)
+      const { previous, failed } = await buildInto(ctx, source, deadline, log, target)
       return (
-        `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${source.mainSha}; previous image ${previous}` +
+        `built ${source.label} (${source.sha}) as ${target === 'base' ? BUILD_BASE_IMAGE : BUILD_IMAGE}; main ${source.mainSha}` +
+        (target === 'base' ? '' : `; previous image ${previous}`) +
         reapNote(failed)
       )
     },
@@ -2982,12 +2994,17 @@ async function buildInto(
   source: BuildSource,
   deadline: number,
   logId: string | undefined,
+  target: 'dev' | 'base' = 'dev',
 ): Promise<{ previous: string; failed: readonly string[] }> {
   const dir = await prepareBuildSource(ctx, source, deadline)
   try {
+    if (target === 'base') {
+      await buildImage(ctx, dir, deadline, logId, 'base')
+      return { previous: BUILD_BASE_IMAGE, failed: [] }
+    }
     // Recorded before the build, so the tag moving is what makes this the rollback target.
     const previous = await recordRollback(ctx)
-    await buildImage(ctx, dir, deadline, logId)
+    await buildImage(ctx, dir, deadline, logId, target)
     // Best effort: an image that cannot be removed is left for the next build, not an error, but the
     // answer says so — a silent failure would look like the bound held.
     const failed = await reapImages(ctx, previous, deadline).catch((error: unknown) => [
@@ -3185,6 +3202,7 @@ async function buildImage(
   dir: string,
   deadline: number,
   logId: string | undefined,
+  target: 'dev' | 'base' = 'dev',
 ): Promise<void> {
   // One file per build: a job follows exactly the log its own call writes.
   const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
@@ -3200,6 +3218,26 @@ async function buildImage(
   const user = uid === undefined || gid === undefined ? undefined : `${String(uid)}:${String(gid)}`
   const registry = process.env['NPM_REGISTRY'] ?? 'https://registry.npmmirror.com/'
   const cidFile = path.join(dir, 'container.cid')
+  if (target === 'base') {
+    // The base stage needs only the root surface, not a compiled tree: the dev build is what runs
+    // the container. No retention label: the dev image's prune is about the dev tag.
+    await docker(
+      ctx,
+      [
+        'build',
+        '--target',
+        'base',
+        '--tag',
+        BUILD_BASE_IMAGE,
+        '--file',
+        path.join(dir, 'Dockerfile'),
+        dir,
+      ],
+      'tail',
+      { timeoutMs: remaining(deadline), logPath },
+    )
+    return
+  }
   // The image's entrypoint is dsh itself; without --entrypoint the command would be handed to it
   // as dsh arguments and boot a second server. --user keeps the mounted tree owned by the broker's
   // uid, since --entrypoint bypasses the entrypoint's own setpriv drop. Not a Windows target: the

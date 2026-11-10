@@ -89,28 +89,28 @@ request.
 
 ## Operations (first slice)
 
-| op                | behaviour                                                                                                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                                                  |
-| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                                                           |
-| `proc.list`       | the process table: pid, parent, state, resident set and command name, biggest first                                                                                            |
-| `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route` (IPv4 and IPv6), `neigh` or `all`                                                    |
-| `net.sockets`     | the host's listening sockets and connections, read with `ss`; `what` picks `listen`, `connections` or `all` (the default)                                                      |
-| `disk.usage`      | `df -h`                                                                                                                                                                        |
-| `run`             | one declared, read-only binary with an argv parsed against its declaration (no shell), a fixed PATH, and `dryRun` answering the verdict without running; confirmation required |
-| `broker.status`   | this broker: version, pid, start time, socket, audit file and checkout                                                                                                         |
-| `broker.update`   | updates the broker where its own entry lives — pull and rebuild from `--checkout`, or install the published package under an npm prefix — then exits for its supervisor        |
-| `deploy.status`   | the deployment container: image, creation time and state                                                                                                                       |
-| `deploy.log`      | the tail of the deployment container log                                                                                                                                       |
-| `deploy.versions` | read-only: the container state and image, and the `dsh` and `gcb` versions inside it                                                                                           |
-| `deploy.build`    | builds `:dev` from a PR head or an origin branch tip, keeps the previous image for rollback, and reaps the `idsh.keep=1` images it made unnecessary                            |
-| `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                                                        |
-| `deploy.source`   | resolves a build request — branch tip and `main` sha, or `main` alone — without building; the `preview` of `deploy.build` and `deploy.main`                                    |
-| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                |
-| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                            |
-| `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                       |
-| `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                    |
-| `ops.describe`    | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table                                                          |
+| op                | behaviour                                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `log.tail`        | the last lines of `messages`, `syslog` or `kern.log`, optionally filtered by a literal string                                                                                                    |
+| `proc.read`       | `mdstat`, `loadavg`, `meminfo`, `uptime` or `vmstat`                                                                                                                                             |
+| `proc.list`       | the process table: pid, parent, state, resident set and command name, biggest first                                                                                                              |
+| `net.status`      | the host's addresses, routes and neighbours, read with `ip`; `what` picks `addr`, `route` (IPv4 and IPv6), `neigh` or `all`                                                                      |
+| `net.sockets`     | the host's listening sockets and connections, read with `ss`; `what` picks `listen`, `connections` or `all` (the default)                                                                        |
+| `disk.usage`      | `df -h`                                                                                                                                                                                          |
+| `run`             | one declared, read-only binary with an argv parsed against its declaration (no shell), a fixed PATH, and `dryRun` answering the verdict without running; confirmation required                   |
+| `broker.status`   | this broker: version, pid, start time, socket, audit file and checkout                                                                                                                           |
+| `broker.update`   | updates the broker where its own entry lives — pull and rebuild from `--checkout`, or install the published package under an npm prefix — then exits for its supervisor                          |
+| `deploy.status`   | the deployment container: image, creation time and state                                                                                                                                         |
+| `deploy.log`      | the tail of the deployment container log                                                                                                                                                         |
+| `deploy.versions` | read-only: the container state and image, and the `dsh` and `gcb` versions inside it                                                                                                             |
+| `deploy.build`    | builds `:dev` from a PR head or an origin branch tip (or `devockr/idsh:base` with `target: base`), keeps the previous image for rollback, and reaps the `idsh.keep=1` images it made unnecessary |
+| `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                                                                          |
+| `deploy.source`   | resolves a build request — branch tip and `main` sha, or `main` alone — without building; the `preview` of `deploy.build` and `deploy.main`                                                      |
+| `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                                  |
+| `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                                              |
+| `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                                         |
+| `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                                      |
+| `ops.describe`    | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table                                                                            |
 
 ### Operation notes
 
@@ -147,7 +147,9 @@ is why it answers versions rather than arbitrary paths inside the image.
 records the previous image id for `deploy.rollback`, and then removes every `idsh.keep=1` image that
 is neither the image it produced nor that recorded target. What it could not remove, could not list
 in full, could not resolve, or ran out of time for is reported and retried by the next build, so
-builds do not accumulate.
+builds do not accumulate. With `target: base` it builds `devockr/idsh:base` from the same context
+instead — no compiled tree and no rollback bookkeeping, because the base stage does not run the
+packages — and a later `target: dev` build uses that base.
 
 `deploy.source` runs the same resolution as the build — the log id and the source — and names what
 would be built. `deploy.build` and `deploy.main` use it as their `preview`, so the confirmation

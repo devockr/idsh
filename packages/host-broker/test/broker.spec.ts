@@ -2363,6 +2363,65 @@ esac
   }
 })
 
+void test('deploy.build --target base rebuilds the base image from the same source', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { sha: 'bbbbbbbb2222', target: 'base' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(
+      answer.result ?? '',
+      /^built sha bbbbbbbb2222 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:base; main aaaaaaaa1111/u,
+    )
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(docker, /build --target base --tag devockr\/idsh:base --file .*Dockerfile/u)
+    assert.doesNotMatch(docker, /idsh\.keep=1/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
 void test('deploy.build refuses an ambiguous source and a fork head', async () => {
   const host = await fakeHost()
   const gitPath = path.join(host.root, 'git')

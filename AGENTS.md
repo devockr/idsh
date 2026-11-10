@@ -342,7 +342,8 @@ Observe the running thing; do not reason from source.
 `ROADMAP.md` is the plan for the next version, and phase 1 is in progress: `packages/host-broker`
 holds the broker's first slice — the read sources (`log.tail`, `proc.read`, `proc.list`,
 `disk.usage`, `net.status`, `net.sockets`) and the deploy
-operations (`deploy.status`, `deploy.log`, `deploy.versions`, `deploy.build`,
+operations (`deploy.status`, `deploy.log`, `deploy.versions`, `deploy.build` (whose `target: base`
+rebuilds `devockr/idsh:base` from the same source),
 `deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `run`, the one operation that takes an
 argv: a declared, read-only binary, its flags and positional shape checked against the declaration,
 `dryRun` answering the verdict first — `broker.status`/`broker.update`, so the
