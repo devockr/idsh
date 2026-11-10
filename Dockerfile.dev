@@ -67,6 +67,17 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
   libxkbcommon0 libnss3 libasound2 fonts-liberation fontconfig \
   libcups2 libcairo2 libpango-1.0-0
 
+# Node 26 ships without Corepack. The dev image carries it so a checkout's `packageManager`
+# selects the tool version instead of whatever happens to be installed; the pinned pnpm is
+# prepared into COREPACK_HOME at build time, so a boot that runs pnpm before the network is up
+# does not download it. Keep the version in step with package.json's `packageManager`.
+ENV COREPACK_HOME=/opt/dsh/corepack
+ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
+RUN npm install -g corepack@0.36.0 \
+  && corepack enable \
+  && corepack prepare pnpm@12.18.0 --activate \
+  && chmod -R a+rX /opt/dsh/corepack
+
 # The same baked profile as the published image, from this checkout instead of the registry, and
 # as a `link:` rather than a copy: a deployment may mount a built checkout over
 # /opt/dsh/packages instead, and then its edits need no image build at all.
