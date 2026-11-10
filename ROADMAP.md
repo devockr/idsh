@@ -287,9 +287,8 @@ disk; a removal that fails is reported in the build answer and retried by the ne
 the guarantee for images built here. A base-only build does not sweep (it has no dev image to
 compare against), so it adds the base and leaves any earlier labelled base for the next dev build's
 sweep to retire. A target recorded as `<repo>@sha256:<manifest digest>` was not built here, carries
-no label, and the
-host's filter selects it like any other image: it does not need retention, because that reference
-can be pulled again. The pre-rollback check is what makes that safe — if the target is gone, the
+no label, and the host's filter selects it like any other image: it does not need retention, because
+that reference can be pulled again. The pre-rollback check is what makes that safe — if the target is gone, the
 loud failure becomes one `docker pull`, not a rollback that starts something else. The broker's tag
 on the recorded image is a name for the operator, not retention. If the host's cleanup cannot be
 changed, `docker save` of a locally built target into the broker's state is the alternative — under
