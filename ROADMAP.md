@@ -280,8 +280,9 @@ image carrying that label** that is neither the image it just produced, nor the 
 the base a dev build starts from. The label is how it finds what earlier deployments left behind,
 not a list it keeps: each build retires the candidates before it, and the sweep runs before the
 recreate, so a candidate whose recreate fails and rolls back stays labelled until the next build
-retires it — failures cannot accumulate past that build. The running image, the recorded target and the current base are never removed **by the
-broker**, and the host's prune keeps every image the broker built, so after a dev build's sweep at
+retires it — failures cannot accumulate past that build. The running image, the recorded target and
+the current base are never removed **by the broker**, and the host's prune keeps every image the
+broker built, so after a dev build's sweep at
 most three of those are on disk. That is the guarantee for images built here. A base-only build does
 not sweep (it has no dev image to compare against), so it adds the base and leaves any earlier
 labelled base for the next dev build's sweep to retire. A target recorded as
