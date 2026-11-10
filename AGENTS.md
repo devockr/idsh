@@ -346,8 +346,8 @@ operations (`deploy.status`, `deploy.log`, `deploy.versions`, `deploy.build`,
 `deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `run`, the one operation that takes an
 argv: a declared, read-only binary, its flags and positional shape checked against the declaration,
 `dryRun` answering the verdict first — `broker.status`/`broker.update`, so the
-broker can replace itself under its supervisor, and `gcb.update`, which pulls the credential
-broker's checkout, optionally pins and restarts the host-supervised broker to the same commit
+broker can replace itself under its supervisor, and `gcb.update`, which fetches the credential
+broker's checkout from origin and detaches at its tip, optionally pins and restarts the host-supervised broker to the same commit
 (`--gcb-host`), rebuilds and recreates only the named service (one or more compose files) — plus
 the client image when `--gcb-client-image` names one (a tag equal to the broker image is refused;
 rebuilding idsh's dev image from that client is `deploy.build` + `deploy.recreate`, not this

@@ -153,10 +153,15 @@ builds do not accumulate.
 would be built. `deploy.build` and `deploy.main` use it as their `preview`, so the confirmation
 asks about the resolved source rather than the request.
 
-`gcb.update` pulls `--gcb-checkout` with a bounded, non-interactive `git pull --ff-only` (60 s,
+`gcb.update` fetches `--gcb-checkout` from `origin` (`git fetch --prune origin
++refs/heads/main:refs/remotes/origin/main`, so a single-branch clone still gets a fresh
+`origin/main`; 60 s,
 `GIT_TERMINAL_PROMPT=0`, plus `BatchMode` when none of `GIT_SSH`, `GIT_SSH_COMMAND` or
 `core.sshCommand` is configured — a configured command is left to avoid prompts itself; the remote's
-configuration decides ssh or HTTPS, and the proxy). A dirty checkout is refused before the pull.
+configuration decides ssh or HTTPS, and the proxy) and detaches at `refs/remotes/origin/main` (fully qualified, so a local branch or tag named `origin/main` cannot win; `--no-overwrite-ignore` refuses to overwrite an ignored file the target tracks). That checkout is a
+build input, not a branch someone works on: one left on any other branch — including a deleted one —
+still updates, where `pull --ff-only` refuses a merge ref that no longer exists. A dirty checkout is
+refused before the fetch.
 
 It then builds the client image first when `--gcb-client-image` names one (a canonical reference
 equal to the broker image is refused, because the build would replace the image the service runs),
@@ -188,7 +193,7 @@ recreates only `--gcb-service` (default `gcb`) with `--no-build --pull never --w
 files, comma-separated, so a base-plus-overlay deployment is handled.
 
 `target` (`both` by default, or `container`/`host`) narrows the update to one half — the recovery
-path after a two-phase failure, without rebuilding the other. It still pulls the latest commit, so if
+path after a two-phase failure, without rebuilding the other. It still fetches the latest commit, so if
 upstream moved in between, run without `target` to converge both; naming a half that is not
 configured is an error. The operation is offered when `--gcb-checkout` is set and at least one half
 is configured.
