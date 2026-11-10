@@ -67,21 +67,20 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
   libxkbcommon0 libnss3 libasound2 fonts-liberation fontconfig \
   libcups2 libcairo2 libpango-1.0-0
 
-# Node 26 ships without Corepack. The dev image carries it so a checkout's `packageManager`
-# selects the tool version instead of whatever happens to be installed; the pinned pnpm is
-# prepared into COREPACK_HOME at build time, so a boot that runs pnpm before the network is up
-# does not download it. Keep the version in step with package.json's `packageManager`.
-#
-# The cache lives under the runtime user's home: entrypoint.sh re-points the `app` account at
-# PUID/PGID, so no owner chosen at build time can match it. The tree is left writable, which is
-# what lets that user refresh or add a version while the prepared entries stay executable.
-ENV COREPACK_HOME=/home/app/.cache/node/corepack
-ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
-RUN npm install -g corepack@0.36.0 --force --registry="$NPM_REGISTRY" \
-  && corepack enable \
-  && mkdir -p "$COREPACK_HOME" \
-  && corepack prepare pnpm@12.18.0 --activate \
-  && chmod -R a+rwX /home/app/.cache
+# Node 26 ships without Corepack. It is installed under its own prefix and only its non-pnpm
+# shims are linked, so the global `pnpm` the base image carries stays the default: a location
+# without `packageManager` gets that exact version, and pnpm 12 honours a project's
+# `packageManager` on its own. Corepack is here for `yarn`/`yarnpkg` (and `pnpx`); its cache
+# lives in the mounted state directory, so a container rebuild reuses what it has downloaded.
+# `entrypoint.sh` exports COREPACK_NPM_REGISTRY from the deployment's NPM_REGISTRY at runtime.
+ENV COREPACK_HOME=/home/app/.dsh/cache/corepack
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN --mount=type=cache,id=npm_cache,target=/root/.npm \
+  npm install -g --prefix /opt/corepack corepack@0.36.0 --registry="$NPM_REGISTRY" \
+  && ln -sf /opt/corepack/bin/corepack /usr/local/bin/corepack \
+  && ln -sf /opt/corepack/bin/yarn /usr/local/bin/yarn \
+  && ln -sf /opt/corepack/bin/yarnpkg /usr/local/bin/yarnpkg \
+  && ln -sf /opt/corepack/bin/pnpx /usr/local/bin/pnpx
 
 # The same baked profile as the published image, from this checkout instead of the registry, and
 # as a `link:` rather than a copy: a deployment may mount a built checkout over
