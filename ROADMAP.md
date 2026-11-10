@@ -290,10 +290,9 @@ sweep to retire. A target recorded as `<repo>@sha256:<manifest digest>` was not 
 no label, and the host's filter selects it like any other image: it does not need retention, because
 that reference can be pulled again. The pre-rollback check is what makes that safe — if the target
 is gone, the loud failure becomes one `docker pull`, not a rollback that starts something else. The
-broker's tag on the recorded image is a name for the operator, not retention. If the host's cleanup
-cannot be
-changed, `docker save` of a locally built target into the broker's state is the alternative — under
-the same lifetime rule, one tarball, replaced when the target moves.
+broker's tag on the recorded image is a name for the operator, not retention. If the host's
+cleanup cannot be changed, `docker save` of a locally built target into the broker's state is the
+alternative — under the same lifetime rule, one tarball, replaced when the target moves.
 
 **One deployment at a time.** The rollback target is shared mutable state, so a single-flight lock
 covers the whole transition — build, `up -d`, health wait and any rollback — and a second request
