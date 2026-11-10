@@ -108,10 +108,28 @@ request.
 | `deploy.source`   | resolves a build request — branch tip and `main` sha, or `main` alone — without building; the `preview` of `deploy.build` and `deploy.main`                                    |
 | `deploy.rollback` | retags `:dev` to the image recorded before the last build and recreates from it                                                                                                |
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                            |
+| `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                       |
 | `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                    |
 | `ops.describe`    | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table                                                          |
 
 ### Operation notes
+
+`gcb.allow` writes the configuration through gcb's own typed command — `config allow add|remove
+<host> <owner/name> --config <file>` — run from the staged tree
+(`node --conditions=development <deploy-dir>/app/packages/host/bin/gcb.js`). The write is gcb's
+atomic replace, so the daemon reloads without a restart. `<file>` is the configuration `gcb host
+status` reports for the daemon in `gcb-host.pid`. When that cannot answer, the error names which
+part failed — no pid file, a pid that does not run from this deployment, a failed `host status`,
+no entry for that pid (with the pids it does report), or a null configuration — rather than guessing
+a path. The pid is trusted only after the same command-line/working-directory check `gcb.update` uses
+before it stops that process, so a stale pid file cannot point the edit at another daemon's file.
+An entry that is not exact (`owner/name`,
+no glob or URL) is refused by that command. `--gcb-host` and `--gcb-checkout` are **broker startup options**, not arguments of this or any
+operation: a broker started with them is the one that can stage a tree, and one started without
+`--gcb-host` does not offer `gcb.allow` at all (`unknown-op`). The staged tree has to be a gcb that
+has `config allow` (gcb#103) and reports the configuration from startup (`host status`, gcb 0.7.1+);
+an older one answers with its own usage or with no configuration — run `gcb.update` (target `host`,
+or the default both) to stage the current one.
 
 `run` takes one declared binary — `ping`, `dig`, `traceroute`, `ip addr/route/neigh`, `ss`,
 `df`, `free`, `uptime` — with one declared spelling per flag and no path yet. The argv is rebuilt
@@ -135,10 +153,15 @@ builds do not accumulate.
 would be built. `deploy.build` and `deploy.main` use it as their `preview`, so the confirmation
 asks about the resolved source rather than the request.
 
-`gcb.update` pulls `--gcb-checkout` with a bounded, non-interactive `git pull --ff-only` (60 s,
+`gcb.update` fetches `--gcb-checkout` from `origin` (`git fetch --prune origin
++refs/heads/main:refs/remotes/origin/main`, so a single-branch clone still gets a fresh
+`origin/main`; 60 s,
 `GIT_TERMINAL_PROMPT=0`, plus `BatchMode` when none of `GIT_SSH`, `GIT_SSH_COMMAND` or
 `core.sshCommand` is configured — a configured command is left to avoid prompts itself; the remote's
-configuration decides ssh or HTTPS, and the proxy). A dirty checkout is refused before the pull.
+configuration decides ssh or HTTPS, and the proxy) and detaches at `refs/remotes/origin/main` (fully qualified, so a local branch or tag named `origin/main` cannot win; `--no-overwrite-ignore` refuses to overwrite an ignored file the target tracks). That checkout is a
+build input, not a branch someone works on: one left on any other branch — including a deleted one —
+still updates, where `pull --ff-only` refuses a merge ref that no longer exists. A dirty checkout is
+refused before the fetch.
 
 It then builds the client image first when `--gcb-client-image` names one (a canonical reference
 equal to the broker image is refused, because the build would replace the image the service runs),
@@ -170,7 +193,7 @@ recreates only `--gcb-service` (default `gcb`) with `--no-build --pull never --w
 files, comma-separated, so a base-plus-overlay deployment is handled.
 
 `target` (`both` by default, or `container`/`host`) narrows the update to one half — the recovery
-path after a two-phase failure, without rebuilding the other. It still pulls the latest commit, so if
+path after a two-phase failure, without rebuilding the other. It still fetches the latest commit, so if
 upstream moved in between, run without `target` to converge both; naming a half that is not
 configured is an error. The operation is offered when `--gcb-checkout` is set and at least one half
 is configured.

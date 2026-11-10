@@ -4207,9 +4207,10 @@ async function gcbRig(
       // git exits 1 for a key that is not set — the branch the operation must read as "unset".
       '  *"status --porcelain"*) if [ -n "$FAIL_STATUS" ]; then echo "status is unreadable" >&2; exit 2; fi; printf "%s" "${STATUS:-}" ;;',
       '  *"config --get core.sshCommand"*) if [ -n "$FAIL_CONFIG" ]; then echo "config is unreadable" >&2; exit 2; fi; if [ "${CORE_SSH+x}" != x ]; then exit 1; fi; printf "%s" "$CORE_SSH" ;;',
-      '  *"pull --ff-only"*) if [ -n "$FAIL_PULL" ]; then echo "no route to the remote" >&2; exit 1; fi; printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
+      '  *"fetch --prune origin"*) if [ -n "$FAIL_PULL" ]; then echo "no route to the remote" >&2; exit 1; fi; printf "ssh=%s gitdir=%s wrapper=%s\\n" "${GIT_SSH_COMMAND:-none}" "${GIT_DIR-unset}" "${GIT_SSH:-none}" >> ' +
         JSON.stringify(recorded) +
-        '; echo "Already up to date." ;;',
+        ' ;;',
+      '  *"checkout --detach --quiet --no-overwrite-ignore refs/remotes/origin/main"*) : ;;',
       '  *"rev-parse HEAD"*) printf "%s" "${SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" ;;',
       'esac',
       '',
@@ -4263,6 +4264,228 @@ async function gcbRig(
     },
   }
 }
+
+/** A live process whose command line names the deployment's staged CLI, for the ownership check. */
+function startFakeDaemon(deployDir: string): { pid: number; stop(): void } {
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)', cli], {
+    stdio: 'ignore',
+  })
+  return { pid: child.pid ?? 0, stop: () => child.kill() }
+}
+
+void test('gcb.allow edits the file the daemon reports', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const recorded = path.join(rig.host.root, 'allow.log')
+  const reported = path.join(rig.host.root, 'reported-broker.yml')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(reported, 'hosts: {}\n')
+  const daemon = startFakeDaemon(deployDir)
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(daemon.pid)}\n`)
+  await writeFile(
+    cli,
+    `const fs = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === 'host' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify([{ pid: ${String(daemon.pid)}, config: ${JSON.stringify(reported)} }]))
+} else {
+  fs.writeFileSync(${JSON.stringify(recorded)}, args.join(' '))
+}
+`,
+  )
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const argv = await readFile(recorded, 'utf8')
+    assert.ok(argv.endsWith(` --config ${reported}`), argv)
+  } finally {
+    daemon.stop()
+    await rig.close()
+  }
+})
+
+void test('gcb.allow changes one entry through the staged host CLI', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const recorded = path.join(rig.host.root, 'allow.log')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await mkdir(path.join(deployDir, 'config'), { recursive: true })
+  await writeFile(path.join(deployDir, 'config', 'broker.config.yml'), 'hosts: {}\n')
+  const daemon = startFakeDaemon(deployDir)
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(daemon.pid)}\n`)
+  await writeFile(
+    cli,
+    `const fs = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === 'host' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify([{ pid: ${String(daemon.pid)}, config: ${JSON.stringify(path.join(deployDir, 'config', 'broker.config.yml'))} }]))
+} else {
+  fs.writeFileSync(${JSON.stringify(recorded)}, args.join(' '))
+}
+`,
+  )
+  try {
+    const described = await rig.connection.request({ op: 'ops.describe', args: { protocol: 1 } })
+    const describedOp = describedTable(described.result).ops.find(op => op.name === 'gcb.allow')
+    assert.equal(describedOp?.confirm, true)
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /allowed github\.com\/un-ts\/sh-syntax/u)
+    const argv = await readFile(recorded, 'utf8')
+    assert.match(argv, /config allow add github\.com un-ts\/sh-syntax --config /u)
+    assert.match(argv, /config\/broker\.config\.yml$/u)
+  } finally {
+    daemon.stop()
+    await rig.close()
+  }
+})
+
+void test('gcb.allow is not offered without the host half', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const described = await connection.request({ op: 'ops.describe', args: { protocol: 1 } })
+    const ops = describedTable(described.result).ops
+    assert.equal(
+      ops.find(op => op.name === 'gcb.allow'),
+      undefined,
+    )
+    const answer = await connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'unknown-op')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('gcb.allow names a status that reports a null configuration', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  const daemon = startFakeDaemon(deployDir)
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(daemon.pid)}\n`)
+  await writeFile(
+    cli,
+    `process.stdout.write(JSON.stringify([{ pid: ${String(daemon.pid)}, config: null }]))\n`,
+  )
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /reports no configuration for pid/u)
+  } finally {
+    daemon.stop()
+    await rig.close()
+  }
+})
+
+void test('gcb.allow names a failed host status', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  const daemon = startFakeDaemon(deployDir)
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(daemon.pid)}\n`)
+  await writeFile(cli, 'process.stderr.write("no socket"); process.exit(1)\n')
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /gcb host status failed: .*no socket/u)
+  } finally {
+    daemon.stop()
+    await rig.close()
+  }
+})
+
+void test('gcb.allow names a pid that is not this deployment', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(cli, 'process.exit(0)\n')
+  const foreign = spawn('sh', ['-c', 'sleep 60'], { stdio: 'ignore' })
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(foreign.pid)}\n`)
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /does not run from this deployment/u)
+  } finally {
+    foreign.kill()
+    await rig.close()
+  }
+})
+
+void test('gcb.allow names a status that has no entry for the pid', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  const daemon = startFakeDaemon(deployDir)
+  await writeFile(path.join(deployDir, 'gcb-host.pid'), `${String(daemon.pid)}\n`)
+  await writeFile(
+    cli,
+    `process.stdout.write(JSON.stringify([{ pid: 1, config: '/x' }, { pid: 2, config: '/y' }]))\n`,
+  )
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'add', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    const message = JSON.stringify(answer.error)
+    assert.match(message, /has no entry for pid \d+/u)
+    assert.match(message, /it reports 1, 2/u)
+    assert.match(message, /gcb-host\.pid stale/u)
+  } finally {
+    daemon.stop()
+    await rig.close()
+  }
+})
+
+void test('gcb.allow names a staged CLI that is missing', async () => {
+  const rig = await gcbRig({ host: true })
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.allow',
+      args: { action: 'remove', repo: 'un-ts/sh-syntax' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(
+      JSON.stringify(answer.error),
+      /is not staged; start the broker with --gcb-host and --gcb-checkout/u,
+    )
+  } finally {
+    await rig.close()
+  }
+})
 
 void test('gcb.update is offered only when its three values are configured', async () => {
   const host = await fakeHost()
@@ -4362,7 +4585,11 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     )
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const recorded = await rig.calls()
-    assert.match(recorded, /git -C .*gcb pull --ff-only/u)
+    assert.match(recorded, /git -C .*gcb fetch --prune origin/u)
+    assert.match(
+      recorded,
+      /git -C .*gcb checkout --detach --quiet --no-overwrite-ignore refs\/remotes\/origin\/main/u,
+    )
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --services/u)
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --images gcb/u)
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
@@ -4469,7 +4696,7 @@ void test('gcb.update refuses a compose that has no such service', async () => {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /has no service "gcb"; it has other, third/u)
-    assert.match(answer.error?.message ?? '', /completed: pull: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main/u)
   } finally {
     await rig.close()
   }
@@ -4621,7 +4848,7 @@ void test('gcb.update refuses a service that declares a scale', async () => {
     const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
-    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main.*; image: /u)
     // Refused before either side effect, like the `deploy.replicas` form.
     const recorded = await rig.calls()
     assert.doesNotMatch(recorded, /^(?:build |compose -f .* up )/mu)
@@ -4639,7 +4866,7 @@ void test('gcb.update refuses a service that declares replicas', async () => {
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /declares 2 replicas; gcb.update expects one/u)
     // Refused before the build: the completed list ends at the image the compose names.
-    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main.*; image: /u)
     assert.doesNotMatch(answer.error?.message ?? '', /build: ok/u)
     // Refused before either side effect: no build, no recreate.
     const recorded = await rig.calls()
@@ -4656,7 +4883,7 @@ void test('gcb.update stops at the step whose build failed', async () => {
     assert.equal(answer.ok, false)
     assert.match(answer.error?.message ?? '', /gcb\.update: build failed/u)
     assert.match(answer.error?.message ?? '', /no space left on device/u)
-    assert.match(answer.error?.message ?? '', /completed: pull: .*; image: /u)
+    assert.match(answer.error?.message ?? '', /completed: fetch: origin\/main.*; image: /u)
   } finally {
     await rig.close()
   }
@@ -4971,7 +5198,8 @@ async function hostUpdateRig(): Promise<{
       '#!/bin/sh',
       `printf '%s\\n' "$*" >> "\${CALLS}"`,
       'case "$*" in',
-      '  *"pull --ff-only"*) echo "Already up to date." ;;',
+      '  *"fetch --prune origin"*) : ;;',
+      '  *"checkout --detach --quiet --no-overwrite-ignore refs/remotes/origin/main"*) : ;;',
       '  *"status --porcelain"*) printf "%s" "$STATUS" ;;',
       `  *"rev-parse HEAD"*) echo "${'b'.repeat(COMMIT_CHARS)}" ;;`,
       'esac',
@@ -5030,14 +5258,14 @@ void test('gcb.update refuses a target it does not know', async () => {
   }
 })
 
-void test('gcb.update stops at the pull when the remote cannot be reached', async () => {
+void test('gcb.update stops at the fetch when the remote cannot be reached', async () => {
   const rig = await gcbRig()
   try {
     await withEnv({ FAIL_PULL: '1' }, async () => {
       const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
       assert.equal(answer.ok, false)
       const message = JSON.stringify(answer.error)
-      assert.match(message, /pull failed/u)
+      assert.match(message, /fetch failed/u)
       assert.match(message, /no route to the remote/u)
       assert.doesNotMatch(await rig.calls(), /build --target host/u)
     })
