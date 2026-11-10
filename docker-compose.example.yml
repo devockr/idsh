@@ -59,7 +59,6 @@ services:
       - 'COREPACK_NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com/}'
       - npm_config_cache=/home/app/.dsh/cache/npm
       - pnpm_config_store_dir=/home/app/.dsh/cache/pnpm-store
-      - YARN_CACHE_FOLDER=/home/app/.dsh/cache/yarn
       - YARN_GLOBAL_FOLDER=/home/app/.dsh/cache/yarn-global
       # Space-separated authorities allowed by dsh's browser-trust fence; set it
       # to the host (or host:port) you reach this UI on, e.g. dsh.example.com.
