@@ -974,13 +974,15 @@ const ROOT_SURFACE = [
 const BUILD_COMMAND = 'pnpm install --frozen-lockfile && pnpm build'
 
 /** The image that carries node and pnpm for the build step. */
-const BUILD_CONTAINER = 'devockr/idsh:base'
+const BUILD_BASE_IMAGE = 'devockr/idsh:base'
+const BUILD_CONTAINER = BUILD_BASE_IMAGE
+/** The values `target` accepts, shared by the schema and the parser. */
+const BUILD_TARGETS = ['dev', 'base'] as const
 
 /** The label every image this broker builds carries, so a prune keeps it and the sweep finds it. */
 const KEEP_LABEL = 'idsh.keep=1'
 
 const BUILD_IMAGE = 'devockr/idsh:dev'
-const BUILD_BASE_IMAGE = 'devockr/idsh:base'
 
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u
 
@@ -2377,13 +2379,18 @@ export const OPS: readonly OpDefinition[] = [
           type: 'string',
           description: 'Checked exactly as the build checks it, and otherwise unused.',
         },
+        target: {
+          type: 'string',
+          enum: BUILD_TARGETS,
+          description: 'The build target the preview is for.',
+        },
       },
       additionalProperties: false,
     },
     // git resolves refs in a second or two, but a slow origin is a build's problem, not a read's.
     timeoutMs: BUILD_TIMEOUT_MS,
     async run(args, ctx) {
-      rejectUnknown(args, ['pr', 'sha', 'for', 'log'])
+      rejectUnknown(args, ['pr', 'sha', 'for', 'log', 'target'])
       // The whole request is checked here, not only the part this resolves: an argument the build
       // would refuse must not reach the person as a question they cannot answer usefully.
       optionalLog(args)
@@ -2399,6 +2406,16 @@ export const OPS: readonly OpDefinition[] = [
         const main = await resolveMainSource(ctx, deadline)
         return `main at ${main.sha}`
       }
+      // A base build takes no source: its root surface is main's, so a pr/sha would name an image
+      // that does not contain it. The preview says main, exactly like a deploy.main preview.
+      const target = args['target'] === undefined ? 'dev' : choice(args, 'target', BUILD_TARGETS)
+      if (target === 'base') {
+        if (args['pr'] !== undefined || args['sha'] !== undefined) {
+          throw new BrokerFault('bad-argument', 'target base builds main; do not pass pr or sha')
+        }
+        const main = await resolveMainSource(ctx, deadline)
+        return `main at ${main.sha} (base build)`
+      }
       // Anything else is `deploy.build`, which refuses a request without one of the two — the
       // preview refuses it too, so the person is never asked about a build that cannot start.
       const source = await resolveBuildSource(ctx, args, deadline)
@@ -2408,7 +2425,7 @@ export const OPS: readonly OpDefinition[] = [
   {
     name: 'deploy.build',
     summary:
-      'Build the :dev image from a PR head or the tip of an origin branch; the root files stay at main.',
+      "Build the :dev image from a PR head or origin branch tip, or rebuild main's base image; the root files stay at main.",
     confirm: true,
     preview: 'deploy.source',
     serial: true,
@@ -2430,9 +2447,9 @@ export const OPS: readonly OpDefinition[] = [
         },
         target: {
           type: 'string',
-          enum: ['dev', 'base'],
+          enum: BUILD_TARGETS,
           description:
-            'dev (default) builds the :dev image; base rebuilds devockr/idsh:base first.',
+            'dev (default) builds :dev from the source; base rebuilds devockr/idsh:base from main and takes no pr/sha.',
         },
       },
       additionalProperties: false,
@@ -2440,16 +2457,24 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, ['pr', 'sha', 'log', 'target'])
       const log = optionalLog(args)
-      const target =
-        args['target'] === undefined ? 'dev' : choice(args, 'target', ['dev', 'base'] as const)
+      const target = args['target'] === undefined ? 'dev' : choice(args, 'target', BUILD_TARGETS)
+      if (target === 'base' && (args['pr'] !== undefined || args['sha'] !== undefined)) {
+        throw new BrokerFault('bad-argument', 'target base builds main; do not pass pr or sha')
+      }
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      const source = await resolveBuildSource(ctx, args, deadline)
+      // A base build's only inputs are main's root surface; the answer names what was built rather
+      // than a source whose files are not in the image.
+      const main = target === 'base' ? await resolveMainSource(ctx, deadline) : undefined
+      const source =
+        main === undefined
+          ? await resolveBuildSource(ctx, args, deadline)
+          : { label: 'main', sha: main.sha, mainSha: main.sha }
+      const mainSha = source.mainSha
       const { previous, failed } = await buildInto(ctx, source, deadline, log, target)
-      return (
-        `built ${source.label} (${source.sha}) as ${target === 'base' ? BUILD_BASE_IMAGE : BUILD_IMAGE}; main ${source.mainSha}` +
-        (target === 'base' ? '' : `; previous image ${previous}`) +
-        reapNote(failed)
-      )
+      return target === 'base'
+        ? `built ${BUILD_BASE_IMAGE} from main ${source.sha}${reapNote(failed)}`
+        : `built ${source.label} (${source.sha}) as ${BUILD_IMAGE}; main ${mainSha}; previous image ${previous ?? 'unknown'}` +
+            reapNote(failed)
     },
   },
   {
@@ -2993,12 +3018,12 @@ async function buildInto(
   deadline: number,
   logId: string | undefined,
   target: 'dev' | 'base' = 'dev',
-): Promise<{ previous: string; failed: readonly string[] }> {
+): Promise<{ previous?: string; failed: readonly string[] }> {
   const dir = await prepareBuildSource(ctx, source, deadline)
   try {
     if (target === 'base') {
       await buildImage(ctx, dir, deadline, logId, 'base')
-      return { previous: BUILD_BASE_IMAGE, failed: [] }
+      return { failed: [] }
     }
     // Recorded before the build, so the tag moving is what makes this the rollback target.
     const previous = await recordRollback(ctx)
@@ -3140,6 +3165,12 @@ async function reapImages(
     return ['the image this build produced could not be resolved, so nothing was removed']
   }
   keep.add(built)
+  // The base is a parent of what the next dev build starts from, and it carries the keep label too:
+  // a sweep that removed it would make that build pull a tag a host prune may already have dropped.
+  const base = await imageId(ctx, BUILD_BASE_IMAGE, timeoutMs())
+  if (base !== '') {
+    keep.add(base)
+  }
   // The recorded target is an id when the image was built here, and a digest when it was pulled: a
   // digest is not on this daemon, and docker refuses to remove an image a running container uses,
   // so a failed lookup is a form this keeps as-is rather than a reason to remove it.
@@ -3218,7 +3249,8 @@ async function buildImage(
   const cidFile = path.join(dir, 'container.cid')
   if (target === 'base') {
     // The base stage needs only the root surface, not a compiled tree: the dev build is what runs
-    // the container. No retention label: the dev image's prune is about the dev tag.
+    // the container. It does carry the keep label — a host prune respects that — and the dev sweep
+    // keeps the base id explicitly, because removing it would untag :base under the next build.
     await docker(
       ctx,
       [
@@ -3227,6 +3259,10 @@ async function buildImage(
         'base',
         '--tag',
         BUILD_BASE_IMAGE,
+        '--label',
+        KEEP_LABEL,
+        '--build-arg',
+        `NPM_REGISTRY=${registry}`,
         '--file',
         path.join(dir, 'Dockerfile'),
         dir,

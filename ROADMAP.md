@@ -6,7 +6,8 @@ living inside the container.
 
 Phase 1 has started: `packages/host-broker` carries the socket, six read sources, the bounds
 and the audit log, `deploy.status`/`deploy.log` inspect the deployment container,
-`deploy.recreate` restarts it, `deploy.build` builds it from an origin-only source,
+`deploy.recreate` restarts it, `deploy.build` builds it from an origin-only source (or rebuilds
+main's base image),
 `deploy.main` builds and ships main in one call and `deploy.rollback` returns to the image
 recorded before that build — all behind an in-tool confirmation — and `packages/host-ops`
 turns that table into dsh tools. The confirmation shows what the request resolves to, not

@@ -116,8 +116,9 @@ doubt.
 
 ## Deploying
 
-Rebuilding the container is how `entrypoint.sh`, the `Dockerfile` or the profile's bundle list
-takes effect. It also kills whatever is running inside it — including an agent session (sessions
+Rebuilding the container is how the profile's bundle list takes effect. `entrypoint.sh` and the
+`Dockerfile` live in `:base`, so they need a `deploy.build` with `target: base` first (or `pnpm
+dev`, which rebuilds base and dev in one call), then a `dev` build, then the recreate. It also kills whatever is running inside it — including an agent session (sessions
 live in the state directory, so the conversation survives, the process does not).
 
 - **The broker and the plugin are two lifecycles.** The plugin ships in the image; the broker runs
@@ -343,7 +344,7 @@ Observe the running thing; do not reason from source.
 holds the broker's first slice — the read sources (`log.tail`, `proc.read`, `proc.list`,
 `disk.usage`, `net.status`, `net.sockets`) and the deploy
 operations (`deploy.status`, `deploy.log`, `deploy.versions`, `deploy.build` (whose `target: base`
-rebuilds `devockr/idsh:base` from the same source),
+rebuilds `devockr/idsh:base` from main),
 `deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `run`, the one operation that takes an
 argv: a declared, read-only binary, its flags and positional shape checked against the declaration,
 `dryRun` answering the verdict first — `broker.status`/`broker.update`, so the

@@ -2408,7 +2408,7 @@ esac
   }
 })
 
-void test('deploy.build --target base rebuilds the base image from the same source', async () => {
+void test('deploy.build --target base rebuilds the base image from main', async () => {
   const host = await fakeHost()
   const dockerLog = path.join(host.root, 'docker.log')
   const gitPath = path.join(host.root, 'git')
@@ -2451,16 +2451,18 @@ echo "$*" >> '${dockerLog}'
   try {
     const answer = await connection.request({
       op: 'deploy.build',
-      args: { sha: 'bbbbbbbb2222', target: 'base' },
+      args: { target: 'base' },
     })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
-    assert.match(
-      answer.result ?? '',
-      /^built sha bbbbbbbb2222 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:base; main aaaaaaaa1111/u,
-    )
+    assert.match(answer.result ?? '', /^built devockr\/idsh:base from main aaaaaaaa1111/u)
     const docker = await readFile(dockerLog, 'utf8')
-    assert.match(docker, /build --target base --tag devockr\/idsh:base --file .*Dockerfile/u)
-    assert.doesNotMatch(docker, /idsh\.keep=1/u)
+    assert.match(
+      docker,
+      /build --target base --tag devockr\/idsh:base --label idsh\.keep=1 --build-arg NPM_REGISTRY=\S+ --file .*Dockerfile/u,
+    )
+    // A base build neither compiles nor sweeps, and there is no rollback tag to write.
+    assert.doesNotMatch(docker, / run |image ls/u)
+    assert.equal(await readFile(path.join(host.root, 'rollback'), 'utf8').catch(() => null), null)
   } finally {
     connection.close()
     await broker.close()
