@@ -271,8 +271,8 @@ session that asked for it; the next session asks `deploy.status`.
 
 **The rollback target has to survive a prune, and nothing else should.** A locally built image
 cannot be re-pulled, and `docker image prune -a` deletes a tagged image as readily as an untagged
-one — a tag is not retention. The build labels every image it produces `idsh.keep=1`, and the host's
-cleanup carries the line that makes the label matter: `docker image prune -a --filter
+one — a tag is not retention. The build labels every image it produces `idsh.keep=1`, and the
+host's cleanup carries the line that makes the label matter: `docker image prune -a --filter
 'label!=idsh.keep=1'`. Labels are immutable and land at build time, so that label means "built by
 the broker, kept until superseded", not "this is the rollback target" — it is on every build, and
 the exemption is only bounded because the broker also deletes at every build: it removes **every
@@ -283,8 +283,8 @@ recreate, so a candidate whose recreate fails and rolls back stays labelled unti
 retires it — failures cannot accumulate past that build. The running image, the recorded target and
 the current base are never removed **by the broker**, and the host's prune keeps every image the
 broker built, so after a dev build's sweep at
-most three of those are on disk. That is the guarantee for images built here. A base-only build does
-not sweep (it has no dev image to compare against), so it adds the base and leaves any earlier
+most three of those are on disk. That is the guarantee for images built here. A base-only build
+does not sweep (it has no dev image to compare against), so it adds the base and leaves any earlier
 labelled base for the next dev build's sweep to retire. A target recorded as
 `<repo>@sha256:<manifest digest>` was not built here, carries no label, and the
 host's filter selects it like any other image: it does not need retention, because that reference
