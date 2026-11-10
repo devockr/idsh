@@ -124,9 +124,9 @@ that base rebuilt from `main`: `deploy.build` with `target: base`, then a `dev` 
 recreate. The base build is main-only, so an unmerged change there is not in it; `pnpm dev` builds
 both images from the checkout for that case, but it starts nothing — run the resulting `:dev` (or a
 recreate) to exercise the entrypoint. A recreate from those locally built images is a manual
-deployment: it is outside `deploy.rollback`'s record, which still names the broker's last build. A change in `Dockerfile`'s **published** stages (the profile
-install, including `gcb-client`) is not in `:dev` at all; it ships through the published-image
-workflow.
+deployment: it is outside `deploy.rollback`'s record, which still names the broker's last build.
+A change in `Dockerfile`'s **published** stages (the profile install, including `gcb-client`) is not
+in `:dev` at all; it ships through the published-image workflow.
 
 - **The broker and the plugin are two lifecycles.** The plugin ships in the image; the broker runs
   from the deployment's checkout on the host. The plugin reads `ops.describe` at load and again every
