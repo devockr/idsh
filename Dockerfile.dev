@@ -73,7 +73,7 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 # does not download it. Keep the version in step with package.json's `packageManager`.
 ENV COREPACK_HOME=/opt/dsh/corepack
 ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
-RUN npm install -g corepack@0.36.0 --registry="$NPM_REGISTRY" \
+RUN npm install -g corepack@0.36.0 --force --registry="$NPM_REGISTRY" \
   && corepack enable \
   && corepack prepare pnpm@12.18.0 --activate \
   && chmod -R a+rX /opt/dsh/corepack
