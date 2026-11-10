@@ -2408,6 +2408,112 @@ esac
   }
 })
 
+/** A dev-build rig whose docker lists labelled images, so the sweep's keep set is exercised. */
+async function sweepRig(base: 'missing' | 'present'): Promise<{
+  host: FakeHost
+  dockerLog: string
+  connection: Client
+  close(): Promise<void>
+}> {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *"ls-remote origin refs/pull/7/head"*)
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/pull/7/head\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const baseArm =
+    base === 'present'
+      ? `printf 'sha256:2222\\n' ;;`
+      : `echo "Error response from daemon: No such image" >&2; exit 1 ;;`
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$*" in
+  *"image ls --quiet --no-trunc --filter label=idsh.keep=1"*)
+    printf 'sha256:1111\\nsha256:2222\\nsha256:3333\\n'
+    ;;
+  *"image inspect --format {{.Id}} devockr/idsh:dev"*)
+    printf 'sha256:1111\\n'
+    ;;
+  *"image inspect --format {{.Id}} devockr/idsh:base"*)
+    ${baseArm}
+  *inspect*)
+    printf 'sha256:prev\\n'
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  return {
+    host,
+    dockerLog,
+    connection,
+    close: async () => {
+      connection.close()
+      await broker.close()
+    },
+  }
+}
+
+void test('deploy.build sweeps nothing when the base cannot be resolved', async () => {
+  const rig = await sweepRig('missing')
+  try {
+    const answer = await rig.connection.request({ op: 'deploy.build', args: { pr: 7 } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(
+      answer.result ?? '',
+      /the base image could not be resolved, so nothing was removed/u,
+    )
+    assert.doesNotMatch(await readFile(rig.dockerLog, 'utf8'), /image rm/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('deploy.build keeps the base and removes only superseded images', async () => {
+  const rig = await sweepRig('present')
+  try {
+    const answer = await rig.connection.request({ op: 'deploy.build', args: { pr: 7 } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const docker = await readFile(rig.dockerLog, 'utf8')
+    assert.match(docker, /image rm sha256:3333/u)
+    assert.doesNotMatch(docker, /image rm sha256:2222/u)
+    assert.doesNotMatch(docker, /image rm sha256:1111/u)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('deploy.build --target base rebuilds the base image from main', async () => {
   const host = await fakeHost()
   const dockerLog = path.join(host.root, 'docker.log')

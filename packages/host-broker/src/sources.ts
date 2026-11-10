@@ -3122,9 +3122,9 @@ async function recordRollback(ctx: OpContext): Promise<string> {
  * The build labels every image it produces `idsh.keep=1`, which is how the host's prune keeps them
  * and how this finds them again. A label means "built here, kept until superseded", not "this is
  * the rollback target", so the label alone is unbounded: after a build, every labelled image that
- * is neither the one the build produced nor the recorded target is retired. A successful removal is
- * what makes "at most two" true; anything it could not remove is reported, and the next build tries
- * again.
+ * is neither the one the build produced, nor the base it starts from, nor the recorded target is
+ * retired. A successful removal is what makes "at most three" true; anything it could not remove is
+ * reported, and the next build tries again.
  *
  * @returns What could not be removed, empty when the sweep finished.
  */
@@ -3165,12 +3165,15 @@ async function reapImages(
     return ['the image this build produced could not be resolved, so nothing was removed']
   }
   keep.add(built)
-  // The base is a parent of what the next dev build starts from, and it carries the keep label too:
-  // a sweep that removed it would make that build pull a tag a host prune may already have dropped.
+  // The base is a parent of what the next dev build starts from, and it carries the keep label too.
+  // A dev build cannot run its container without it, so a lookup that fails is a failed check, not
+  // an absent image: removing the labelled base on a daemon hiccup would untag :base, and the next
+  // build could not pull it.
   const base = await imageId(ctx, BUILD_BASE_IMAGE, timeoutMs())
-  if (base !== '') {
-    keep.add(base)
+  if (base === '') {
+    return ['the base image could not be resolved, so nothing was removed']
   }
+  keep.add(base)
   // The recorded target is an id when the image was built here, and a digest when it was pulled: a
   // digest is not on this daemon, and docker refuses to remove an image a running container uses,
   // so a failed lookup is a form this keeps as-is rather than a reason to remove it.
