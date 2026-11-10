@@ -72,8 +72,10 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 # without `packageManager` gets that exact version, and pnpm 12 honours a project's
 # `packageManager` on its own. Corepack is here for `yarn`/`yarnpkg` (and `pnpx`); its cache
 # lives in the mounted state directory, so a container rebuild reuses what it has downloaded.
-# `entrypoint.sh` exports COREPACK_NPM_REGISTRY from the deployment's NPM_REGISTRY at runtime.
+# The registry is an image env, so `docker exec … corepack` sees it too; entrypoint.sh exports the
+# same value from the deployment's NPM_REGISTRY, and a compose `NPM_REGISTRY` overrides both.
 ENV COREPACK_HOME=/home/app/.dsh/cache/corepack
+ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN --mount=type=cache,id=npm_cache,target=/root/.npm \
   npm install -g --prefix /opt/corepack corepack@0.36.0 --registry="$NPM_REGISTRY" \
