@@ -116,13 +116,16 @@ doubt.
 
 ## Deploying
 
-Rebuilding the container is how the profile's bundle list takes effect. A change in `Dockerfile`'s
-**base** stage (or `entrypoint.sh`) needs that base rebuilt from `main`: `deploy.build` with
-`target: base`, then a `dev` build, then the recreate. The base build is main-only, so an unmerged
-base/entrypoint change is not in it — test one with `pnpm dev` from the checkout instead (it rebuilds
-both from that tree). A change in `Dockerfile`'s **published** stages (the profile install, including
-`gcb-client`) is not in `:dev` at all; it ships through the published-image workflow. It also kills whatever is running inside it — including an agent session (sessions
+Rebuilding the container kills whatever is running inside it — including an agent session (sessions
 live in the state directory, so the conversation survives, the process does not).
+
+A change in `Dockerfile`'s **base** stage, `entrypoint.sh`, or `tools/sync-companions.mts` needs
+that base rebuilt from `main`: `deploy.build` with `target: base`, then a `dev` build, then the
+recreate. The base build is main-only, so an unmerged change there is not in it; `pnpm dev` builds
+both images from the checkout for that case, but it starts nothing — run the resulting `:dev` (or a
+recreate) to exercise the entrypoint. A change in `Dockerfile`'s **published** stages (the profile
+install, including `gcb-client`) is not in `:dev` at all; it ships through the published-image
+workflow.
 
 - **The broker and the plugin are two lifecycles.** The plugin ships in the image; the broker runs
   from the deployment's checkout on the host. The plugin reads `ops.describe` at load and again every
