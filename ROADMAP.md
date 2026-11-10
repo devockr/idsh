@@ -275,12 +275,12 @@ one — a tag is not retention. The build labels every image it produces `idsh.k
 cleanup carries the line that makes the label matter: `docker image prune -a --filter
 'label!=idsh.keep=1'`. Labels are immutable and land at build time, so that label means "built by
 the broker, kept until superseded", not "this is the rollback target" — it is on every build, and
-the exemption is only bounded because the broker also deletes: when a deployment ends, whether it
-stabilised or rolled back, it removes **every image carrying that label** that is neither running, nor
-the recorded target, nor the base a dev build starts from. The label is how it finds what earlier
-deployments left behind, not a list it keeps: a success retires the image the one before it built,
-and a failed candidate goes as soon as its rollback finishes, so repeated failures cannot accumulate
-either. The running image, the recorded target and the current base are never removed **by the
+the exemption is only bounded because the broker also deletes at every build: it removes **every
+image carrying that label** that is neither the image it just produced, nor the recorded target, nor
+the base a dev build starts from. The label is how it finds what earlier deployments left behind,
+not a list it keeps: each build retires the candidates before it, and the sweep runs before the
+recreate, so a candidate whose recreate fails and rolls back stays labelled until the next build
+retires it — failures cannot accumulate past that build. The running image, the recorded target and the current base are never removed **by the
 broker**, and the host's prune keeps every image the broker built, so after a dev build's sweep at
 most three of those are on disk. That is the guarantee for images built here. A base-only build does
 not sweep (it has no dev image to compare against), so it adds the base and leaves any earlier
