@@ -2337,7 +2337,7 @@ esac
     assert.equal(answer.ok, true)
     assert.match(
       answer.result ?? '',
-      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111/u,
+      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111[^;]*; previous image /u,
     )
     const git = await readFile(gitLog, 'utf8')
     assert.match(git, /ls-remote origin refs\/pull\/7\/head/u)
@@ -2357,6 +2357,51 @@ esac
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     // A pulled image's digest is the rollback target, not its local id.
     assert.equal(rollback, 'devockr/idsh:dev@sha256:abc\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.build rejects a target outside dev and base', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'docker'),
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { sha: 'bbbbbbbb2222', target: 'x' },
+    })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'bad-argument')
+    assert.match(answer.error?.message ?? '', /target must be one of "dev", "base"/u)
   } finally {
     connection.close()
     await broker.close()

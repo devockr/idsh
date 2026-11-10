@@ -2440,10 +2440,8 @@ export const OPS: readonly OpDefinition[] = [
     async run(args, ctx) {
       rejectUnknown(args, ['pr', 'sha', 'log', 'target'])
       const log = optionalLog(args)
-      const target = text(args, 'target', MAX_PATTERN_CHARS) ?? 'dev'
-      if (target !== 'dev' && target !== 'base') {
-        throw new BrokerFault('bad-argument', 'target must be dev or base')
-      }
+      const target =
+        args['target'] === undefined ? 'dev' : choice(args, 'target', ['dev', 'base'] as const)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveBuildSource(ctx, args, deadline)
       const { previous, failed } = await buildInto(ctx, source, deadline, log, target)
