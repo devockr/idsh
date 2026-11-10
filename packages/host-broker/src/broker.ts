@@ -8,11 +8,12 @@
  */
 import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { access, appendFile, chmod, lstat, mkdir, rm, stat, unlink } from 'node:fs/promises'
+import { access, chmod, lstat, mkdir, rm, stat, unlink } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 
 import packageJson from '../package.json' with { type: 'json' }
+import { openAppendLog } from './append-log.ts'
 import {
   AFTER_RESPONSE_DELAY_MS,
   BUILD_KEY_CHARS,
@@ -310,16 +311,22 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
       },
     })
   })
-  await listen(server, options.socketPath)
+  let bound = false
   try {
+    await listen(server, options.socketPath)
+    bound = true
     await chmod(options.socketPath, SOCKET_MODE)
   } catch (error) {
-    // The socket may be reachable to someone else; do not leave it listening behind a failure.
+    // The socket may be reachable to someone else; do not leave it listening behind a failure. Only
+    // a socket this server bound is ours to unlink — a failed listen means the file belongs to the
+    // broker already serving it.
     for (const socket of sockets) {
       socket.destroy()
     }
-    await new Promise<void>(resolve => server.close(() => resolve()))
-    await unlink(options.socketPath).catch(() => null)
+    await new Promise<void>(resolve => server.close(() => resolve())).catch(() => null)
+    if (bound) {
+      await unlink(options.socketPath).catch(() => null)
+    }
     throw error
   }
 
@@ -720,10 +727,19 @@ function boundedArgs(args: Record<string, unknown>): string {
     : `${encoded.slice(0, MAX_AUDIT_ARGS_CHARS)}…`
 }
 
-function appendAudit(file: string, record: Record<string, unknown>): Promise<void> {
-  // `appendFile` writes the whole line (looping over partial writes) and creates the file with
-  // `FILE_MODE`; the startup chmod covers a file that rotation installed.
-  return appendFile(file, `${JSON.stringify(record)}\n`, { mode: FILE_MODE })
+/** Append one audit record; a request whose record cannot be appended whole fails. */
+async function appendAudit(file: string, record: Record<string, unknown>): Promise<void> {
+  // A FIFO or socket where the audit file belongs must not hang the request that writes it: the
+  // shared open is nonblocking and bounded, and only a regular file is accepted.
+  const handle = await openAppendLog(file)
+  try {
+    // `appendFile` writes the whole record, looping over partial writes. A failed write leaves the
+    // bytes the OS accepted: the file is append-only, and truncating them is how one failed append
+    // would erase a record another broker appended in the meantime.
+    await handle.appendFile(`${JSON.stringify(record)}\n`)
+  } finally {
+    await handle.close()
+  }
 }
 
 /**

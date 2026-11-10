@@ -605,6 +605,14 @@ void test('a live socket is not taken over, and a non-socket path is refused', a
     }),
     /already listening/u,
   )
+  // The failed start must not unlink the socket the serving broker owns.
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({ op: 'broker.status', args: {} })
+    assert.equal(answer.ok, true)
+  } finally {
+    connection.close()
+  }
   await first.close()
 
   // A path that is not a socket is never replaced: another program's file is not ours to unlink.
@@ -996,6 +1004,57 @@ void test('deploy.versions names an unavailable probe and still answers', async 
     assert.match(answer.result ?? '', /^gcb: unavailable — the cause is here$/mu)
   } finally {
     connection.close()
+    await broker.close()
+  }
+})
+
+void test('a request is refused, not hung, when the audit file is a FIFO', async () => {
+  const host = await fakeHost()
+  execFileSync('mkfifo', [host.auditPath])
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const started = Date.now()
+    const answer = await connection.request({ op: 'broker.status', args: {} })
+    assert.equal(answer.ok, false)
+    assert.match(JSON.stringify(answer.error), /audit log could not be written/u)
+    assert.ok(Date.now() - started < FIFO_REFUSAL_MS)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('concurrent requests leave one whole audit line each', async () => {
+  const host = await fakeHost()
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+  })
+  const first = client(host.socketPath)
+  const second = client(host.socketPath)
+  try {
+    const [one, two] = await Promise.all([
+      first.request({ op: 'broker.status', args: {} }),
+      second.request({ op: 'broker.status', args: {} }),
+    ])
+    assert.equal(one.ok, true)
+    assert.equal(two.ok, true)
+    const lines = (await readFile(host.auditPath, 'utf8')).split('\n').filter(line => line !== '')
+    assert.equal(lines.length, 2)
+    for (const line of lines) {
+      assert.doesNotThrow(() => JSON.parse(line))
+    }
+  } finally {
+    first.close()
+    second.close()
     await broker.close()
   }
 })
