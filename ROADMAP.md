@@ -21,7 +21,7 @@ neither the one it produced, nor the base it starts from, nor the recorded targe
 dev build's sweep at most three of them stay on disk. A sweep that could not finish says so in
 the build answer — a removal that failed, a listing cut at the broker's output window, an image
 this build produced that does not resolve, or a sweep that ran out of the build's time — and the
-next build tries again.
+next dev build tries again.
 `run` is in the table with its first declarations — ping, dig, traceroute, `ip addr/route/neigh`,
 `ss`, `df`, `free`, `uptime` — each an argument table rather than code, with `dryRun` answering the
 policy verdict before anything executes; the race-safe path guard the section below describes lands

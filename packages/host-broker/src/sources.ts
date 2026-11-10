@@ -3125,7 +3125,7 @@ async function recordRollback(ctx: OpContext): Promise<string> {
  * the rollback target", so the label alone is unbounded: after a build, every labelled image that
  * is neither the one the build produced, nor the base it starts from, nor the recorded target is
  * retired. A successful removal is what makes "at most three" true; anything it could not remove is
- * reported, and the next build tries again.
+ * reported, and the next dev build tries again.
  *
  * @returns What could not be removed, empty when the sweep finished.
  */
