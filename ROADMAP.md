@@ -17,10 +17,11 @@ and rollback are serialized by one deployment lock; and `broker.update` lets the
 replace itself under a supervisor instead of a shell, while `gcb.update` does the same for
 the credential broker — its checkout, the image its compose names, and only its container. A
 build retires the labelled images it makes unnecessary — every `idsh.keep=1` image that is
-neither the one it produced nor the recorded target — so after a build at most two of them
-stay on disk. A sweep that could not finish says so in the build answer — a removal that
-failed, a listing cut at the broker's output window, an image this build produced that does
-not resolve, or a sweep that ran out of the build's time — and the next build tries again.
+neither the one it produced, nor the base it starts from, nor the recorded target — so after a
+dev build's sweep at most three of them stay on disk. A sweep that could not finish says so in
+the build answer — a removal that failed, a listing cut at the broker's output window, an image
+this build produced that does not resolve, or a sweep that ran out of the build's time — and the
+next build tries again.
 `run` is in the table with its first declarations — ping, dig, traceroute, `ip addr/route/neigh`,
 `ss`, `df`, `free`, `uptime` — each an argument table rather than code, with `dryRun` answering the
 policy verdict before anything executes; the race-safe path guard the section below describes lands
@@ -275,15 +276,16 @@ cleanup carries the line that makes the label matter: `docker image prune -a --f
 'label!=idsh.keep=1'`. Labels are immutable and land at build time, so that label means "built by
 the broker, kept until superseded", not "this is the rollback target" — it is on every build, and
 the exemption is only bounded because the broker also deletes: when a deployment ends, whether it
-stabilised or rolled back, it removes **every image carrying that label** that is neither running,
-nor the recorded target, nor the base a dev build starts from. The label is how it finds what earlier deployments left behind, not a list it
-keeps: a success retires the image the one before it built, and a failed candidate goes as soon as
-its rollback finishes, so repeated failures cannot accumulate either. The running image, the
-recorded target and the current base are never removed **by the broker**, and the host's prune keeps
-every image the broker built, so at most three of those are on disk. That is the guarantee for images
-built here. A base-only build does not sweep (it has no dev image to compare against), so it adds the
-base and leaves any earlier labelled base for the next dev build's sweep to retire. A
-target recorded as `<repo>@sha256:<manifest digest>` was not built here, carries no label, and the
+stabilised or rolled back, it removes **every image carrying that label** that is neither running, nor
+the recorded target, nor the base a dev build starts from. The label is how it finds what earlier
+deployments left behind, not a list it keeps: a success retires the image the one before it built,
+and a failed candidate goes as soon as its rollback finishes, so repeated failures cannot accumulate
+either. The running image, the recorded target and the current base are never removed **by the
+broker**, and the host's prune keeps every image the broker built, so after a dev build's sweep at
+most three of those are on disk. That is the guarantee for images built here. A base-only build does
+not sweep (it has no dev image to compare against), so it adds the base and leaves any earlier
+labelled base for the next dev build's sweep to retire. A target recorded as
+`<repo>@sha256:<manifest digest>` was not built here, carries no label, and the
 host's filter selects it like any other image: it does not need retention, because that reference
 can be pulled again. The pre-rollback check is what makes that safe — if the target is gone, the
 loud failure becomes one `docker pull`, not a rollback that starts something else. The broker's tag

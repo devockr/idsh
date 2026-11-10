@@ -145,10 +145,10 @@ is why it answers versions rather than arbitrary paths inside the image.
 
 `deploy.build` takes the six root-surface files from `main` and the rest from the requested commit,
 records the previous image id for `deploy.rollback`, and then removes every `idsh.keep=1` image that
-is neither the image it produced nor that recorded target. What it could not remove, could not list
+is neither the image it produced, nor the base the dev build starts from, nor that recorded target. What it could not remove, could not list
 in full, could not resolve, or ran out of time for is reported and retried by the next build, so
-builds do not accumulate. With `target: base` it builds `devockr/idsh:base` instead. That build takes **no `pr`/`sha`** and
-answers `built devockr/idsh:base from main <sha>`: the root surface (including `Dockerfile` and
+builds do not accumulate. With `target: base` it builds `devockr/idsh:base` instead. That build takes
+**no `pr`/`sha`** and answers `built devockr/idsh:base from main <sha>`: the root surface (including `Dockerfile` and
 `entrypoint.sh`) is main's either way, and the base stage reads nothing else, so attributing it to a
 PR head would claim an image that does not contain that head. No compiled tree and no rollback
 bookkeeping — the base stage does not run the packages. It carries the `idsh.keep=1` label so a host
