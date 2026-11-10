@@ -6,7 +6,8 @@ living inside the container.
 
 Phase 1 has started: `packages/host-broker` carries the socket, six read sources, the bounds
 and the audit log, `deploy.status`/`deploy.log` inspect the deployment container,
-`deploy.recreate` restarts it, `deploy.build` builds it from an origin-only source,
+`deploy.recreate` restarts it, `deploy.build` builds it from an origin-only source (or rebuilds
+main's base image),
 `deploy.main` builds and ships main in one call and `deploy.rollback` returns to the image
 recorded before that build — all behind an in-tool confirmation — and `packages/host-ops`
 turns that table into dsh tools. The confirmation shows what the request resolves to, not
@@ -16,10 +17,11 @@ and rollback are serialized by one deployment lock; and `broker.update` lets the
 replace itself under a supervisor instead of a shell, while `gcb.update` does the same for
 the credential broker — its checkout, the image its compose names, and only its container. A
 build retires the labelled images it makes unnecessary — every `idsh.keep=1` image that is
-neither the one it produced nor the recorded target — so after a build at most two of them
-stay on disk. A sweep that could not finish says so in the build answer — a removal that
-failed, a listing cut at the broker's output window, an image this build produced that does
-not resolve, or a sweep that ran out of the build's time — and the next build tries again.
+neither the one it produced, nor the base it starts from, nor the recorded target — so after a
+dev build's sweep at most three of them stay on disk. A sweep that could not finish says so in
+the build answer — a removal that failed, a listing cut at the broker's output window, an image
+this build produced that does not resolve, or a sweep that ran out of the build's time — and the
+next dev build tries again.
 `run` is in the table with its first declarations — ping, dig, traceroute, `ip addr/route/neigh`,
 `ss`, `df`, `free`, `uptime` — each an argument table rather than code, with `dryRun` answering the
 policy verdict before anything executes; the race-safe path guard the section below describes lands
@@ -194,14 +196,15 @@ run anything" has no safe version, and the tiers are the honest decomposition of
 Removing the container's SSH keys removes the only way a phone can ask for a deployment. The
 channel has to carry deployment before the keys can go.
 
-| op                                 | source                                           | purpose                       |
-| ---------------------------------- | ------------------------------------------------ | ----------------------------- |
-| `deploy.build({pr})`               | the PR head, on the remote, from this repository | verify an unmerged change     |
-| `deploy.build({sha})`              | the tip of a branch on the remote                | verify a pushed branch        |
-| `deploy.main()`                    | the main branch                                  | ship                          |
-| `deploy.recreate()`                | no build; the current image                      | profile-only changes          |
-| `deploy.rollback()`                | the previous image                               | a deploy that will not boot   |
-| `deploy.status()` / `deploy.log()` | —                                                | what is running, from a phone |
+| op                                 | source                                           | purpose                                           |
+| ---------------------------------- | ------------------------------------------------ | ------------------------------------------------- |
+| `deploy.build({pr})`               | the PR head, on the remote, from this repository | verify an unmerged change                         |
+| `deploy.build({sha})`              | the tip of a branch on the remote                | verify a pushed branch                            |
+| `deploy.build({target: 'base'})`   | main's root surface                              | rebuild `:base` after a base or entrypoint change |
+| `deploy.main()`                    | the main branch                                  | ship                                              |
+| `deploy.recreate()`                | no build; the current image                      | profile-only changes                              |
+| `deploy.rollback()`                | the previous image                               | a deploy that will not boot                       |
+| `deploy.status()` / `deploy.log()` | —                                                | what is running, from a phone                     |
 
 **Source rule: deploy only code that exists on the remote.** The container can write the
 checkout, so a working-tree path would mean deploying whatever the agent has just typed. A
@@ -268,24 +271,28 @@ session that asked for it; the next session asks `deploy.status`.
 
 **The rollback target has to survive a prune, and nothing else should.** A locally built image
 cannot be re-pulled, and `docker image prune -a` deletes a tagged image as readily as an untagged
-one — a tag is not retention. The build labels every image it produces `idsh.keep=1`, and the host's
-cleanup carries the line that makes the label matter: `docker image prune -a --filter
+one — a tag is not retention. The build labels every image it produces `idsh.keep=1`, and the
+host's cleanup carries the line that makes the label matter: `docker image prune -a --filter
 'label!=idsh.keep=1'`. Labels are immutable and land at build time, so that label means "built by
 the broker, kept until superseded", not "this is the rollback target" — it is on every build, and
-the exemption is only bounded because the broker also deletes: when a deployment ends, whether it
-stabilised or rolled back, it removes **every image carrying that label** that is neither running nor
-the recorded target. The label is how it finds what earlier deployments left behind, not a list it
-keeps: a success retires the image the one before it built, and a failed candidate goes as soon as
-its rollback finishes, so repeated failures cannot accumulate either. The running image and the
-recorded target are never removed **by the broker**, and the host's prune keeps every image the
-broker built, so at most two of those are on disk. That is the guarantee for images built here. A
-target recorded as `<repo>@sha256:<manifest digest>` was not built here, carries no label, and the
-host's filter selects it like any other image: it does not need retention, because that reference
-can be pulled again. The pre-rollback check is what makes that safe — if the target is gone, the
-loud failure becomes one `docker pull`, not a rollback that starts something else. The broker's tag
-on the recorded image is a name for the operator, not retention. If the host's cleanup cannot be
-changed, `docker save` of a locally built target into the broker's state is the alternative — under
-the same lifetime rule, one tarball, replaced when the target moves.
+the exemption is only bounded because the broker also deletes at every dev build: it removes **every
+image carrying that label** that is neither the image it just produced, nor the recorded target, nor
+the base a dev build starts from. The label is how it finds what earlier deployments left behind,
+not a list it keeps: each dev build retires the candidates before it, and the sweep runs before the
+recreate, so a candidate whose recreate fails and rolls back stays labelled until the next dev build
+retires it — failures cannot accumulate past that build. The image the build produced, the
+recorded target and the current base are never removed **by the broker**, and the host's prune keeps
+every image the broker built, so after a successful dev build's sweep at most three of those are on
+disk; a removal that fails is reported in the build answer and retried by the next sweep. That is
+the guarantee for images built here. A base-only build does not sweep (it has no dev image to
+compare against), so it adds the base and leaves any earlier labelled base for the next dev build's
+sweep to retire. A target recorded as `<repo>@sha256:<manifest digest>` was not built here, carries
+no label, and the host's filter selects it like any other image: it does not need retention, because
+that reference can be pulled again. The pre-rollback check is what makes that safe — if the target
+is gone, the loud failure becomes one `docker pull`, not a rollback that starts something else. The
+broker's tag on the recorded image is a name for the operator, not retention. If the host's
+cleanup cannot be changed, `docker save` of a locally built target into the broker's state is the
+alternative — under the same lifetime rule, one tarball, replaced when the target moves.
 
 **One deployment at a time.** The rollback target is shared mutable state, so a single-flight lock
 covers the whole transition — build, `up -d`, health wait and any rollback — and a second request

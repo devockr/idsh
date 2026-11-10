@@ -2337,7 +2337,7 @@ esac
     assert.equal(answer.ok, true)
     assert.match(
       answer.result ?? '',
-      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111/u,
+      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111[^;]*; previous image /u,
     )
     const git = await readFile(gitLog, 'utf8')
     assert.match(git, /ls-remote origin refs\/pull\/7\/head/u)
@@ -2357,6 +2357,218 @@ esac
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     // A pulled image's digest is the rollback target, not its local id.
     assert.equal(rollback, 'devockr/idsh:dev@sha256:abc\n')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('deploy.build rejects a target outside dev and base', async () => {
+  const host = await fakeHost()
+  const gitPath = path.join(host.root, 'git')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath: path.join(host.root, 'docker'),
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { sha: 'bbbbbbbb2222', target: 'x' },
+    })
+    assert.equal(answer.ok, false)
+    assert.equal(answer.error?.code, 'bad-argument')
+    assert.match(answer.error?.message ?? '', /target must be one of "dev", "base"/u)
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+/** A dev-build rig whose docker lists labelled images, so the sweep's keep set is exercised. */
+async function sweepRig(base: 'missing' | 'present'): Promise<{
+  host: FakeHost
+  dockerLog: string
+  connection: Client
+  close(): Promise<void>
+}> {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *"ls-remote origin refs/pull/7/head"*)
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/pull/7/head\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const baseArm =
+    base === 'present'
+      ? `printf 'sha256:2222\\n' ;;`
+      : `echo "Error response from daemon: No such image" >&2; exit 1 ;;`
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+case "$*" in
+  *"image ls --quiet --no-trunc --filter label=idsh.keep=1"*)
+    printf 'sha256:1111\\nsha256:2222\\nsha256:3333\\n'
+    ;;
+  *"image inspect --format {{.Id}} devockr/idsh:dev"*)
+    printf 'sha256:1111\\n'
+    ;;
+  *"image inspect --format {{.Id}} devockr/idsh:base"*)
+    ${baseArm}
+  *inspect*)
+    printf 'sha256:prev\\n'
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  return {
+    host,
+    dockerLog,
+    connection,
+    close: async () => {
+      connection.close()
+      await broker.close()
+    },
+  }
+}
+
+void test('deploy.build sweeps nothing when the base cannot be resolved', async () => {
+  const rig = await sweepRig('missing')
+  try {
+    const answer = await rig.connection.request({ op: 'deploy.build', args: { pr: 7 } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(
+      answer.result ?? '',
+      /the base image could not be resolved, so nothing was removed/u,
+    )
+    assert.doesNotMatch(await readFile(rig.dockerLog, 'utf8'), /image rm/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('deploy.build keeps the base and removes only superseded images', async () => {
+  const rig = await sweepRig('present')
+  try {
+    const answer = await rig.connection.request({ op: 'deploy.build', args: { pr: 7 } })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const docker = await readFile(rig.dockerLog, 'utf8')
+    assert.match(docker, /image rm sha256:3333/u)
+    assert.doesNotMatch(docker, /image rm sha256:2222/u)
+    assert.doesNotMatch(docker, /image rm sha256:1111/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('deploy.build --target base rebuilds the base image from main', async () => {
+  const host = await fakeHost()
+  const dockerLog = path.join(host.root, 'docker.log')
+  const gitPath = path.join(host.root, 'git')
+  const dockerPath = path.join(host.root, 'docker')
+  await writeFile(
+    gitPath,
+    `#!/bin/sh
+case "$*" in
+  *"ls-remote origin refs/heads/*"*)
+    printf 'aaaaaaaa11111111111111111111111111111111 refs/heads/main\\n'
+    printf 'bbbbbbbb22222222222222222222222222222222 refs/heads/feat\\n'
+    ;;
+  *" clone "*)
+    for last; do :; done
+    mkdir -p "$last"
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  )
+  await writeFile(
+    dockerPath,
+    `#!/bin/sh
+echo "$*" >> '${dockerLog}'
+`,
+    { mode: 0o755 },
+  )
+  const checkout = path.join(host.root, 'checkout')
+  await mkdir(checkout)
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+    gitPath,
+    checkout,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'deploy.build',
+      args: { target: 'base' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^built devockr\/idsh:base from main aaaaaaaa1111/u)
+    const docker = await readFile(dockerLog, 'utf8')
+    assert.match(
+      docker,
+      /build --target base --tag devockr\/idsh:base --label idsh\.keep=1 --build-arg NPM_REGISTRY=\S+ --file .*Dockerfile/u,
+    )
+    // A base build neither compiles nor sweeps, and there is no rollback tag to write.
+    assert.doesNotMatch(docker, / run |image ls/u)
+    assert.equal(await readFile(path.join(host.root, 'rollback'), 'utf8').catch(() => null), null)
   } finally {
     connection.close()
     await broker.close()
