@@ -4564,6 +4564,10 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
     const recorded = await rig.calls()
     assert.match(recorded, /git -C .*gcb fetch --prune origin/u)
+    assert.match(
+      recorded,
+      /git -C .*gcb checkout --detach --quiet --no-overwrite-ignore refs\/remotes\/origin\/main/u,
+    )
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --services/u)
     assert.match(recorded, /compose -f .*gcb-compose-0\.yml config --images gcb/u)
     assert.match(recorded, /build --target host -t code-vaults\/gcb-host:dev \./u)
