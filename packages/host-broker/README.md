@@ -158,7 +158,7 @@ asks about the resolved source rather than the request.
 `origin/main`; 60 s,
 `GIT_TERMINAL_PROMPT=0`, plus `BatchMode` when none of `GIT_SSH`, `GIT_SSH_COMMAND` or
 `core.sshCommand` is configured — a configured command is left to avoid prompts itself; the remote's
-configuration decides ssh or HTTPS, and the proxy) and detaches at `refs/remotes/origin/main` (fully qualified, so a local branch or tag named `origin/main` cannot win). That checkout is a
+configuration decides ssh or HTTPS, and the proxy) and detaches at `refs/remotes/origin/main` (fully qualified, so a local branch or tag named `origin/main` cannot win; `--no-overwrite-ignore` refuses to overwrite an ignored file the target tracks). That checkout is a
 build input, not a branch someone works on: one left on any other branch — including a deleted one —
 still updates, where `pull --ff-only` refuses a merge ref that no longer exists. A dirty checkout is
 refused before the fetch.

@@ -1826,7 +1826,7 @@ async function updateBroker(
   await step('checkout', () =>
     git(
       ctx,
-      ['checkout', '--detach', '--quiet', 'refs/remotes/origin/main'],
+      ['checkout', '--detach', '--quiet', '--no-overwrite-ignore', 'refs/remotes/origin/main'],
       { stdoutOnly: true, env: pullEnv },
       checkout,
     ),
