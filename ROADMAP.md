@@ -275,12 +275,14 @@ cleanup carries the line that makes the label matter: `docker image prune -a --f
 'label!=idsh.keep=1'`. Labels are immutable and land at build time, so that label means "built by
 the broker, kept until superseded", not "this is the rollback target" — it is on every build, and
 the exemption is only bounded because the broker also deletes: when a deployment ends, whether it
-stabilised or rolled back, it removes **every image carrying that label** that is neither running nor
-the recorded target. The label is how it finds what earlier deployments left behind, not a list it
+stabilised or rolled back, it removes **every image carrying that label** that is neither running,
+nor the recorded target, nor the base a dev build starts from. The label is how it finds what earlier deployments left behind, not a list it
 keeps: a success retires the image the one before it built, and a failed candidate goes as soon as
-its rollback finishes, so repeated failures cannot accumulate either. The running image and the
-recorded target are never removed **by the broker**, and the host's prune keeps every image the
-broker built, so at most two of those are on disk. That is the guarantee for images built here. A
+its rollback finishes, so repeated failures cannot accumulate either. The running image, the
+recorded target and the current base are never removed **by the broker**, and the host's prune keeps
+every image the broker built, so at most three of those are on disk. That is the guarantee for images
+built here. A base-only build does not sweep (it has no dev image to compare against), so it adds the
+base and leaves any earlier labelled base for the next dev build's sweep to retire. A
 target recorded as `<repo>@sha256:<manifest digest>` was not built here, carries no label, and the
 host's filter selects it like any other image: it does not need retention, because that reference
 can be pulled again. The pre-rollback check is what makes that safe — if the target is gone, the
