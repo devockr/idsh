@@ -282,9 +282,9 @@ not a list it keeps: each dev build retires the candidates before it, and the sw
 recreate, so a candidate whose recreate fails and rolls back stays labelled until the next dev build
 retires it — failures cannot accumulate past that build. The image the build produced, the
 recorded target and the current base are never removed **by the broker**, and the host's prune keeps
-every image the broker built, so after a dev build's sweep at
-most three of those are on disk. That is the guarantee for images built here. A base-only build
-does not sweep (it has no dev image to compare against), so it adds the base and leaves any earlier
+every image the broker built, so after a dev build's sweep at most three of those are on disk. That
+is the guarantee for images built here. A base-only build does not sweep (it has no dev image to
+compare against), so it adds the base and leaves any earlier
 labelled base for the next dev build's sweep to retire. A target recorded as
 `<repo>@sha256:<manifest digest>` was not built here, carries no label, and the
 host's filter selects it like any other image: it does not need retention, because that reference
