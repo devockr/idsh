@@ -53,6 +53,13 @@ services:
       # it; NPM_CONFIG_REGISTRY / YARN_NPM_REGISTRY_SERVER are not read, since as
       # environment variables they would outrank a project's own config.
       - NPM_REGISTRY
+      # Package-manager caches live in the mounted state directory, so a container rebuild reuses
+      # what they downloaded. Corepack's default-version lookup reads its own variable; a compose
+      # `NPM_REGISTRY` would not reach a `docker exec` without this line.
+      - 'COREPACK_NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com/}'
+      - npm_config_cache=/home/app/.dsh/cache/npm
+      - pnpm_config_store_dir=/home/app/.dsh/cache/pnpm-store
+      - YARN_CACHE_FOLDER=/home/app/.dsh/cache/yarn
       # Space-separated authorities allowed by dsh's browser-trust fence; set it
       # to the host (or host:port) you reach this UI on, e.g. dsh.example.com.
       - DSH_TRUSTED_HOSTS
