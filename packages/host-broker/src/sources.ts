@@ -2100,10 +2100,10 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
     // A log write must not become an unhandled rejection: losing the line is worse than losing
     // the process, and the code is also on the broker's stderr.
     child.stdout.on('data', (chunk: Buffer) => {
-      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => {})
+      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => undefined)
     })
     child.stderr.on('data', (chunk: Buffer) => {
-      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => {})
+      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => undefined)
     })
     const timer = setTimeout(() => {
       child.kill('SIGTERM')

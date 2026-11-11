@@ -101,7 +101,8 @@ export const RECREATE_POLL_MS = 2_000
  * broker that silently keeps serving the previous commit.
  */
 /** How long the person has to finish the device flow; GitHub's code lives 15 minutes. */
-export const AUTHORIZE_TIMEOUT_MS = 16 * 60_000
+/** 16 minutes, so the person has the device flow's 15-minute window plus a margin. */
+export const AUTHORIZE_TIMEOUT_MS = 960_000
 
 export const GCB_HOST_WAIT_MS = 300_000
 
