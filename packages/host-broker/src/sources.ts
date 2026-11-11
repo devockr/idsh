@@ -2059,7 +2059,6 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
     throw new BrokerFault('unavailable', 'gcb.authorize: the request was cancelled')
   }
   const target = path.join(deployDir, 'user.refresh')
-  let failure: Error | undefined
   try {
     await runFixed(
       ctx,
@@ -2079,13 +2078,10 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   } catch (error) {
     // Keep the runner's code (a timeout is not "unavailable") and point at the log, so a
     // deployment without the job registry still knows where the device-flow code went.
-    failure = new BrokerFault(
+    throw new BrokerFault(
       error instanceof BrokerFault ? error.code : 'unavailable',
       `gcb.authorize: ${messageOf(error)}; see ${logPath}`,
     )
-  }
-  if (failure !== undefined) {
-    throw failure
   }
   return `authorized the credential broker; the device-flow code is in ${logPath}`
 }
