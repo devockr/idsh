@@ -111,7 +111,7 @@ request.
 | `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                                                                                        |
 | `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                                                                                     |
 
-| `gcb.authorize` | runs `gcb authorize --broker-container` on the host while the sidecar keeps serving, then swaps the token in under a short stop; the device-flow code and swap are in the job log; confirmation required |
+| `gcb.authorize` | runs `gcb authorize --broker-container` on the host and streams the device-flow code into a followable job log; confirmation required. The sidecar must be stopped/restarted by the operator until gcb locks `user.refresh` (gcb#143) |
 | `ops.describe` | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table |
 
 ### Operation notes

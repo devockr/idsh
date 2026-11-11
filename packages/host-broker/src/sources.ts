@@ -38,8 +38,6 @@ import {
   GCB_HOST_POLL_MS,
   GCB_HOST_WAIT_MS,
   AUTHORIZE_TIMEOUT_MS,
-  AUTHORIZE_COMPOSE_STEPS,
-  AUTHORIZE_QUERY_STEPS,
   GCB_PULL_TIMEOUT_MS,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
@@ -2004,14 +2002,6 @@ async function updateBroker(
  * configuration, where the sidecar's mount already looks for it.
  */
 async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promise<string> {
-  const composeFiles = ctx.gcbCompose
-  const repo = ctx.gcbProbeRepo
-  if (composeFiles === undefined || repo === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'gcb.authorize needs the broker container: start the broker with --gcb-compose and --gcb-probe-repo',
-    )
-  }
   const deployDir = await hostDeployDir(ctx, 'gcb.authorize')
   const config = path.join(deployDir, 'config', 'broker.config.yml')
   const configured = await stat(config).catch(() => null)
@@ -2037,152 +2027,14 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   const log = await openAppendLog(logPath)
   try {
     await log.chmod(FILE_MODE)
-    await log.write('authorize: starting the device flow; the sidecar stays up\n')
+    await log.write('authorize: starting the device flow\n')
   } finally {
     await log.close()
   }
-  const note = (line: string): Promise<void> =>
-    appendFile(logPath, `${line}\n`, { mode: FILE_MODE }).then(
-      () => undefined,
-      () => undefined,
-    )
-  const service = ctx.gcbService
-  // The compose files are the credential broker's, in its checkout — the same working directory
-  // gcb.update runs them from.
-  const cwd = ctx.gcbCheckout
-  if (cwd === undefined) {
-    throw new BrokerFault(
-      'unavailable',
-      'gcb.authorize: no credential-broker checkout to run compose from; start the broker with --gcb-checkout',
-    )
-  }
-  // The swap below must not inherit the aborted signal that stopped the request: a cancelled
-  // device flow still has to leave the token and the sidecar as they were.
-  const durable: OpContext = { ...ctx, signal: undefined }
-  const gid = process.getgid?.()
-  const composeEnv: NodeJS.ProcessEnv = {
-    ...(uid === undefined ? {} : { UID: String(uid) }),
-    ...(gid === undefined ? {} : { GID: String(gid) }),
-  }
-  const composeArgs = ['compose', ...composeFiles.flatMap(file => ['-f', file])]
-  const compose = (args: string[]): Promise<string> =>
-    docker(durable, [...composeArgs, ...args], 'head', {
-      cwd,
-      stdoutOnly: true,
-      env: composeEnv,
-      timeoutMs: COMPOSE_TIMEOUT_MS,
-    })
   const target = path.join(deployDir, 'user.refresh')
-  // The flow can take fifteen minutes, and stopping the sidecar for all of it would take git push
-  // down with it. The token lands in a staging file first and is swapped in under a stop measured
-  // in seconds; the sidecar is not touched while a person is at the browser.
-  const staging = path.join(deployDir, 'user.refresh.staged')
-  // A crash between the two renames leaves the live path absent and the previous token here.
-  const backup = path.join(deployDir, 'user.refresh.previous')
-  // What the sidecar was doing when the swap began, so a later run can finish the recovery.
-  const recovery = path.join(deployDir, 'user.refresh.swap.json')
-  let wasRunning = false
-  let restarted = false
   let failure: Error | undefined
   const aborted = (): boolean => ctx.signal?.aborted === true
   try {
-    // A leftover staging token from an interrupted run is never mounted; remove it before reuse.
-    await rm(staging, { force: true })
-    // Durable recovery for a run that died between moving the old token aside and installing the
-    // new one: put the old token back, and bring back a sidecar that was stopped for the swap.
-    const recoverySource = await readFile(recovery, 'utf8').catch(() => null)
-    let recoveryState: { running?: boolean } | undefined
-    try {
-      recoveryState =
-        recoverySource === null ? undefined : (JSON.parse(recoverySource) as { running?: boolean })
-    } catch {
-      recoveryState = undefined
-    }
-    const ensureRunning = async (): Promise<void> => {
-      const runningId = (await compose(['ps', '-q', service])).trim().split('\n')[0] ?? ''
-      let running = false
-      if (runningId !== '') {
-        running =
-          (
-            await docker(
-              durable,
-              ['inspect', '--format', '{{.State.Running}}', runningId],
-              'head',
-              {
-                stdoutOnly: true,
-                timeoutMs: GCB_QUERY_TIMEOUT_MS,
-              },
-            )
-          ).trim() === 'true'
-      }
-      if (!running) {
-        await compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service])
-        await note(`authorize: ${service} restarted by recovery`)
-      }
-    }
-    const interrupted = await stat(backup).catch(() => null)
-    if (recoveryState !== undefined) {
-      if (interrupted !== null) {
-        const live = await stat(target).catch(() => null)
-        if (live === null) {
-          await rename(backup, target)
-          await note('authorize: restored the previous token left by an interrupted swap')
-        } else {
-          await rm(backup, { force: true })
-        }
-      }
-      // The record is the durable statement of what the sidecar was doing: finish that state even
-      // when the interruption left no backup (the stop happened, the swap did not).
-      if (recoveryState.running === true) {
-        await ensureRunning()
-      }
-      await rm(recovery, { force: true })
-    } else if (interrupted !== null) {
-      const live = await stat(target).catch(() => null)
-      if (live === null) {
-        await rename(backup, target)
-        await note('authorize: restored the previous token left by an interrupted swap')
-        await ensureRunning()
-      } else {
-        await rm(backup, { force: true })
-      }
-    }
-    // An app-only deployment has no person-token mount; authorize would write a file the sidecar
-    // never reads and still report success.
-    const containerId = (await compose(['ps', '-aq', service])).trim().split('\n')[0] ?? ''
-    if (containerId === '') {
-      throw new BrokerFault(
-        'unavailable',
-        `gcb.authorize: ${service} has no container; start it once before authorizing`,
-      )
-    }
-    const mountsSource = await docker(
-      durable,
-      ['inspect', '--format', '{{json .Mounts}}', containerId],
-      'head',
-      { stdoutOnly: true, timeoutMs: GCB_QUERY_TIMEOUT_MS },
-    )
-    let mounts: unknown
-    try {
-      mounts = JSON.parse(mountsSource)
-    } catch {
-      mounts = undefined
-    }
-    const mounted =
-      Array.isArray(mounts) &&
-      mounts.some(mount => {
-        if (typeof mount !== 'object' || mount === null) {
-          return false
-        }
-        const source = (mount as { Source?: unknown }).Source
-        return typeof source === 'string' && path.resolve(source) === path.resolve(target)
-      })
-    if (!mounted) {
-      throw new BrokerFault(
-        'unavailable',
-        `gcb.authorize: ${service} does not mount ${target}; an app-only deployment has no person token to replace`,
-      )
-    }
     const child = spawn(
       process.execPath,
       [
@@ -2193,11 +2045,11 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
         '--config',
         config,
         '--to',
-        staging,
+        target,
       ],
       {
         cwd: deployDir,
-        env: { ...process.env, ...composeEnv },
+        env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     )
@@ -2234,129 +2086,16 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
         `gcb.authorize: gcb authorize exited with ${String(exit.code ?? exit.signal)}; see ${logPath}`,
       )
     }
-    if (failure === undefined) {
-      const runningId = (await compose(['ps', '-q', service])).trim().split('\n')[0] ?? ''
-      if (runningId !== '') {
-        wasRunning =
-          (
-            await docker(
-              durable,
-              ['inspect', '--format', '{{.State.Running}}', runningId],
-              'head',
-              {
-                stdoutOnly: true,
-                timeoutMs: GCB_QUERY_TIMEOUT_MS,
-              },
-            )
-          ).trim() === 'true'
-      }
-      await writeFile(recovery, JSON.stringify({ running: wasRunning }), { mode: FILE_MODE })
-      if (wasRunning) {
-        await compose(['stop', service])
-      }
-      let backedUp = false
-      try {
-        // Keep the token the sidecar has now until the new one has started and probed.
-        await rm(backup, { force: true })
-        const previous = await stat(target).catch(() => null)
-        if (previous?.isFile() === true) {
-          await rename(target, backup)
-          backedUp = true
-        }
-        await rename(staging, target)
-        await note(`authorize: token replaced in ${target}`)
-        if (wasRunning) {
-          await compose([
-            'up',
-            '-d',
-            '--no-deps',
-            '--no-build',
-            '--pull',
-            'never',
-            '--wait',
-            service,
-          ])
-          restarted = true
-          await note(`authorize: ${service} restarted`)
-          const answer = await docker(
-            durable,
-            ['exec', ctx.container, 'gcb', 'probe', '--repo', repo],
-            'head',
-            { timeoutMs: PROBE_TIMEOUT_MS },
-          )
-          await note(`authorize: probe: ${answer.trim()}`)
-        }
-        if (backedUp) {
-          await rm(backup, { force: true }).catch(() => undefined)
-          backedUp = false
-        }
-        await rm(recovery, { force: true }).catch(() => undefined)
-      } catch (error) {
-        if (backedUp) {
-          // The new token may already have been served: stop before the rename so the sidecar
-          // cannot keep using it while the previous one is put back.
-          if (wasRunning) {
-            // Idempotent when it is already down, and it settles a restart that failed midway.
-            await compose(['stop', service]).catch(() => undefined)
-            restarted = false
-          }
-          try {
-            await rm(target, { force: true })
-            await rename(backup, target)
-            backedUp = false
-            await note('authorize: the previous token was restored')
-          } catch (restoreError) {
-            await note(
-              `authorize: the previous token could not be restored; it is kept at ${backup}: ${messageOf(restoreError)}`,
-            )
-          }
-        }
-        const kept = backedUp ? `; the previous token is kept at ${backup}` : ''
-        const message = `gcb.authorize: the token could not be installed: ${messageOf(error)}${kept}`
-        await note(`authorize: ${message}`)
-        failure =
-          failure === undefined
-            ? new BrokerFault('unavailable', message)
-            : new BrokerFault('unavailable', `${messageOf(failure)}; ${message}`)
-        if (wasRunning && !restarted) {
-          try {
-            await compose([
-              'up',
-              '-d',
-              '--no-deps',
-              '--no-build',
-              '--pull',
-              'never',
-              '--wait',
-              service,
-            ])
-            restarted = true
-            await note(`authorize: ${service} restarted after the failed swap`)
-          } catch (restartError) {
-            const restart = `gcb.authorize: the sidecar did not come back: ${messageOf(restartError)}`
-            await note(`authorize: ${restart}`)
-            failure = new BrokerFault('unavailable', `${messageOf(failure)}; ${restart}`)
-          }
-        }
-        if (!backedUp) {
-          await rm(recovery, { force: true }).catch(() => undefined)
-        }
-      }
-    }
   } catch (error) {
     failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
-  } finally {
-    // After a successful swap the staging name is gone; otherwise this removes a token that was
-    // never mounted.
-    await rm(staging, { force: true }).catch(() => undefined)
   }
   if (failure !== undefined) {
     throw failure instanceof BrokerFault
       ? failure
       : new BrokerFault('unavailable', `gcb.authorize: ${messageOf(failure)}`)
   }
-  return `authorized ${repo}; the device-flow code and the token swap are in ${logPath}`
+  return `authorized the credential broker; the device-flow code is in ${logPath}`
 }
 
 /* ------------------------------------------------------------------ gcb.update (host half) */
@@ -3003,13 +2742,9 @@ export const OPS: readonly OpDefinition[] = [
     serial: true,
     // ps, the initial stop, the settling stop and the restart, plus the running-state inspect,
     // the authorization itself and the probe.
-    timeoutMs:
-      AUTHORIZE_TIMEOUT_MS +
-      COMPOSE_TIMEOUT_MS * AUTHORIZE_COMPOSE_STEPS +
-      GCB_QUERY_TIMEOUT_MS * AUTHORIZE_QUERY_STEPS +
-      PROBE_TIMEOUT_MS,
-    requires: ['gcbCompose'],
-    available: ctx => ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined,
+    timeoutMs: AUTHORIZE_TIMEOUT_MS,
+    requires: ['gcbCheckout'],
+    available: ctx => ctx.gcbCheckout !== undefined,
     input: {
       type: 'object',
       properties: {
