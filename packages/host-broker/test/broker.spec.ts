@@ -4394,8 +4394,6 @@ async function gcbRig(
     ps?: string
     inspect?: string
     probe?: string
-    /** The sidecar's mounts, for the authorization mount check. */
-    mounts?: string
     /** How many compose files to configure; more than one exercises the base-plus-overlay form. */
     files?: number
     /** Configure the host half too, so a failure can be checked against its pin. */
@@ -4432,16 +4430,10 @@ async function gcbRig(
       arm('up -d --no-deps', stub.up, `touch ${JSON.stringify(replaced)}; exit 0`),
       arm('build --target client', stub.clientBuild, 'exit 0'),
       arm('build --target', stub.build, 'exit 0'),
-      arm('ps -aq', undefined, 'echo abc123'),
       arm(
         'ps -q',
         stub.ps,
         `if [ -e ${JSON.stringify(replaced)} ]; then echo def456; else echo abc123; fi`,
-      ),
-      arm(
-        'inspect --format {{json .Mounts}}',
-        stub.mounts,
-        `echo '${JSON.stringify([{ Source: path.join(host.root, '.broker-host', 'user.refresh') }])}'`,
       ),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect --format {{.Image}}', stub.previousImage, 'echo oldimage'),

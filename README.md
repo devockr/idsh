@@ -63,11 +63,11 @@ Markdown files are the source — there is nothing to keep in sync.
    ```sh
    cp docker-compose.example.yml docker-compose.yml
    pnpm install --frozen-lockfile
-   mkdir -p .dsh/git-broker ~/.broker-host/log   # socket dir and the broker's log
+   mkdir -p .dsh/git-broker ~/.broker-host/log ~/.broker-host/user.refresh.lock   # socket dir, log and token lock
    # the broker container needs its config and key in ~/.broker-host first:
    #   gcb init --mode sidecar --dir ~/.broker-host ...   (see the broker's README)
-   # after `gcb authorize`, add the user.refresh mount to your own docker-compose.yml
-   # (the stanza is in the broker overlay's header)
+   # after `gcb authorize`, add the user.refresh and user.refresh.lock mounts to your own
+   # docker-compose.yml (both stanzas are in the broker overlay's header)
    # and its two images: the dev image copies the client from one of them
    (cd ../git-credential-broker && docker build --target client -t code-vaults/gcb-client:dev . \
      && docker build --target host -t code-vaults/gcb-host:dev .)

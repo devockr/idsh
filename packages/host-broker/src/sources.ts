@@ -1992,14 +1992,17 @@ async function updateBroker(
 
 /* ---------------------------------------------------------- gcb.authorize */
 
+/** The first gcb-host line whose lock makes a running-sidecar token replacement safe. */
+const AUTHORIZE_MIN_GCB_MINOR = 9
+
 /**
- * Re-authorize the credential broker as a person, on the host.
+ * Authorize the credential broker as a person, on the host.
  *
- * The container is stopped first, because the sidecar and the host must not both hold the token
- * while it is replaced. The device-flow code and the completion are written to the same per-call
- * log a build uses, so a job can follow it: the code is useful before the command returns, which a
- * single request/answer cannot carry. The token itself is never read here; gcb writes it beside the
- * configuration, where the sidecar's mount already looks for it.
+ * Gcb-host 0.9.0 serializes this write with the daemon's own renewal through `user.refresh.lock`,
+ * so a running sidecar needs no stop; the lock directory must be mounted with the token. The
+ * device-flow code and the completion go to the same per-call log a build uses, so a job can follow
+ * it: the code is useful before the command returns, which a single request/answer cannot carry.
+ * The token itself is never read here; gcb writes it beside the configuration.
  */
 async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promise<string> {
   const deployDir = await hostDeployDir(ctx, 'gcb.authorize')
@@ -2012,7 +2015,7 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   if (uid !== undefined && configured.uid !== uid) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.authorize: ${config} is owned by uid ${String(configured.uid)}, not ${String(uid)}; chown the config, key and token to the deployment user first`,
+      `gcb.authorize: ${config} is owned by uid ${String(configured.uid)}, not ${String(uid)}; chown the config and token to the deployment user first`,
     )
   }
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
@@ -2023,6 +2026,34 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       `gcb.authorize: ${cli} is not staged; run gcb.update (target host, or both) first`,
     )
   }
+  const hostPackage = path.join(deployDir, 'app', 'packages', 'host', 'package.json')
+  const hostManifest = await readFile(hostPackage, 'utf8').catch(() => null)
+  let version: string | undefined
+  try {
+    version =
+      hostManifest === null ? undefined : (JSON.parse(hostManifest) as { version?: string }).version
+  } catch {
+    version = undefined
+  }
+  const parts = version?.split('.').map(Number) ?? []
+  if (
+    parts.length < 2 ||
+    (parts[0] ?? 0) < 0 ||
+    ((parts[0] ?? 0) === 0 && (parts[1] ?? 0) < AUTHORIZE_MIN_GCB_MINOR)
+  ) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.authorize: the staged gcb-host is ${version ?? 'unknown'}; 0.9.0 or newer is required for the token lock (run gcb.update)`,
+    )
+  }
+  const lock = path.join(deployDir, 'user.refresh.lock')
+  const lockState = await stat(lock).catch(() => null)
+  if (lockState === null || !lockState.isDirectory()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.authorize: ${lock} is missing; create it and mount it with user.refresh (see docker-compose.broker.yml)`,
+    )
+  }
   const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
   const log = await openAppendLog(logPath)
   try {
@@ -2031,7 +2062,14 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   } finally {
     await log.close()
   }
+  if (ctx.signal?.aborted === true) {
+    throw new BrokerFault('unavailable', 'gcb.authorize: the request was cancelled')
+  }
   const target = path.join(deployDir, 'user.refresh')
+  let chain = Promise.resolve()
+  const appendLog = (chunk: Buffer | string): void => {
+    chain = chain.then(() => appendFile(logPath, chunk, { mode: FILE_MODE })).catch(() => undefined)
+  }
   let failure: Error | undefined
   const aborted = (): boolean => ctx.signal?.aborted === true
   try {
@@ -2054,10 +2092,10 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       },
     )
     child.stdout.on('data', (chunk: Buffer) => {
-      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => undefined)
+      appendLog(chunk)
     })
     child.stderr.on('data', (chunk: Buffer) => {
-      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => undefined)
+      appendLog(chunk)
     })
     const abortChild = (): void => {
       child.kill('SIGTERM')
@@ -2090,6 +2128,7 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
     failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
   }
+  await chain
   if (failure !== undefined) {
     throw failure instanceof BrokerFault
       ? failure
@@ -2737,14 +2776,12 @@ export const OPS: readonly OpDefinition[] = [
   {
     name: 'gcb.authorize',
     summary:
-      'Re-authorize the credential broker as a person: stop its container, run the device flow on the host, and restart it.',
+      'Authorize the credential broker as a person: run the device flow on the host and let gcb replace the token under its lock.',
     confirm: true,
     serial: true,
-    // ps, the initial stop, the settling stop and the restart, plus the running-state inspect,
-    // the authorization itself and the probe.
-    timeoutMs: AUTHORIZE_TIMEOUT_MS,
+    // The child timer, plus room for the answer to be written after it fires.
+    timeoutMs: AUTHORIZE_TIMEOUT_MS + GCB_QUERY_TIMEOUT_MS,
     requires: ['gcbCheckout'],
-    available: ctx => ctx.gcbCheckout !== undefined,
     input: {
       type: 'object',
       properties: {
