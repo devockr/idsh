@@ -15,7 +15,9 @@ the request: `deploy.build` and `deploy.main` name `deploy.source` as their prev
 question carries the branch tip and main sha before anything is built; build, main, recreate
 and rollback are serialized by one deployment lock; and `broker.update` lets the broker
 replace itself under a supervisor instead of a shell, while `gcb.update` does the same for
-the credential broker — its checkout, the image its compose names, and only its container. A
+the credential broker — its checkout, the image its compose names, and only its container.
+`gcb.authorize` runs the broker's device flow on the host, streams the code into a followable
+job log, and relies on gcb 0.9.0's `user.refresh.lock` instead of stopping the sidecar. A
 build retires the labelled images it makes unnecessary — every `idsh.keep=1` image that is
 neither the one it produced, nor the base it starts from, nor the recorded target — so after a
 dev build's sweep at most three of them stay on disk. A sweep that could not finish says so in

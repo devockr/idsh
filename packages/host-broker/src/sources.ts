@@ -38,6 +38,7 @@ import {
   GCB_HOST_POLL_MS,
   GCB_HOST_WAIT_MS,
   AUTHORIZE_TIMEOUT_MS,
+  AUTHORIZE_MARGIN_MS,
   GCB_PULL_TIMEOUT_MS,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
@@ -1992,9 +1993,6 @@ async function updateBroker(
 
 /* ---------------------------------------------------------- gcb.authorize */
 
-/** The first gcb-host line whose lock makes a running-sidecar token replacement safe. */
-const AUTHORIZE_MIN_GCB_MINOR = 9
-
 /**
  * Authorize the credential broker as a person, on the host.
  *
@@ -2026,24 +2024,13 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       `gcb.authorize: ${cli} is not staged; run gcb.update (target host, or both) first`,
     )
   }
-  const hostPackage = path.join(deployDir, 'app', 'packages', 'host', 'package.json')
-  const hostManifest = await readFile(hostPackage, 'utf8').catch(() => null)
-  let version: string | undefined
-  try {
-    version =
-      hostManifest === null ? undefined : (JSON.parse(hostManifest) as { version?: string }).version
-  } catch {
-    version = undefined
-  }
-  const parts = version?.split('.').map(Number) ?? []
-  if (
-    parts.length < 2 ||
-    (parts[0] ?? 0) < 0 ||
-    ((parts[0] ?? 0) === 0 && (parts[1] ?? 0) < AUTHORIZE_MIN_GCB_MINOR)
-  ) {
+  const lockModule = await stat(
+    path.join(deployDir, 'app', 'packages', 'host', 'src', 'token-lock.ts'),
+  ).catch(() => null)
+  if (lockModule === null || !lockModule.isFile()) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.authorize: the staged gcb-host is ${version ?? 'unknown'}; 0.9.0 or newer is required for the token lock (run gcb.update)`,
+      'gcb.authorize: the staged gcb-host has no token lock; run gcb.update (target host, or both)',
     )
   }
   const lock = path.join(deployDir, 'user.refresh.lock')
@@ -2051,7 +2038,13 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   if (lockState === null || !lockState.isDirectory()) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.authorize: ${lock} is missing; create it and mount it with user.refresh (see docker-compose.broker.yml)`,
+      `gcb.authorize: ${lock} is missing or not a directory; create it with mkdir -p and mount it with user.refresh (see docker-compose.broker.yml)`,
+    )
+  }
+  if (uid !== undefined && lockState.uid !== uid) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.authorize: ${lock} is owned by uid ${String(lockState.uid)}, not ${String(uid)}; chown it to the deployment user`,
     )
   }
   const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
@@ -2066,14 +2059,10 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
     throw new BrokerFault('unavailable', 'gcb.authorize: the request was cancelled')
   }
   const target = path.join(deployDir, 'user.refresh')
-  let chain = Promise.resolve()
-  const appendLog = (chunk: Buffer | string): void => {
-    chain = chain.then(() => appendFile(logPath, chunk, { mode: FILE_MODE })).catch(() => undefined)
-  }
   let failure: Error | undefined
-  const aborted = (): boolean => ctx.signal?.aborted === true
   try {
-    const child = spawn(
+    await runFixed(
+      ctx,
       process.execPath,
       [
         '--conditions=development',
@@ -2085,50 +2074,12 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
         '--to',
         target,
       ],
-      {
-        cwd: deployDir,
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
+      { cwd: deployDir, logPath, timeoutMs: AUTHORIZE_TIMEOUT_MS },
     )
-    child.stdout.on('data', (chunk: Buffer) => {
-      appendLog(chunk)
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      appendLog(chunk)
-    })
-    const abortChild = (): void => {
-      child.kill('SIGTERM')
-    }
-    ctx.signal?.addEventListener('abort', abortChild, { once: true })
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM')
-    }, AUTHORIZE_TIMEOUT_MS)
-    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      resolve => {
-        child.on('error', error => {
-          failure = error
-          resolve({ code: null, signal: null })
-        })
-        child.on('exit', (code, signal) => resolve({ code, signal }))
-      },
-    )
-    clearTimeout(timer)
-    ctx.signal?.removeEventListener('abort', abortChild)
-    if (aborted() && failure === undefined) {
-      failure = new BrokerFault('unavailable', 'gcb.authorize: the request was cancelled')
-    }
-    if (failure === undefined && exit.code !== 0) {
-      failure = new BrokerFault(
-        'unavailable',
-        `gcb.authorize: gcb authorize exited with ${String(exit.code ?? exit.signal)}; see ${logPath}`,
-      )
-    }
   } catch (error) {
     failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
   }
-  await chain
   if (failure !== undefined) {
     throw failure instanceof BrokerFault
       ? failure
@@ -2780,7 +2731,7 @@ export const OPS: readonly OpDefinition[] = [
     confirm: true,
     serial: true,
     // The child timer, plus room for the answer to be written after it fires.
-    timeoutMs: AUTHORIZE_TIMEOUT_MS + GCB_QUERY_TIMEOUT_MS,
+    timeoutMs: AUTHORIZE_TIMEOUT_MS + AUTHORIZE_MARGIN_MS,
     requires: ['gcbCheckout'],
     input: {
       type: 'object',
