@@ -2076,6 +2076,8 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   // down with it. The token lands in a staging file first and is swapped in under a stop measured
   // in seconds; the sidecar is not touched while a person is at the browser.
   const staging = path.join(deployDir, 'user.refresh.staged')
+  // A crash between the two renames leaves the live path absent and the previous token here.
+  const backup = path.join(deployDir, 'user.refresh.previous')
   let wasRunning = false
   let restarted = false
   let failure: Error | undefined
@@ -2083,6 +2085,19 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   try {
     // A leftover staging token from an interrupted run is never mounted; remove it before reuse.
     await rm(staging, { force: true })
+    // Durable recovery for a run that died between moving the old token aside and installing the
+    // new one: put the old token back, and bring back a sidecar that was stopped for the swap.
+    const interrupted = await stat(backup).catch(() => null)
+    if (interrupted?.isFile() === true) {
+      const live = await stat(target).catch(() => null)
+      if (live === null) {
+        await rename(backup, target)
+        await note('authorize: restored the previous token left by an interrupted swap')
+        await compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service])
+      } else {
+        await rm(backup, { force: true })
+      }
+    }
     const child = spawn(
       process.execPath,
       [
@@ -2153,7 +2168,6 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       if (wasRunning) {
         await compose(['stop', service])
       }
-      const backup = path.join(deployDir, 'user.refresh.previous')
       let backedUp = false
       try {
         // Keep the token the sidecar has now until the new one has started and probed.

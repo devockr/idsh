@@ -105,7 +105,7 @@ export const RECREATE_POLL_MS = 2_000
 export const AUTHORIZE_TIMEOUT_MS = 960_000
 
 /** Ps, the initial stop, the settling stop and the restart: four compose calls. */
-export const AUTHORIZE_COMPOSE_STEPS = 3
+export const AUTHORIZE_COMPOSE_STEPS = 4
 
 export const GCB_HOST_WAIT_MS = 300_000
 
