@@ -80,7 +80,7 @@ COPY --chmod=755 entrypoint.sh /entrypoint.sh
 # install above and the browser libraries the dev image adds on top of it. Everything else under
 # tools/ belongs to the dev image, which copies the directory itself.
 COPY --chmod=755 tools/sync-companions.mts /opt/dsh/tools/sync-companions.mts
-COPY --chmod=755 tools/yaml-default.mjs /opt/dsh/tools/yaml-default.mjs
+COPY --chmod=755 tools/yaml-default.mts /opt/dsh/tools/yaml-default.mjs
 
 # Deliberately no USER here: the container starts as root so entrypoint.sh can
 # re-point `app` to PUID/PGID and fix ownership, then it drops to that uid with

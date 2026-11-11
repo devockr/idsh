@@ -112,7 +112,7 @@ add_setting() {
   grep -qsE "$2" "$1" || append_line "$1" "$3" || true
 }
 
-# YAML settings go through dsh's own parser (tools/yaml-default.mjs): appending text would break
+# YAML settings go through dsh's own parser (tools/yaml-default.mts): appending text would break
 # flow mappings, omit document markers and duplicate keys.
 set_yaml_default() {
   node /opt/dsh/tools/yaml-default.mjs "$1" "$2" "$3" || true
