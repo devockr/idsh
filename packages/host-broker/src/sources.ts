@@ -2078,6 +2078,8 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   const staging = path.join(deployDir, 'user.refresh.staged')
   // A crash between the two renames leaves the live path absent and the previous token here.
   const backup = path.join(deployDir, 'user.refresh.previous')
+  // What the sidecar was doing when the swap began, so a later run can finish the recovery.
+  const recovery = path.join(deployDir, 'user.refresh.swap.json')
   let wasRunning = false
   let restarted = false
   let failure: Error | undefined
@@ -2087,16 +2089,56 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
     await rm(staging, { force: true })
     // Durable recovery for a run that died between moving the old token aside and installing the
     // new one: put the old token back, and bring back a sidecar that was stopped for the swap.
+    const recoverySource = await readFile(recovery, 'utf8').catch(() => null)
+    let recoveryState: { running?: boolean } | undefined
+    try {
+      recoveryState =
+        recoverySource === null ? undefined : (JSON.parse(recoverySource) as { running?: boolean })
+    } catch {
+      recoveryState = undefined
+    }
     const interrupted = await stat(backup).catch(() => null)
-    if (interrupted?.isFile() === true) {
+    if (interrupted !== null) {
       const live = await stat(target).catch(() => null)
       if (live === null) {
         await rename(backup, target)
         await note('authorize: restored the previous token left by an interrupted swap')
-        await compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service])
       } else {
         await rm(backup, { force: true })
       }
+      if (recoveryState?.running !== false) {
+        const runningId = (await compose(['ps', '-q', service])).trim().split('\n')[0] ?? ''
+        let running = false
+        if (runningId !== '') {
+          running =
+            (
+              await docker(
+                durable,
+                ['inspect', '--format', '{{.State.Running}}', runningId],
+                'head',
+                {
+                  stdoutOnly: true,
+                  timeoutMs: GCB_QUERY_TIMEOUT_MS,
+                },
+              )
+            ).trim() === 'true'
+        }
+        if (!running) {
+          await compose([
+            'up',
+            '-d',
+            '--no-deps',
+            '--no-build',
+            '--pull',
+            'never',
+            '--wait',
+            service,
+          ])
+        }
+      }
+      await rm(recovery, { force: true })
+    } else if (recoverySource !== null) {
+      await rm(recovery, { force: true })
     }
     const child = spawn(
       process.execPath,
@@ -2165,6 +2207,7 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
             )
           ).trim() === 'true'
       }
+      await writeFile(recovery, JSON.stringify({ running: wasRunning }), { mode: FILE_MODE })
       if (wasRunning) {
         await compose(['stop', service])
       }
@@ -2204,6 +2247,7 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
           await rm(backup, { force: true }).catch(() => undefined)
           backedUp = false
         }
+        await rm(recovery, { force: true }).catch(() => undefined)
       } catch (error) {
         if (backedUp) {
           // The new token may already have been served: stop before the rename so the sidecar
@@ -2250,6 +2294,9 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
             await note(`authorize: ${restart}`)
             failure = new BrokerFault('unavailable', `${messageOf(failure)}; ${restart}`)
           }
+        }
+        if (!backedUp) {
+          await rm(recovery, { force: true }).catch(() => undefined)
         }
       }
     }
