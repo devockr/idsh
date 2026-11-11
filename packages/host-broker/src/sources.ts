@@ -39,6 +39,7 @@ import {
   GCB_HOST_WAIT_MS,
   AUTHORIZE_TIMEOUT_MS,
   AUTHORIZE_COMPOSE_STEPS,
+  AUTHORIZE_QUERY_STEPS,
   GCB_PULL_TIMEOUT_MS,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
@@ -2146,6 +2147,42 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
         await rm(backup, { force: true })
       }
     }
+    // An app-only deployment has no person-token mount; authorize would write a file the sidecar
+    // never reads and still report success.
+    const containerId = (await compose(['ps', '-aq', service])).trim().split('\n')[0] ?? ''
+    if (containerId === '') {
+      throw new BrokerFault(
+        'unavailable',
+        `gcb.authorize: ${service} has no container; start it once before authorizing`,
+      )
+    }
+    const mountsSource = await docker(
+      durable,
+      ['inspect', '--format', '{{json .Mounts}}', containerId],
+      'head',
+      { stdoutOnly: true, timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+    let mounts: unknown
+    try {
+      mounts = JSON.parse(mountsSource)
+    } catch {
+      mounts = undefined
+    }
+    const mounted =
+      Array.isArray(mounts) &&
+      mounts.some(mount => {
+        if (typeof mount !== 'object' || mount === null) {
+          return false
+        }
+        const source = (mount as { Source?: unknown }).Source
+        return typeof source === 'string' && path.resolve(source) === path.resolve(target)
+      })
+    if (!mounted) {
+      throw new BrokerFault(
+        'unavailable',
+        `gcb.authorize: ${service} does not mount ${target}; an app-only deployment has no person token to replace`,
+      )
+    }
     const child = spawn(
       process.execPath,
       [
@@ -2969,7 +3006,7 @@ export const OPS: readonly OpDefinition[] = [
     timeoutMs:
       AUTHORIZE_TIMEOUT_MS +
       COMPOSE_TIMEOUT_MS * AUTHORIZE_COMPOSE_STEPS +
-      GCB_QUERY_TIMEOUT_MS +
+      GCB_QUERY_TIMEOUT_MS * AUTHORIZE_QUERY_STEPS +
       PROBE_TIMEOUT_MS,
     requires: ['gcbCompose'],
     available: ctx => ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined,

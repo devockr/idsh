@@ -104,8 +104,11 @@ export const RECREATE_POLL_MS = 2_000
 /** 16 minutes, so the person has the device flow's 15-minute window plus a margin. */
 export const AUTHORIZE_TIMEOUT_MS = 960_000
 
+/** Recovery, mount and swap inspection calls, each bounded by the query timeout. */
+export const AUTHORIZE_QUERY_STEPS = 3
+
 /** Ps, the initial stop, the settling stop and the restart: four compose calls. */
-export const AUTHORIZE_COMPOSE_STEPS = 4
+export const AUTHORIZE_COMPOSE_STEPS = 6
 
 export const GCB_HOST_WAIT_MS = 300_000
 

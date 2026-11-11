@@ -4394,6 +4394,8 @@ async function gcbRig(
     ps?: string
     inspect?: string
     probe?: string
+    /** The sidecar's mounts, for the authorization mount check. */
+    mounts?: string
     /** How many compose files to configure; more than one exercises the base-plus-overlay form. */
     files?: number
     /** Configure the host half too, so a failure can be checked against its pin. */
@@ -4430,10 +4432,16 @@ async function gcbRig(
       arm('up -d --no-deps', stub.up, `touch ${JSON.stringify(replaced)}; exit 0`),
       arm('build --target client', stub.clientBuild, 'exit 0'),
       arm('build --target', stub.build, 'exit 0'),
+      arm('ps -aq', undefined, 'echo abc123'),
       arm(
         'ps -q',
         stub.ps,
         `if [ -e ${JSON.stringify(replaced)} ]; then echo def456; else echo abc123; fi`,
+      ),
+      arm(
+        'inspect --format {{json .Mounts}}',
+        stub.mounts,
+        `echo '${JSON.stringify([{ Source: path.join(host.root, '.broker-host', 'user.refresh') }])}'`,
       ),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect --format {{.Image}}', stub.previousImage, 'echo oldimage'),
@@ -4611,6 +4619,27 @@ void test('gcb.authorize restarts a sidecar recorded running even without a back
     assert.equal(answer.ok, false)
     assert.match(await rig.calls(), /up -d --no-deps/)
     await assert.rejects(readFile(path.join(deployDir, 'user.refresh.swap.json')))
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.authorize refuses an app-only sidecar with no token mount', async () => {
+  const rig = await gcbRig({ host: true, mounts: "echo '[]'" })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const config = path.join(deployDir, 'config', 'broker.config.yml')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(config), { recursive: true })
+  await writeFile(config, 'hosts: {}\n')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(cli, "process.stdout.write('device code\\\\n'); process.exit(0)\\\\n")
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.authorize',
+      args: { log: 'no-mount' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(answer.error?.message ?? '', /does not mount/)
   } finally {
     await rig.close()
   }
