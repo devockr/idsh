@@ -2045,10 +2045,18 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       () => undefined,
     )
   const service = ctx.gcbService
-  const cwd = ctx.checkout
+  // The compose files are the credential broker's, in its checkout — the same working directory
+  // gcb.update runs them from.
+  const cwd = ctx.gcbCheckout
   if (cwd === undefined) {
-    throw new BrokerFault('unavailable', 'gcb.authorize: no checkout to run compose from')
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.authorize: no credential-broker checkout to run compose from; start the broker with --gcb-checkout',
+    )
   }
+  // The sidecar has to come back even when the request is cancelled: the recovery paths must not
+  // inherit the aborted signal that stopped the operation.
+  const durable: OpContext = { ...ctx, signal: undefined }
   const gid = process.getgid?.()
   const composeEnv: NodeJS.ProcessEnv = {
     ...(uid === undefined ? {} : { UID: String(uid) }),
@@ -2056,7 +2064,7 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   }
   const composeArgs = ['compose', ...composeFiles.flatMap(file => ['-f', file])]
   const compose = (args: string[]): Promise<string> =>
-    docker(ctx, [...composeArgs, ...args], 'head', {
+    docker(durable, [...composeArgs, ...args], 'head', {
       cwd,
       stdoutOnly: true,
       env: composeEnv,
@@ -2089,8 +2097,14 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       },
     )
     // The code is for the person, and the job follows the log; stream both streams into it.
-    child.stdout.on('data', (chunk: Buffer) => void appendFile(logPath, chunk, { mode: FILE_MODE }))
-    child.stderr.on('data', (chunk: Buffer) => void appendFile(logPath, chunk, { mode: FILE_MODE }))
+    // A log write must not become an unhandled rejection: losing the line is worse than losing
+    // the process, and the code is also on the broker's stderr.
+    child.stdout.on('data', (chunk: Buffer) => {
+      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => {})
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => {})
+    })
     const timer = setTimeout(() => {
       child.kill('SIGTERM')
     }, AUTHORIZE_TIMEOUT_MS)
