@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Set one key in a YAML config file as a lower-priority default, with the YAML parser that ships
-// inside dsh itself. The image is a dsh service, so dsh's dependency is the one parser guaranteed
-// to be present; if a dsh update moves it, this script moves with it. The file is parsed and
-// rewritten as a document, so flow mappings, document markers and comments survive.
+// in dsh's own dependency tree (currently reached through @deepseek-ai/dsh-plugin-manager). That
+// is the parser this dsh image is guaranteed to carry while dsh keeps it; if a dsh release drops
+// it, the setting is left untouched and the boot log says why. The file is parsed and rewritten as
+// a document, so flow mappings, document markers and comments survive.
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
