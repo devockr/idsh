@@ -119,6 +119,12 @@ if [ -w "$HOME" ]; then
   add_setting "$HOME/.yarnrc.yml" '^["'"'"']?globalFolder["'"'"']?[[:space:]]*:' "globalFolder: \"$HOME/.dsh/cache/yarn-global\""
   mkdir -p "$HOME/.config/pnpm" 2> /dev/null || true
   add_setting "$HOME/.config/pnpm/config.yaml" '^["'"'"']?storeDir["'"'"']?[[:space:]]*:' "storeDir: \"$HOME/.dsh/cache/pnpm-store\""
+  # The loop below only chowns top-level entries, so this new nested file would stay root's; the
+  # deployment user must be able to run `pnpm config set --global`. A mounted .config is the
+  # deployment's, and is left exactly as it arrived.
+  if ! mountpoint -q "$HOME/.config"; then
+    chown -R "$PUID:$PGID" "$HOME/.config/pnpm" 2> /dev/null || true
+  fi
 fi
 
 # Corepack and node-gyp have no config file to write, so their two mirrors have to
