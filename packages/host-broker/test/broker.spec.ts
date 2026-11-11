@@ -4524,7 +4524,11 @@ function startFakeDaemon(deployDir: string): { pid: number; stop(): void } {
 }
 
 void test('gcb.authorize is offered with confirmation and a followable log', async () => {
-  const rig = await gcbRig()
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(cli, 'process.exit(1)\n')
   try {
     const described = await rig.connection.request({
       op: 'ops.describe',
