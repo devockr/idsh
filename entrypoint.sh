@@ -115,7 +115,7 @@ add_setting() {
 # YAML settings go through dsh's own parser (tools/yaml-default.mts): appending text would break
 # flow mappings, omit document markers and duplicate keys.
 set_yaml_default() {
-  node /opt/dsh/tools/yaml-default.mjs "$1" "$2" "$3" || true
+  node /opt/dsh/tools/yaml-default.mts "$1" "$2" "$3" || true
 }
 
 if [ -w "$HOME" ]; then
