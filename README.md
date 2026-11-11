@@ -178,8 +178,8 @@ Ports and volumes:
 - `127.0.0.1:15080:3080` — host port `15080` → dsh's internal web server (`3080`), bound to
   loopback so only a reverse proxy on the host reaches it. Widen it to `15080:3080` to publish the
   port itself; then whatever authority that port is reached on has to be trusted by the fence.
-- `./.dsh` → `/home/app/.dsh` — dsh state and credentials (persist). This is the
-  template's only mount.
+- `./.dsh` → `/home/app/.dsh` — dsh state, credentials and package-manager caches
+  (persist). This is the template's only mount.
 - Add the rest yourself, for example `./workspace:/home/app/Workspaces` for a
   workspace or `./ssh:/home/app/.ssh` for an ssh config. The template deliberately
   prescribes none.

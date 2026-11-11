@@ -63,18 +63,18 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   `Dockerfile.dev.dockerignore` for the dev image (`packages/` and `tools/dev/`, plus the Dockerfile
   itself, which BuildKit reads from the context). Neither build carries the other's
   content, and a new `COPY` has to be whitelisted in the right one or the build fails loudly.
-- **The `@deepseek-ai/dsh@…`/`pnpm@…`/`corepack@…` pins and the plugins baked into the images** are
-  read by the custom managers in `renovate.json`: the first parses the `npm install -g` RUN line of
-  either Dockerfile to its end, the second the `dsh plugin add` lines. Keep both readable by those regexes — on one line, and with
-  the versions still in them.
+- **The `@deepseek-ai/dsh@…`/`pnpm@…`/`corepack@…` pins and the plugins baked into the images**
+  are read by the custom managers in `renovate.json`: the first parses the `npm install -g` RUN
+  line of either Dockerfile to its end, the second the `dsh plugin add` lines. Keep both readable
+  by those regexes — on one line, and with the versions still in them.
 
 ## Images
 
-| tag                   | contents                                                      | used by                              |
-| --------------------- | ------------------------------------------------------------- | ------------------------------------ |
-| `devockr/idsh:base`   | dsh + pnpm, nothing baked, no browser libraries               | the two images below                 |
-| `devockr/idsh:latest` | `:base` + a profile baked from the registry (strict)          | the deployment                       |
-| `devockr/idsh:dev`    | `:base` + those libraries; the profile baked from `packages/` | local runs and browser-driven checks |
+| tag                   | contents                                                                 | used by                              |
+| --------------------- | ------------------------------------------------------------------------ | ------------------------------------ |
+| `devockr/idsh:base`   | dsh + pnpm, nothing baked, no browser libraries                          | the two images below                 |
+| `devockr/idsh:latest` | `:base` + a profile baked from the registry (strict)                     | the deployment                       |
+| `devockr/idsh:dev`    | `:base` + those libraries + Corepack; the profile baked from `packages/` | local runs and browser-driven checks |
 
 Build the dev image with `pnpm dev`: it compiles the packages (`pnpm build`), then builds `:base`
 and then `:dev` — in that order, and both orders are the point. `:base` carries
@@ -278,10 +278,11 @@ Observe the running thing; do not reason from source.
 - A change to a package under `packages/` needs a changeset (`.changeset/`). The `Release` workflow
   folds those into one version PR and publishes it with `pnpm release` — `changeset publish`, which
   runs each package's `prepack`, so the tarball it uploads always carries a fresh `lib/`.
-- **pnpm is pinned once, in `packageManager`**, which `pnpm/action-setup` reads — no `version:` in a
-  workflow. `Dockerfile`'s `npm install -g pnpm@…` carries the same number and Renovate keeps both
-  current; the dev image's Corepack pin rides the same manager. It also gives `pnpm-lock.yaml` a second document (the `pnpm`
-  package and its `@pnpm/exe` set): that is pnpm 12 recording the managed version, not damage.
+- **pnpm is pinned once, in `packageManager`**, which `pnpm/action-setup` reads — no `version:`
+  in a workflow. `Dockerfile`'s `npm install -g pnpm@…` carries the same number and Renovate keeps
+  both current; the dev image's Corepack pin rides the same manager. It also gives
+  `pnpm-lock.yaml` a second document (the `pnpm` package and its `@pnpm/exe` set): that is
+  pnpm 12 recording the managed version, not damage.
 - `autofix.yml` fixes formatting and autofixable lint on pull requests, and has to keep the name
   `autofix.ci`; `pkg-pr-new.yml` runs `pkg-pr-new` through `pnpm dlx`, against that project's advice
   to use the lockfile in CI, to keep a preview-only tool out of the workspace dependencies.

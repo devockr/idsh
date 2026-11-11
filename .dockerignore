@@ -6,7 +6,6 @@
 !entrypoint.sh
 !tools/
 
-# Synology's metadata directories; they carry no build input and their files are newer than the
-# compiled tree, which the dev image's staleness check would read as a forgotten build.
+# Synology's metadata directories: no build input, and never part of the published image.
 **/@eaDir
 **/@eaDir/**
