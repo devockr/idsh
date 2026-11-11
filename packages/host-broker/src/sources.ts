@@ -2063,8 +2063,19 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       timeoutMs: COMPOSE_TIMEOUT_MS,
     })
   let stopped = false
+  let wasRunning = false
   let failure: Error | undefined
   try {
+    // The sidecar is restored to the state it had: a stopped sidecar is not started by this call.
+    const runningId = (await compose(['ps', '-q', service])).trim().split('\n')[0] ?? ''
+    if (runningId !== '') {
+      wasRunning =
+        (
+          await docker(ctx, ['inspect', '--format', '{{.State.Running}}', runningId], 'head', {
+            timeoutMs: GCB_QUERY_TIMEOUT_MS,
+          })
+        ).trim() === 'true'
+    }
     await compose(['stop', service])
     stopped = true
     await note(`authorize: ${service} stopped; starting the device flow`)
@@ -2078,8 +2089,8 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       },
     )
     // The code is for the person, and the job follows the log; stream both streams into it.
-    child.stdout.on('data', chunk => void appendFile(logPath, chunk, { mode: FILE_MODE }))
-    child.stderr.on('data', chunk => void appendFile(logPath, chunk, { mode: FILE_MODE }))
+    child.stdout.on('data', (chunk: Buffer) => void appendFile(logPath, chunk, { mode: FILE_MODE }))
+    child.stderr.on('data', (chunk: Buffer) => void appendFile(logPath, chunk, { mode: FILE_MODE }))
     const timer = setTimeout(() => {
       child.kill('SIGTERM')
     }, AUTHORIZE_TIMEOUT_MS)
@@ -2105,7 +2116,7 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   }
   // Whatever happened, the sidecar must not be left down; its previous token is still in place
   // when authorize failed, and the process is restarted from the same compose definition.
-  if (stopped) {
+  if (stopped && wasRunning) {
     try {
       await compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service])
       await note(`authorize: ${service} restarted`)
