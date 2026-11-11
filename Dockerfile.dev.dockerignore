@@ -10,4 +10,3 @@ packages/*/node_modules
 # Synology's metadata directories; they carry no build input and their files are newer than the
 # compiled tree, which this image's staleness check would read as a forgotten build.
 **/@eaDir
-**/@eaDir/**

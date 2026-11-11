@@ -57,7 +57,7 @@ services:
       # npm and Yarn get theirs through $HOME/.npmrc and the Yarn config files (project settings
       # still win); pnpm 12 reads its store only from the environment. A root `docker exec pnpm`
       # can leave root-owned files in that PUID store — accepted here, since a root exec is already
-      # privileged. A compose `NPM_REGISTRY` would not reach a `docker exec` without its line.
+      # privileged. `docker exec` would not see the deployment's registry without this line.
       - 'COREPACK_NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com/}'
       - pnpm_config_store_dir=/home/app/.dsh/cache/pnpm-store
       # Space-separated authorities allowed by dsh's browser-trust fence; set it
