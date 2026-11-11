@@ -2110,7 +2110,18 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
     }
     const child = spawn(
       process.execPath,
-      ['--conditions=development', cli, 'authorize', '--broker-container', '--config', config],
+      [
+        '--conditions=development',
+        cli,
+        'authorize',
+        '--broker-container',
+        '--config',
+        config,
+        // The sidecar mounts this file from the deployment root; the CLI's default is beside the
+        // configuration, which the sidecar does not read.
+        '--to',
+        path.join(deployDir, 'user.refresh'),
+      ],
       {
         cwd: deployDir,
         env: { ...process.env, ...composeEnv },
@@ -2181,12 +2192,15 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       )
       await note(`authorize: probe: ${answer.trim()}`)
     } catch (error) {
+      const recovery = `gcb.authorize: the sidecar did not come back: ${messageOf(error)}`
+      await note(`authorize: ${recovery}`)
+      if (ctx.signal?.aborted === true) {
+        process.stderr.write(`${recovery}\n`)
+      }
       failure =
-        failure ??
-        new BrokerFault(
-          'unavailable',
-          `gcb.authorize: the sidecar did not come back: ${messageOf(error)}`,
-        )
+        failure === undefined
+          ? new BrokerFault('unavailable', recovery)
+          : new BrokerFault('unavailable', `${messageOf(failure)}; ${recovery}`)
     }
   }
   if (failure !== undefined) {
