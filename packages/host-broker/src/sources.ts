@@ -2186,14 +2186,32 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
           )
           await note(`authorize: probe: ${answer.trim()}`)
         }
+        if (backedUp) {
+          await rm(backup, { force: true }).catch(() => undefined)
+          backedUp = false
+        }
       } catch (error) {
         if (backedUp) {
-          await rm(target, { force: true }).catch(() => undefined)
-          await rename(backup, target).catch(() => undefined)
-          backedUp = false
-          await note('authorize: the previous token was restored')
+          // The new token may already have been served: stop before the rename so the sidecar
+          // cannot keep using it while the previous one is put back.
+          if (wasRunning) {
+            // Idempotent when it is already down, and it settles a restart that failed midway.
+            await compose(['stop', service]).catch(() => undefined)
+            restarted = false
+          }
+          try {
+            await rm(target, { force: true })
+            await rename(backup, target)
+            backedUp = false
+            await note('authorize: the previous token was restored')
+          } catch (restoreError) {
+            await note(
+              `authorize: the previous token could not be restored; it is kept at ${backup}: ${messageOf(restoreError)}`,
+            )
+          }
         }
-        const message = `gcb.authorize: the token could not be installed: ${messageOf(error)}`
+        const kept = backedUp ? `; the previous token is kept at ${backup}` : ''
+        const message = `gcb.authorize: the token could not be installed: ${messageOf(error)}${kept}`
         await note(`authorize: ${message}`)
         failure =
           failure === undefined
@@ -2218,10 +2236,6 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
             await note(`authorize: ${restart}`)
             failure = new BrokerFault('unavailable', `${messageOf(failure)}; ${restart}`)
           }
-        }
-      } finally {
-        if (backedUp) {
-          await rm(backup, { force: true }).catch(() => undefined)
         }
       }
     }
