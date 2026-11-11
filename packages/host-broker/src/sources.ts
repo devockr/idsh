@@ -1989,6 +1989,154 @@ async function updateBroker(
   }
 }
 
+/* ---------------------------------------------------------- gcb.reauthorize */
+
+/** How long the person has to finish the device flow; GitHub's code lives 15 minutes. */
+const REAUTHORIZE_TIMEOUT_MS = 16 * 60_000
+
+/**
+ * Re-authorize the credential broker as a person, on the host.
+ *
+ * The container is stopped first, because the sidecar and the host must not both hold the token
+ * while it is replaced. The device-flow code and the completion are written to the same per-call
+ * log a build uses, so a job can follow it: the code is useful before the command returns, which a
+ * single request/answer cannot carry. The token itself is never read here; gcb writes it beside the
+ * configuration, where the sidecar's mount already looks for it.
+ */
+async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Promise<string> {
+  const composeFiles = ctx.gcbCompose
+  const repo = ctx.gcbProbeRepo
+  if (composeFiles === undefined || repo === undefined) {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.reauthorize needs the broker container: start the broker with --gcb-compose and --gcb-probe-repo',
+    )
+  }
+  const deployDir = await hostDeployDir(ctx, 'gcb.reauthorize')
+  const config = path.join(deployDir, 'config', 'broker.config.yml')
+  const configured = await stat(config).catch(() => null)
+  if (configured === null || !configured.isFile()) {
+    throw new BrokerFault('unavailable', `gcb.reauthorize: ${config} is not there`)
+  }
+  const uid = process.getuid?.()
+  if (uid !== undefined && configured.uid !== uid) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.reauthorize: ${config} is owned by uid ${String(configured.uid)}, not ${String(uid)}; chown the config, key and token to the deployment user first`,
+    )
+  }
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const staged = await stat(cli).catch(() => null)
+  if (staged === null || !staged.isFile()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.reauthorize: ${cli} is not staged; run gcb.update (target host, or both) first`,
+    )
+  }
+  const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
+  const log = await openAppendLog(logPath)
+  try {
+    await log.chmod(FILE_MODE)
+    await log.write(`reauthorize: stopping ${ctx.gcbService}\n`)
+  } finally {
+    await log.close()
+  }
+  const note = (line: string): Promise<void> =>
+    appendFile(logPath, `${line}\n`, { mode: FILE_MODE }).then(
+      () => undefined,
+      () => undefined,
+    )
+  const service = ctx.gcbService
+  const cwd = ctx.checkout
+  if (cwd === undefined) {
+    throw new BrokerFault('unavailable', 'gcb.reauthorize: no checkout to run compose from')
+  }
+  const gid = process.getgid?.()
+  const composeEnv: NodeJS.ProcessEnv = {
+    ...(uid === undefined ? {} : { UID: String(uid) }),
+    ...(gid === undefined ? {} : { GID: String(gid) }),
+  }
+  const composeArgs = ['compose', ...composeFiles.flatMap(file => ['-f', file])]
+  const compose = (args: string[]): Promise<string> =>
+    docker(ctx, [...composeArgs, ...args], 'head', {
+      cwd,
+      stdoutOnly: true,
+      env: composeEnv,
+      timeoutMs: COMPOSE_TIMEOUT_MS,
+    })
+  let stopped = false
+  let failure: Error | undefined
+  try {
+    await compose(['stop', service])
+    stopped = true
+    await note(`reauthorize: ${service} stopped; starting the device flow`)
+    const child = spawn(
+      process.execPath,
+      ['--conditions=development', cli, 'authorize', '--broker-container', '--config', config],
+      {
+        cwd: deployDir,
+        env: { ...process.env, ...composeEnv },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    // The code is for the person, and the job follows the log; stream both streams into it.
+    child.stdout.on('data', chunk => void appendFile(logPath, chunk, { mode: FILE_MODE }))
+    child.stderr.on('data', chunk => void appendFile(logPath, chunk, { mode: FILE_MODE }))
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+    }, REAUTHORIZE_TIMEOUT_MS)
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      resolve => {
+        child.on('error', error => {
+          failure = error
+          resolve({ code: null, signal: null })
+        })
+        child.on('exit', (code, signal) => resolve({ code, signal }))
+      },
+    )
+    clearTimeout(timer)
+    if (failure === undefined && exit.code !== 0) {
+      failure = new BrokerFault(
+        'unavailable',
+        `gcb.reauthorize: gcb authorize exited with ${String(exit.code ?? exit.signal)}; see ${logPath}`,
+      )
+    }
+  } catch (error) {
+    failure =
+      error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
+  }
+  // Whatever happened, the sidecar must not be left down; its previous token is still in place
+  // when authorize failed, and the process is restarted from the same compose definition.
+  if (stopped) {
+    try {
+      await compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service])
+      await note(`reauthorize: ${service} restarted`)
+      const answer = await docker(
+        ctx,
+        ['exec', ctx.container, 'gcb', 'probe', '--repo', repo],
+        'head',
+        {
+          timeoutMs: PROBE_TIMEOUT_MS,
+        },
+      )
+      await note(`reauthorize: probe: ${answer.trim()}`)
+    } catch (error) {
+      failure =
+        failure ??
+        new BrokerFault(
+          'unavailable',
+          `gcb.reauthorize: the sidecar did not come back: ${messageOf(error)}`,
+        )
+    }
+  }
+  if (failure !== undefined) {
+    throw failure instanceof BrokerFault
+      ? failure
+      : new BrokerFault('unavailable', `gcb.reauthorize: ${messageOf(failure)}`)
+  }
+  return `reauthorized ${repo}; the device-flow code and the restart are in ${logPath}`
+}
+
 /* ------------------------------------------------------------------ gcb.update (host half) */
 
 /**
@@ -2625,6 +2773,31 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
 
+  {
+    name: 'gcb.reauthorize',
+    summary:
+      'Re-authorize the credential broker as a person: stop its container, run the device flow on the host, and restart it.',
+    confirm: true,
+    serial: true,
+    timeoutMs: REAUTHORIZE_TIMEOUT_MS + COMPOSE_TIMEOUT_MS * 2 + PROBE_TIMEOUT_MS,
+    requires: ['gcbCompose'],
+    available: ctx => ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined,
+    input: {
+      type: 'object',
+      properties: {
+        log: {
+          type: 'string',
+          pattern: '^[\\w-]{1,64}$',
+          description: 'The log id a job follows; the broker picks one when omitted.',
+        },
+      },
+      additionalProperties: false,
+    },
+    run(args, ctx) {
+      rejectUnknown(args, ['log'])
+      return reauthorizeBroker(ctx, optionalLog(args))
+    },
+  },
   {
     name: 'gcb.update',
     summary:

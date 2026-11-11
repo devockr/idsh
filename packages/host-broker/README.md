@@ -110,7 +110,9 @@ request.
 | `deploy.recreate` | runs fixed `docker compose up -d --no-build` in `--checkout`; confirmation required                                                                                                                                                             |
 | `gcb.allow`       | adds or removes one allowlist entry through the staged gcb host CLI (host defaults to github.com); confirmation required                                                                                                                        |
 | `gcb.update`      | updates both credential-broker halves from one commit (`--gcb-host`, `--gcb-client-image`, `target`); confirmation required                                                                                                                     |
-| `ops.describe`    | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table                                                                                                                           |
+
+| `gcb.reauthorize` | stops the broker container, runs `gcb authorize --broker-container` on the host, and restarts it; the device-flow code and restart are in the job log; confirmation required |
+| `ops.describe` | the table itself — names, summaries and schemas; a `{protocol}` client gets the envelope, an older one the bare table |
 
 ### Operation notes
 

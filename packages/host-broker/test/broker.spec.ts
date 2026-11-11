@@ -4523,6 +4523,25 @@ function startFakeDaemon(deployDir: string): { pid: number; stop(): void } {
   return { pid: child.pid ?? 0, stop: () => child.kill() }
 }
 
+void test('gcb.reauthorize is offered with confirmation and a followable log', async () => {
+  const rig = await gcbRig()
+  try {
+    const described = await rig.connection.request({
+      op: 'ops.describe',
+      args: { protocol: 1 },
+    })
+    const op = describedTable(described.result).ops.find(
+      candidate => candidate.name === 'gcb.reauthorize',
+    )
+    assert.ok(op !== undefined)
+    assert.equal(op.confirm, true)
+    const properties = (op.input as { properties?: Record<string, unknown> }).properties
+    assert.ok(properties !== undefined && 'log' in properties)
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.allow edits the file the daemon reports', async () => {
   const rig = await gcbRig({ host: true })
   const deployDir = path.dirname(rig.pinFile ?? '')
