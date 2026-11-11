@@ -4593,6 +4593,29 @@ void test('gcb.authorize leaves an originally stopped sidecar stopped after reco
   }
 })
 
+void test('gcb.authorize restarts a sidecar recorded running even without a backup', async () => {
+  const rig = await gcbRig({ host: true })
+  const deployDir = path.dirname(rig.pinFile ?? '')
+  const config = path.join(deployDir, 'config', 'broker.config.yml')
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  await mkdir(path.dirname(config), { recursive: true })
+  await writeFile(config, 'hosts: {}\n')
+  await mkdir(path.dirname(cli), { recursive: true })
+  await writeFile(cli, "process.stdout.write('device code\\\\n'); process.exit(1)\\\\n")
+  await writeFile(path.join(deployDir, 'user.refresh.swap.json'), JSON.stringify({ running: true }))
+  try {
+    const answer = await rig.connection.request({
+      op: 'gcb.authorize',
+      args: { log: 'recover-3' },
+    })
+    assert.equal(answer.ok, false)
+    assert.match(await rig.calls(), /up -d --no-deps/)
+    await assert.rejects(readFile(path.join(deployDir, 'user.refresh.swap.json')))
+  } finally {
+    await rig.close()
+  }
+})
+
 void test('gcb.allow edits the file the daemon reports', async () => {
   const rig = await gcbRig({ host: true })
   const deployDir = path.dirname(rig.pinFile ?? '')
