@@ -112,34 +112,25 @@ add_setting() {
   grep -qsE "$2" "$1" || append_line "$1" "$3" || true
 }
 
-# A YAML file that starts with a flow mapping/sequence cannot take a block-style key appended to
-# it; that is the deployment's configuration, and is left as it is.
-add_yaml_setting() {
-  if [ -s "$1" ]; then
-    first_line="$(grep -vE '^[[:space:]]*(#|$)' "$1" | head -n 1)"
-    case "$first_line" in
-      \{* | \[*)
-        echo "entrypoint: $1 is flow-style YAML; leaving it to the deployment" >&2
-        return 0
-        ;;
-    esac
-  fi
-  add_setting "$@"
+# YAML settings go through dsh's own parser (tools/yaml-default.mjs): appending text would break
+# flow mappings, omit document markers and duplicate keys.
+set_yaml_default() {
+  node /opt/dsh/tools/yaml-default.mjs "$1" "$2" "$3" || true
 }
 
 if [ -w "$HOME" ]; then
   add_setting "$HOME/.npmrc" '^[[:space:]]*registry[[:space:]]*=' "registry=$NPM_REGISTRY"
   add_setting "$HOME/.yarnrc" '^[[:space:]]*(-{1,2})?registry[[:space:]=]' "registry \"$NPM_REGISTRY\""
-  add_yaml_setting "$HOME/.yarnrc.yml" '^npmRegistryServer[[:space:]]*:' "npmRegistryServer: \"$NPM_REGISTRY\""
+  set_yaml_default "$HOME/.yarnrc.yml" npmRegistryServer "$NPM_REGISTRY"
   # Caches live in the mounted state directory, written as home configuration so a project's own
   # `cache`/`cache-folder`/`globalFolder`/`storeDir` still wins over it. pnpm's own key only
   # exists in its YAML config (camelCase, not `.npmrc`), and its environment variable would
   # outrank a project's `storeDir`, so this is the lower-priority default.
   add_setting "$HOME/.npmrc" '^[[:space:]]*cache[[:space:]]*=' "cache=$HOME/.dsh/cache/npm"
   add_setting "$HOME/.yarnrc" '^[[:space:]]*(-{1,2})?cache-folder[[:space:]=]' "cache-folder \"$HOME/.dsh/cache/yarn\""
-  add_yaml_setting "$HOME/.yarnrc.yml" '^["'"'"']?globalFolder["'"'"']?[[:space:]]*:' "globalFolder: \"$HOME/.dsh/cache/yarn-global\""
+  set_yaml_default "$HOME/.yarnrc.yml" globalFolder "$HOME/.dsh/cache/yarn-global"
   mkdir -p "$HOME/.config/pnpm" 2> /dev/null || true
-  add_yaml_setting "$HOME/.config/pnpm/config.yaml" '^["'"'"']?storeDir["'"'"']?[[:space:]]*:' "storeDir: \"$HOME/.dsh/cache/pnpm-store\""
+  set_yaml_default "$HOME/.config/pnpm/config.yaml" storeDir "$HOME/.dsh/cache/pnpm-store"
   # pnpm writes this config atomically, so the directory has to be the deployment user's; the
   # loop below only reaches top-level entries, and a mounted .config is not otherwise touched.
   chown -h "$PUID:$PGID" "$HOME/.config/pnpm" "$HOME/.config/pnpm/config.yaml" 2> /dev/null || true
