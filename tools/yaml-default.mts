@@ -43,4 +43,5 @@ try {
   console.error(
     `entrypoint: could not set ${key} in ${file}: ${error instanceof Error ? error.message : error}`,
   )
+  process.exitCode = 1
 }
