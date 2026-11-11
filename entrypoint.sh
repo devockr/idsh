@@ -106,6 +106,7 @@ add_setting() {
   # A symlink is the deployment's configuration, not ours: appending through it as root would
   # follow a target the deployment user controls.
   if [ -L "$1" ]; then
+    echo "entrypoint: $1 is a symlink; leaving it to the deployment" >&2
     return 0
   fi
   grep -qsE "$2" "$1" || append_line "$1" "$3" || true
