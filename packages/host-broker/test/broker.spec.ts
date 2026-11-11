@@ -4523,7 +4523,7 @@ function startFakeDaemon(deployDir: string): { pid: number; stop(): void } {
   return { pid: child.pid ?? 0, stop: () => child.kill() }
 }
 
-void test('gcb.reauthorize is offered with confirmation and a followable log', async () => {
+void test('gcb.authorize is offered with confirmation and a followable log', async () => {
   const rig = await gcbRig()
   try {
     const described = await rig.connection.request({
@@ -4531,7 +4531,7 @@ void test('gcb.reauthorize is offered with confirmation and a followable log', a
       args: { protocol: 1 },
     })
     const op = describedTable(described.result).ops.find(
-      candidate => candidate.name === 'gcb.reauthorize',
+      candidate => candidate.name === 'gcb.authorize',
     )
     assert.ok(op !== undefined)
     assert.equal(op.confirm, true)

@@ -37,6 +37,7 @@ import {
   FILE_MODE,
   GCB_HOST_POLL_MS,
   GCB_HOST_WAIT_MS,
+  AUTHORIZE_TIMEOUT_MS,
   GCB_PULL_TIMEOUT_MS,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
@@ -1989,10 +1990,7 @@ async function updateBroker(
   }
 }
 
-/* ---------------------------------------------------------- gcb.reauthorize */
-
-/** How long the person has to finish the device flow; GitHub's code lives 15 minutes. */
-const REAUTHORIZE_TIMEOUT_MS = 16 * 60_000
+/* ---------------------------------------------------------- gcb.authorize */
 
 /**
  * Re-authorize the credential broker as a person, on the host.
@@ -2003,26 +2001,26 @@ const REAUTHORIZE_TIMEOUT_MS = 16 * 60_000
  * single request/answer cannot carry. The token itself is never read here; gcb writes it beside the
  * configuration, where the sidecar's mount already looks for it.
  */
-async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Promise<string> {
+async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promise<string> {
   const composeFiles = ctx.gcbCompose
   const repo = ctx.gcbProbeRepo
   if (composeFiles === undefined || repo === undefined) {
     throw new BrokerFault(
       'unavailable',
-      'gcb.reauthorize needs the broker container: start the broker with --gcb-compose and --gcb-probe-repo',
+      'gcb.authorize needs the broker container: start the broker with --gcb-compose and --gcb-probe-repo',
     )
   }
-  const deployDir = await hostDeployDir(ctx, 'gcb.reauthorize')
+  const deployDir = await hostDeployDir(ctx, 'gcb.authorize')
   const config = path.join(deployDir, 'config', 'broker.config.yml')
   const configured = await stat(config).catch(() => null)
   if (configured === null || !configured.isFile()) {
-    throw new BrokerFault('unavailable', `gcb.reauthorize: ${config} is not there`)
+    throw new BrokerFault('unavailable', `gcb.authorize: ${config} is not there`)
   }
   const uid = process.getuid?.()
   if (uid !== undefined && configured.uid !== uid) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.reauthorize: ${config} is owned by uid ${String(configured.uid)}, not ${String(uid)}; chown the config, key and token to the deployment user first`,
+      `gcb.authorize: ${config} is owned by uid ${String(configured.uid)}, not ${String(uid)}; chown the config, key and token to the deployment user first`,
     )
   }
   const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
@@ -2030,14 +2028,14 @@ async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Pro
   if (staged === null || !staged.isFile()) {
     throw new BrokerFault(
       'unavailable',
-      `gcb.reauthorize: ${cli} is not staged; run gcb.update (target host, or both) first`,
+      `gcb.authorize: ${cli} is not staged; run gcb.update (target host, or both) first`,
     )
   }
   const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
   const log = await openAppendLog(logPath)
   try {
     await log.chmod(FILE_MODE)
-    await log.write(`reauthorize: stopping ${ctx.gcbService}\n`)
+    await log.write(`authorize: stopping ${ctx.gcbService}\n`)
   } finally {
     await log.close()
   }
@@ -2049,7 +2047,7 @@ async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Pro
   const service = ctx.gcbService
   const cwd = ctx.checkout
   if (cwd === undefined) {
-    throw new BrokerFault('unavailable', 'gcb.reauthorize: no checkout to run compose from')
+    throw new BrokerFault('unavailable', 'gcb.authorize: no checkout to run compose from')
   }
   const gid = process.getgid?.()
   const composeEnv: NodeJS.ProcessEnv = {
@@ -2069,7 +2067,7 @@ async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Pro
   try {
     await compose(['stop', service])
     stopped = true
-    await note(`reauthorize: ${service} stopped; starting the device flow`)
+    await note(`authorize: ${service} stopped; starting the device flow`)
     const child = spawn(
       process.execPath,
       ['--conditions=development', cli, 'authorize', '--broker-container', '--config', config],
@@ -2084,7 +2082,7 @@ async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Pro
     child.stderr.on('data', chunk => void appendFile(logPath, chunk, { mode: FILE_MODE }))
     const timer = setTimeout(() => {
       child.kill('SIGTERM')
-    }, REAUTHORIZE_TIMEOUT_MS)
+    }, AUTHORIZE_TIMEOUT_MS)
     const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       resolve => {
         child.on('error', error => {
@@ -2098,7 +2096,7 @@ async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Pro
     if (failure === undefined && exit.code !== 0) {
       failure = new BrokerFault(
         'unavailable',
-        `gcb.reauthorize: gcb authorize exited with ${String(exit.code ?? exit.signal)}; see ${logPath}`,
+        `gcb.authorize: gcb authorize exited with ${String(exit.code ?? exit.signal)}; see ${logPath}`,
       )
     }
   } catch (error) {
@@ -2110,7 +2108,7 @@ async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Pro
   if (stopped) {
     try {
       await compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service])
-      await note(`reauthorize: ${service} restarted`)
+      await note(`authorize: ${service} restarted`)
       const answer = await docker(
         ctx,
         ['exec', ctx.container, 'gcb', 'probe', '--repo', repo],
@@ -2119,22 +2117,22 @@ async function reauthorizeBroker(ctx: OpContext, logId: string | undefined): Pro
           timeoutMs: PROBE_TIMEOUT_MS,
         },
       )
-      await note(`reauthorize: probe: ${answer.trim()}`)
+      await note(`authorize: probe: ${answer.trim()}`)
     } catch (error) {
       failure =
         failure ??
         new BrokerFault(
           'unavailable',
-          `gcb.reauthorize: the sidecar did not come back: ${messageOf(error)}`,
+          `gcb.authorize: the sidecar did not come back: ${messageOf(error)}`,
         )
     }
   }
   if (failure !== undefined) {
     throw failure instanceof BrokerFault
       ? failure
-      : new BrokerFault('unavailable', `gcb.reauthorize: ${messageOf(failure)}`)
+      : new BrokerFault('unavailable', `gcb.authorize: ${messageOf(failure)}`)
   }
-  return `reauthorized ${repo}; the device-flow code and the restart are in ${logPath}`
+  return `authorized ${repo}; the device-flow code and the restart are in ${logPath}`
 }
 
 /* ------------------------------------------------------------------ gcb.update (host half) */
@@ -2774,12 +2772,12 @@ export const OPS: readonly OpDefinition[] = [
   },
 
   {
-    name: 'gcb.reauthorize',
+    name: 'gcb.authorize',
     summary:
       'Re-authorize the credential broker as a person: stop its container, run the device flow on the host, and restart it.',
     confirm: true,
     serial: true,
-    timeoutMs: REAUTHORIZE_TIMEOUT_MS + COMPOSE_TIMEOUT_MS * 2 + PROBE_TIMEOUT_MS,
+    timeoutMs: AUTHORIZE_TIMEOUT_MS + COMPOSE_TIMEOUT_MS * 2 + PROBE_TIMEOUT_MS,
     requires: ['gcbCompose'],
     available: ctx => ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined,
     input: {
@@ -2795,7 +2793,7 @@ export const OPS: readonly OpDefinition[] = [
     },
     run(args, ctx) {
       rejectUnknown(args, ['log'])
-      return reauthorizeBroker(ctx, optionalLog(args))
+      return authorizeBroker(ctx, optionalLog(args))
     },
   },
   {

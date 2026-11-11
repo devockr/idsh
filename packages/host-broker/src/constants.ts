@@ -100,6 +100,9 @@ export const RECREATE_POLL_MS = 2_000
  * exists so the answer says "staged", not "asked", and a timeout is a visible failure rather than a
  * broker that silently keeps serving the previous commit.
  */
+/** How long the person has to finish the device flow; GitHub's code lives 15 minutes. */
+export const AUTHORIZE_TIMEOUT_MS = 16 * 60_000
+
 export const GCB_HOST_WAIT_MS = 300_000
 
 /** How often that wait looks at the pid file and the staged export. */
