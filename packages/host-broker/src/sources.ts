@@ -2077,13 +2077,15 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       { cwd: deployDir, logPath, timeoutMs: AUTHORIZE_TIMEOUT_MS },
     )
   } catch (error) {
-    failure =
-      error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
+    // Keep the runner's code (a timeout is not "unavailable") and point at the log, so a
+    // deployment without the job registry still knows where the device-flow code went.
+    failure = new BrokerFault(
+      error instanceof BrokerFault ? error.code : 'unavailable',
+      `gcb.authorize: ${messageOf(error)}; see ${logPath}`,
+    )
   }
   if (failure !== undefined) {
-    throw failure instanceof BrokerFault
-      ? failure
-      : new BrokerFault('unavailable', `gcb.authorize: ${messageOf(failure)}`)
+    throw failure
   }
   return `authorized the credential broker; the device-flow code is in ${logPath}`
 }
