@@ -113,7 +113,7 @@ if [ -w "$HOME" ]; then
   # Caches live in the mounted state directory; written as home configuration, so a project's own
   # `cache-folder`/`globalFolder` still wins (environment variables would outrank it).
   add_setting "$HOME/.yarnrc" '^[[:space:]]*(-{1,2})?cache-folder[[:space:]=]' "cache-folder \"/home/app/.dsh/cache/yarn\""
-  add_setting "$HOME/.yarnrc.yml" '^globalFolder[[:space:]]*:' "globalFolder: \"/home/app/.dsh/cache/yarn-global\""
+  add_setting "$HOME/.yarnrc.yml" '^[[:space:]]*["'"'"']?globalFolder["'"'"']?[[:space:]]*:' "globalFolder: \"/home/app/.dsh/cache/yarn-global\""
 fi
 
 # Corepack and node-gyp have no config file to write, so their two mirrors have to
