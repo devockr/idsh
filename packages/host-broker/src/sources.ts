@@ -2153,7 +2153,16 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       if (wasRunning) {
         await compose(['stop', service])
       }
+      const backup = path.join(deployDir, 'user.refresh.previous')
+      let backedUp = false
       try {
+        // Keep the token the sidecar has now until the new one has started and probed.
+        await rm(backup, { force: true })
+        const previous = await stat(target).catch(() => null)
+        if (previous?.isFile() === true) {
+          await rename(target, backup)
+          backedUp = true
+        }
         await rename(staging, target)
         await note(`authorize: token replaced in ${target}`)
         if (wasRunning) {
@@ -2178,6 +2187,12 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
           await note(`authorize: probe: ${answer.trim()}`)
         }
       } catch (error) {
+        if (backedUp) {
+          await rm(target, { force: true }).catch(() => undefined)
+          await rename(backup, target).catch(() => undefined)
+          backedUp = false
+          await note('authorize: the previous token was restored')
+        }
         const message = `gcb.authorize: the token could not be installed: ${messageOf(error)}`
         await note(`authorize: ${message}`)
         failure =
@@ -2203,6 +2218,10 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
             await note(`authorize: ${restart}`)
             failure = new BrokerFault('unavailable', `${messageOf(failure)}; ${restart}`)
           }
+        }
+      } finally {
+        if (backedUp) {
+          await rm(backup, { force: true }).catch(() => undefined)
         }
       }
     }
