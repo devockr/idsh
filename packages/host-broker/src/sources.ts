@@ -2070,22 +2070,34 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       env: composeEnv,
       timeoutMs: COMPOSE_TIMEOUT_MS,
     })
-  let stopped = false
   let wasRunning = false
+  let recover = false
   let failure: Error | undefined
+  // Read through a call: `ctx.signal?.aborted` is narrowed by the first check, but the signal can
+  // abort while the device flow is in progress.
+  const aborted = (): boolean => ctx.signal?.aborted === true
   try {
     // The sidecar is restored to the state it had: a stopped sidecar is not started by this call.
     const runningId = (await compose(['ps', '-q', service])).trim().split('\n')[0] ?? ''
     if (runningId !== '') {
       wasRunning =
         (
-          await docker(ctx, ['inspect', '--format', '{{.State.Running}}', runningId], 'head', {
+          await docker(durable, ['inspect', '--format', '{{.State.Running}}', runningId], 'head', {
+            stdoutOnly: true,
             timeoutMs: GCB_QUERY_TIMEOUT_MS,
           })
         ).trim() === 'true'
     }
+    // Recorded before the stop: a stop that is accepted and then loses its client still has to be
+    // recovered from.
+    recover = wasRunning
     await compose(['stop', service])
-    stopped = true
+    if (aborted()) {
+      throw new BrokerFault(
+        'unavailable',
+        'gcb.authorize: the request was cancelled before the device flow',
+      )
+    }
     await note(`authorize: ${service} stopped; starting the device flow`)
     const child = spawn(
       process.execPath,
@@ -2105,6 +2117,12 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
     child.stderr.on('data', (chunk: Buffer) => {
       appendFile(logPath, chunk, { mode: FILE_MODE }).catch(() => undefined)
     })
+    // A cancelled request must not leave the flow running: the child is killed and its exit is
+    // awaited below, before any recovery attempt.
+    const abortChild = (): void => {
+      child.kill('SIGTERM')
+    }
+    ctx.signal?.addEventListener('abort', abortChild, { once: true })
     const timer = setTimeout(() => {
       child.kill('SIGTERM')
     }, AUTHORIZE_TIMEOUT_MS)
@@ -2118,6 +2136,13 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       },
     )
     clearTimeout(timer)
+    ctx.signal?.removeEventListener('abort', abortChild)
+    if (aborted() && failure === undefined) {
+      failure = new BrokerFault(
+        'unavailable',
+        'gcb.authorize: the request was cancelled; the sidecar is being restored',
+      )
+    }
     if (failure === undefined && exit.code !== 0) {
       failure = new BrokerFault(
         'unavailable',
@@ -2130,8 +2155,11 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
   }
   // Whatever happened, the sidecar must not be left down; its previous token is still in place
   // when authorize failed, and the process is restarted from the same compose definition.
-  if (stopped && wasRunning) {
+  if (recover) {
     try {
+      // A stop whose client was lost can still be settling; a second one waits it out before the
+      // restart, so the container cannot be started while compose is still stopping it.
+      await compose(['stop', service]).catch(() => undefined)
       await compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', '--wait', service])
       await note(`authorize: ${service} restarted`)
       const answer = await docker(
