@@ -104,6 +104,9 @@ export const RECREATE_POLL_MS = 2_000
 /** 16 minutes, so the person has the device flow's 15-minute window plus a margin. */
 export const AUTHORIZE_TIMEOUT_MS = 960_000
 
+/** Ps, the initial stop, the settling stop and the restart: four compose calls. */
+export const AUTHORIZE_COMPOSE_STEPS = 4
+
 export const GCB_HOST_WAIT_MS = 300_000
 
 /** How often that wait looks at the pid file and the staged export. */

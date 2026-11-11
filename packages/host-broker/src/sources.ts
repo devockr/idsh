@@ -38,6 +38,7 @@ import {
   GCB_HOST_POLL_MS,
   GCB_HOST_WAIT_MS,
   AUTHORIZE_TIMEOUT_MS,
+  AUTHORIZE_COMPOSE_STEPS,
   GCB_PULL_TIMEOUT_MS,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
@@ -2099,6 +2100,14 @@ async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promi
       )
     }
     await note(`authorize: ${service} stopped; starting the device flow`)
+    // The log write is asynchronous: the signal can abort while it is in flight, before the
+    // listener below exists.
+    if (aborted()) {
+      throw new BrokerFault(
+        'unavailable',
+        'gcb.authorize: the request was cancelled before the device flow',
+      )
+    }
     const child = spawn(
       process.execPath,
       ['--conditions=development', cli, 'authorize', '--broker-container', '--config', config],
@@ -2830,7 +2839,13 @@ export const OPS: readonly OpDefinition[] = [
       'Re-authorize the credential broker as a person: stop its container, run the device flow on the host, and restart it.',
     confirm: true,
     serial: true,
-    timeoutMs: AUTHORIZE_TIMEOUT_MS + COMPOSE_TIMEOUT_MS * 2 + PROBE_TIMEOUT_MS,
+    // ps, the initial stop, the settling stop and the restart, plus the running-state inspect,
+    // the authorization itself and the probe.
+    timeoutMs:
+      AUTHORIZE_TIMEOUT_MS +
+      COMPOSE_TIMEOUT_MS * AUTHORIZE_COMPOSE_STEPS +
+      GCB_QUERY_TIMEOUT_MS +
+      PROBE_TIMEOUT_MS,
     requires: ['gcbCompose'],
     available: ctx => ctx.gcbCompose !== undefined && ctx.gcbProbeRepo !== undefined,
     input: {
