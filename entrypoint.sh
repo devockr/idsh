@@ -103,13 +103,39 @@ add_setting() {
   if [ -e "$1" ] && [ ! -w "$1" ]; then
     return 0
   fi
+  # A symlink is the deployment's configuration, not ours: appending through it as root would
+  # follow a target the deployment user controls.
+  if [ -L "$1" ]; then
+    echo "entrypoint: $1 is a symlink; leaving it to the deployment" >&2
+    return 0
+  fi
   grep -qsE "$2" "$1" || append_line "$1" "$3" || true
+}
+
+# YAML settings go through dsh's own parser (tools/yaml-default.mts): appending text would break
+# flow mappings, omit document markers and duplicate keys.
+set_yaml_default() {
+  if ! node /opt/dsh/tools/yaml-default.mts "$1" "$2" "$3"; then
+    echo "entrypoint: could not set $2 in $1; leaving it to the deployment" >&2
+  fi
 }
 
 if [ -w "$HOME" ]; then
   add_setting "$HOME/.npmrc" '^[[:space:]]*registry[[:space:]]*=' "registry=$NPM_REGISTRY"
   add_setting "$HOME/.yarnrc" '^[[:space:]]*(-{1,2})?registry[[:space:]=]' "registry \"$NPM_REGISTRY\""
-  add_setting "$HOME/.yarnrc.yml" '^npmRegistryServer[[:space:]]*:' "npmRegistryServer: \"$NPM_REGISTRY\""
+  set_yaml_default "$HOME/.yarnrc.yml" npmRegistryServer "$NPM_REGISTRY"
+  # Caches live in the mounted state directory, written as home configuration so a project's own
+  # `cache`/`cache-folder`/`globalFolder`/`storeDir` still wins over it. pnpm's own key only
+  # exists in its YAML config (camelCase, not `.npmrc`), and its environment variable would
+  # outrank a project's `storeDir`, so this is the lower-priority default.
+  add_setting "$HOME/.npmrc" '^[[:space:]]*cache[[:space:]]*=' "cache=$HOME/.dsh/cache/npm"
+  add_setting "$HOME/.yarnrc" '^[[:space:]]*(-{1,2})?cache-folder[[:space:]=]' "cache-folder \"$HOME/.dsh/cache/yarn\""
+  set_yaml_default "$HOME/.yarnrc.yml" globalFolder "$HOME/.dsh/cache/yarn-global"
+  mkdir -p "$HOME/.config/pnpm" 2> /dev/null || true
+  set_yaml_default "$HOME/.config/pnpm/config.yaml" storeDir "$HOME/.dsh/cache/pnpm-store"
+  # pnpm writes this config atomically, so the directory has to be the deployment user's; the
+  # loop below only reaches top-level entries, and a mounted .config is not otherwise touched.
+  chown -h "$PUID:$PGID" "$HOME/.config/pnpm" "$HOME/.config/pnpm/config.yaml" 2> /dev/null || true
 fi
 
 # Corepack and node-gyp have no config file to write, so their two mirrors have to

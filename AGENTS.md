@@ -59,22 +59,23 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   `docker-compose.prod.yml` for the pinned images), which are a state-directory path, a
   public mirror and image names and hold nothing personal.
 - **Each image has its own ignore file**: `.dockerignore` for `Dockerfile` (which copies
-  `entrypoint.sh` and the one tool the entrypoint runs, `tools/sync-companions.mts`),
+  `entrypoint.sh` and the tools the entrypoint runs, `tools/sync-companions.mts` and
+  `tools/yaml-default.mts`),
   `Dockerfile.dev.dockerignore` for the dev image (`packages/` and `tools/dev/`, plus the Dockerfile
   itself, which BuildKit reads from the context). Neither build carries the other's
   content, and a new `COPY` has to be whitelisted in the right one or the build fails loudly.
-- **The `@deepseek-ai/dsh@…`/`pnpm@…` pins and the plugins baked into the images** are read by the
-  custom managers in `renovate.json`: the first parses the `npm install -g` RUN line to its end, the
-  second the `dsh plugin add` lines. Keep both readable by those regexes — on one line, and with
-  the versions still in them.
+- **The `@deepseek-ai/dsh@…`/`pnpm@…`/`corepack@…` pins and the plugins baked into the images**
+  are read by the custom managers in `renovate.json`: the first parses the `npm install -g` RUN
+  line of either Dockerfile to its end, the second the `dsh plugin add` lines. Keep both readable
+  by those regexes — on one line, and with the versions still in them.
 
 ## Images
 
-| tag                   | contents                                                      | used by                              |
-| --------------------- | ------------------------------------------------------------- | ------------------------------------ |
-| `devockr/idsh:base`   | dsh + pnpm, nothing baked, no browser libraries               | the two images below                 |
-| `devockr/idsh:latest` | `:base` + a profile baked from the registry (strict)          | the deployment                       |
-| `devockr/idsh:dev`    | `:base` + those libraries; the profile baked from `packages/` | local runs and browser-driven checks |
+| tag                   | contents                                                                 | used by                              |
+| --------------------- | ------------------------------------------------------------------------ | ------------------------------------ |
+| `devockr/idsh:base`   | dsh + pnpm, nothing baked, no browser libraries                          | the two images below                 |
+| `devockr/idsh:latest` | `:base` + a profile baked from the registry (strict)                     | the deployment                       |
+| `devockr/idsh:dev`    | `:base` + those libraries + Corepack; the profile baked from `packages/` | local runs and browser-driven checks |
 
 Build the dev image with `pnpm dev`: it compiles the packages (`pnpm build`), then builds `:base`
 and then `:dev` — in that order, and both orders are the point. `:base` carries
@@ -257,8 +258,8 @@ Observe the running thing; do not reason from source.
 - **`tools/` itself holds what ships or what CI runs**: the release and check scripts
   (`sync-image-pins.mts`, `check-image-changesets.mts`, `check-peer-ranges.mts`), the shared
   `image-pins.mts` and `types.d.ts`, and
-  `sync-companions.mts` — the one script `entrypoint.sh` runs at boot, which the `Dockerfile`
-  copies by name so that everything else here stays out of the image.
+  `sync-companions.mts` and `yaml-default.mts` — the scripts `entrypoint.sh` runs at boot, which
+  the `Dockerfile` copies by name so that everything else here stays out of the image.
 - **`tools/dev/` is for local development only** — `deploy-dev.ts`, `deploy-prod.ts`,
   `ui-probe.mts` — nothing in there runs in CI or ships. A directory of its own, rather than a
   per-file convention, because the rule is who runs it, and that is a property of the whole set.
@@ -278,10 +279,11 @@ Observe the running thing; do not reason from source.
 - A change to a package under `packages/` needs a changeset (`.changeset/`). The `Release` workflow
   folds those into one version PR and publishes it with `pnpm release` — `changeset publish`, which
   runs each package's `prepack`, so the tarball it uploads always carries a fresh `lib/`.
-- **pnpm is pinned once, in `packageManager`**, which `pnpm/action-setup` reads — no `version:` in a
-  workflow. The `Dockerfile`'s `npm install -g pnpm@…` carries the same number and Renovate keeps
-  both current, so bump them together. It also gives `pnpm-lock.yaml` a second document (the `pnpm`
-  package and its `@pnpm/exe` set): that is pnpm 12 recording the managed version, not damage.
+- **pnpm is pinned once, in `packageManager`**, which `pnpm/action-setup` reads — no `version:`
+  in a workflow. `Dockerfile`'s `npm install -g pnpm@…` carries the same number and Renovate keeps
+  both current; the dev image's Corepack pin rides the same manager. It also gives
+  `pnpm-lock.yaml` a second document (the `pnpm` package and its `@pnpm/exe` set): that is
+  pnpm 12 recording the managed version, not damage.
 - `autofix.yml` fixes formatting and autofixable lint on pull requests, and has to keep the name
   `autofix.ci`; `pkg-pr-new.yml` runs `pkg-pr-new` through `pnpm dlx`, against that project's advice
   to use the lockfile in CI, to keep a preview-only tool out of the workspace dependencies.

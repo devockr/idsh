@@ -5,3 +5,6 @@
 *
 !entrypoint.sh
 !tools/
+
+# Synology's metadata directories: no build input, and never part of the published image.
+**/@eaDir

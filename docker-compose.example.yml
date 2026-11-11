@@ -53,6 +53,10 @@ services:
       # it; NPM_CONFIG_REGISTRY / YARN_NPM_REGISTRY_SERVER are not read, since as
       # environment variables they would outrank a project's own config.
       - NPM_REGISTRY
+      # Caches live in the mounted state directory, so a rebuild reuses what they downloaded.
+      # All four are home-level config written by the entrypoint (project settings still win);
+      # this line only matters for `docker exec`, which does not inherit the entrypoint's env.
+      - 'COREPACK_NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com/}'
       # Space-separated authorities allowed by dsh's browser-trust fence; set it
       # to the host (or host:port) you reach this UI on, e.g. dsh.example.com.
       - DSH_TRUSTED_HOSTS

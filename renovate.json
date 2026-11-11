@@ -4,8 +4,8 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Keep the `npm install -g` pins in the Dockerfile up to date; one or several packages per command are read",
-      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "description": "Keep the `npm install -g` pins in either Dockerfile up to date; one or several packages per command are read",
+      "managerFilePatterns": ["/(^|/)Dockerfile(\\.dev)?$/"],
       "matchStringsStrategy": "recursive",
       "matchStrings": [
         "npm install -g (?:\\\\\\n|[^\\n&])+",
