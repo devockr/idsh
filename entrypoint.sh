@@ -111,12 +111,14 @@ if [ -w "$HOME" ]; then
   add_setting "$HOME/.yarnrc" '^[[:space:]]*(-{1,2})?registry[[:space:]=]' "registry \"$NPM_REGISTRY\""
   add_setting "$HOME/.yarnrc.yml" '^npmRegistryServer[[:space:]]*:' "npmRegistryServer: \"$NPM_REGISTRY\""
   # Caches live in the mounted state directory, written as home configuration so a project's own
-  # `cache`/`cache-folder`/`globalFolder` still wins over it. pnpm 12 no longer reads a store
-  # key from .npmrc, and `store-dir` there makes npm warn, so its store stays in the environment,
-  # where only pnpm's own variable applies.
+  # `cache`/`cache-folder`/`globalFolder`/`storeDir` still wins over it. pnpm's own key only
+  # exists in its YAML config (camelCase, not `.npmrc`), and its environment variable would
+  # outrank a project's `storeDir`, so this is the lower-priority default.
   add_setting "$HOME/.npmrc" '^[[:space:]]*cache[[:space:]]*=' "cache=$HOME/.dsh/cache/npm"
   add_setting "$HOME/.yarnrc" '^[[:space:]]*(-{1,2})?cache-folder[[:space:]=]' "cache-folder \"$HOME/.dsh/cache/yarn\""
   add_setting "$HOME/.yarnrc.yml" '^["'"'"']?globalFolder["'"'"']?[[:space:]]*:' "globalFolder: \"$HOME/.dsh/cache/yarn-global\""
+  mkdir -p "$HOME/.config/pnpm" 2> /dev/null || true
+  add_setting "$HOME/.config/pnpm/config.yaml" '^["'"'"']?storeDir["'"'"']?[[:space:]]*:' "storeDir: \"$HOME/.dsh/cache/pnpm-store\""
 fi
 
 # Corepack and node-gyp have no config file to write, so their two mirrors have to

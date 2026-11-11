@@ -54,12 +54,9 @@ services:
       # environment variables they would outrank a project's own config.
       - NPM_REGISTRY
       # Caches live in the mounted state directory, so a rebuild reuses what they downloaded.
-      # npm and Yarn get theirs through $HOME/.npmrc and the Yarn config files (project settings
-      # still win); pnpm 12 reads its store only from the environment. A root `docker exec pnpm`
-      # can leave root-owned files in that PUID store — accepted here, since a root exec is already
-      # privileged. `docker exec` would not see the deployment's registry without this line.
+      # All four are home-level config written by the entrypoint (project settings still win);
+      # this line only matters for `docker exec`, which does not inherit the entrypoint's env.
       - 'COREPACK_NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com/}'
-      - pnpm_config_store_dir=/home/app/.dsh/cache/pnpm-store
       # Space-separated authorities allowed by dsh's browser-trust fence; set it
       # to the host (or host:port) you reach this UI on, e.g. dsh.example.com.
       - DSH_TRUSTED_HOSTS
