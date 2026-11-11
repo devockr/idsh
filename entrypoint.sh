@@ -103,6 +103,11 @@ add_setting() {
   if [ -e "$1" ] && [ ! -w "$1" ]; then
     return 0
   fi
+  # A symlink is the deployment's configuration, not ours: appending through it as root would
+  # follow a target the deployment user controls.
+  if [ -L "$1" ]; then
+    return 0
+  fi
   grep -qsE "$2" "$1" || append_line "$1" "$3" || true
 }
 
