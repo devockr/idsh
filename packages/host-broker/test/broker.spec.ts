@@ -4403,6 +4403,8 @@ async function gcbRig(
     ps?: string
     inspect?: string
     probe?: string
+    /** How the staged-client executable check ends; defaults to `exit 1` (absent). */
+    staged?: string
     /** How many compose files to configure; more than one exercises the base-plus-overlay form. */
     files?: number
     /** Configure the host half too, so a failure can be checked against its pin. */
@@ -4444,6 +4446,7 @@ async function gcbRig(
         stub.ps,
         `if [ -e ${JSON.stringify(replaced)} ]; then echo def456; else echo abc123; fi`,
       ),
+      arm('test -x /home/app/.dsh/bin/gcb', stub.staged, 'exit 1'),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect --format {{.Image}}', stub.previousImage, 'echo oldimage'),
       arm('tag ', stub.tag, 'exit 0'),
@@ -4802,6 +4805,22 @@ void test('gcb.update says when there was no image to restore', async () => {
     const message = JSON.stringify(answer.error)
     assert.match(message, /recreate failed/u)
     assert.match(message, /no running image was recorded, so the tag was not restored/u)
+  } finally {
+    await rig.close()
+  }
+})
+
+void test('gcb.update probes the staged client when the container has one', async () => {
+  const rig = await gcbRig({ staged: 'exit 0' })
+  try {
+    const answer = await rig.connection.request({ op: 'gcb.update', args: {} })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    const recorded = await rig.calls()
+    assert.match(recorded, /exec dsh \/home\/app\/\.dsh\/bin\/gcb probe --repo devockr\/idsh/u)
+    assert.match(
+      answer.result ?? '',
+      /probe: devockr\/idsh allowed via \/home\/app\/\.dsh\/bin\/gcb/u,
+    )
   } finally {
     await rig.close()
   }

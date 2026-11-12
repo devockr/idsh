@@ -24,6 +24,7 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -1628,6 +1629,135 @@ async function editAllowlist(
  * which one it was; the container's own state is the last word, because a build that cannot start
  * is not a successful update.
  */
+/**
+ * Put the built client where dsh resolves it: <state>/cache/gcb-client/<version>, a `current`
+ * symlink, and <state>/bin/gcb. Best effort: a failure must not fail the sidecar update.
+ */
+async function stageClient(
+  ctx: OpContext,
+  image: string,
+): Promise<{ current: string; bin: string; previous: string | undefined; version: string }> {
+  const mount = (
+    await docker(
+      ctx,
+      [
+        'inspect',
+        '--type',
+        'container',
+        '--format',
+        '{{range .Mounts}}{{if eq .Destination "/home/app/.dsh"}}{{.Source}}{{end}}{{end}}',
+        ctx.container,
+      ],
+      'head',
+      { stdoutOnly: true, timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+  ).trim()
+  if (mount === '') {
+    throw new BrokerFault('unavailable', 'the deployment has no /home/app/.dsh mount to stage into')
+  }
+  const version = (
+    await docker(ctx, ['run', '--rm', '--entrypoint', 'gcb', image, '--version'], 'head', {
+      stdoutOnly: true,
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
+  ).trim()
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version)) {
+    throw new BrokerFault('unavailable', 'the client image did not report a version')
+  }
+  const imageId = (
+    await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', image], 'head', {
+      stdoutOnly: true,
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
+  ).trim()
+  if (!/^sha256:[0-9a-f]{64}$/u.test(imageId)) {
+    throw new BrokerFault('unavailable', 'the client image has no usable id')
+  }
+  // A dev rebuild keeps the package version but changes the image id; key the immutable tree by
+  // both, or the second build would be dropped as "already published".
+  const identity = `${version}-${imageId.slice('sha256:'.length, 'sha256:'.length + 12)}`
+  const root = path.join(mount, 'cache', 'gcb-client')
+  await mkdir(root, { recursive: true })
+  const uid = process.getuid?.() ?? 0
+  const gid = process.getgid?.() ?? 0
+  const stagedName = `.stage-${String(process.pid)}`
+  const staged = path.join(root, stagedName)
+  const containerStaged = `/out/${stagedName}`
+  await rm(staged, { recursive: true, force: true })
+  // Fixed shell text: the only interpolation is the version matched above and the numeric pid.
+  // Run as the deployment user so the staged tree belongs to it.
+  const script = [
+    'set -e',
+    `mkdir -p "${containerStaged}/lib/node_modules" "${containerStaged}/bin"`,
+    `cp -a /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-core "${containerStaged}/lib/node_modules/"`,
+    `ln -sf ../lib/node_modules/gcb-client/bin/gcb.js "${containerStaged}/bin/gcb"`,
+    `chmod +x "${containerStaged}/bin/gcb"`,
+  ].join('\n')
+  await docker(
+    ctx,
+    [
+      'run',
+      '--rm',
+      '--user',
+      `${String(uid)}:${String(gid)}`,
+      '-v',
+      `${root}:/out`,
+      '--entrypoint',
+      'sh',
+      image,
+      '-c',
+      script,
+    ],
+    'tail',
+    { timeoutMs: BUILD_TIMEOUT_MS },
+  )
+  // Publish only a completed directory; an already published version is never overwritten.
+  const versionDir = path.join(root, identity)
+  try {
+    await rename(staged, versionDir)
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code === 'EEXIST' ||
+      (error as NodeJS.ErrnoException).code === 'ENOTEMPTY'
+    ) {
+      await rm(staged, { recursive: true, force: true })
+    } else {
+      throw error
+    }
+  }
+  // The executable link first: if this fails, current still names the old client.
+  const bin = path.join(mount, 'bin')
+  await mkdir(bin, { recursive: true })
+  const link = path.join(bin, 'gcb')
+  const tmp = path.join(bin, `gcb.${String(process.pid)}.tmp`)
+  await symlink('../cache/gcb-client/current/bin/gcb', tmp)
+  await rename(tmp, link)
+  // Only now publish: the directory and its executable are ready.
+  const current = path.join(root, 'current')
+  const previous = await readlink(current).catch(() => undefined)
+  const next = path.join(root, `current.${String(process.pid)}.tmp`)
+  await symlink(identity, next)
+  await rename(next, current)
+  return { current, bin: link, previous, version }
+}
+
+/** Put the client publication back the way it was; best effort, its outcome rides on the failure. */
+async function restoreClient(staged: Awaited<ReturnType<typeof stageClient>>): Promise<string> {
+  try {
+    if (staged.previous === undefined) {
+      await rm(staged.current, { force: true })
+      await rm(staged.bin, { force: true })
+      return 'the staged client was removed again'
+    }
+    const next = `${staged.current}.${String(process.pid)}.tmp`
+    await symlink(staged.previous, next)
+    await rename(next, staged.current)
+    return `the staged client was restored to ${staged.previous}`
+  } catch (error) {
+    return `the staged client could not be restored: ${messageOf(error)}`
+  }
+}
+
 async function updateBroker(
   ctx: OpContext,
   target: 'both' | 'container' | 'host',
@@ -1891,6 +2021,7 @@ async function updateBroker(
   // (idsh's dev image) would otherwise keep the old one after the daemon moves. It goes before the
   // daemon image so a client failure cannot leave the tag the service runs replaced — and before
   // the pin, for the same reason the daemon build is.
+  let stagedClient: Awaited<ReturnType<typeof stageClient>> | undefined
   if (clientImage !== undefined) {
     await step('build the client', () =>
       docker(ctx, ['build', '--target', 'client', '-t', clientImage, '.'], 'tail', {
@@ -1899,17 +2030,23 @@ async function updateBroker(
       }),
     )
     done.push(`client: ${clientImage}`)
+    try {
+      stagedClient = await stageClient(ctx, clientImage)
+      done.push(`client-bin: ${stagedClient.version}`)
+    } catch (error) {
+      done.push(`client-bin: failed — ${messageOf(error)}`)
+    }
   }
-  await step('build', () =>
-    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
-      cwd: checkout,
-      timeoutMs: BUILD_TIMEOUT_MS,
-    }),
-  )
-  done.push('build: ok')
   // The pin comes after a successful build: a build that fails must leave the host broker on the
   // commit it was running, or the two halves diverge in the very state this operation prevents.
   try {
+    await step('build', () =>
+      docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
+        cwd: checkout,
+        timeoutMs: BUILD_TIMEOUT_MS,
+      }),
+    )
+    done.push('build: ok')
     if (hostUpdate) {
       done.push(
         `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
@@ -1968,14 +2105,34 @@ async function updateBroker(
     // State is not reachability: the probe asks the broker through the client the deployment uses, so
     // "updated" means "a push would be issued a credential". It mints a token, so it gets its own
     // budget rather than the ten-second default.
+    // Probe the client dsh actually resolves: the absolute staged path when the state has one,
+    // otherwise the baked client. `docker exec` does not inherit the entrypoint's PATH, so ask the
+    // container which path exists rather than trusting the staging result of this call (an older
+    // staged client can already be published).
+    const stagedBin = '/home/app/.dsh/bin/gcb'
+    const hasStaged = await docker(ctx, ['exec', ctx.container, 'test', '-x', stagedBin], 'head', {
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    }).then(
+      () => true,
+      (error: unknown) => {
+        // `test` exits 1 when the path is absent; anything else (a timeout, a dead docker) is a
+        // failure to answer, not an answer of "no staged client".
+        if (/(?:^|\s)exited with 1(?:\s|$)/u.test(messageOf(error))) {
+          return false
+        }
+        throw error
+      },
+    )
+    const client = hasStaged ? stagedBin : 'gcb'
     await step('probe', () =>
-      docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
+      docker(ctx, ['exec', ctx.container, client, 'probe', '--repo', repo], 'head', {
         timeoutMs: PROBE_TIMEOUT_MS,
       }),
     )
-    done.push(`probe: ${repo} allowed`)
+    done.push(`probe: ${repo} allowed via ${client}`)
     return done.join('; ')
   } catch (error) {
+    const clientNote = stagedClient === undefined ? '' : `${await restoreClient(stagedClient)}; `
     const restoreNote =
       previousImage === undefined || previousImage === ''
         ? 'no running image was recorded, so the tag was not restored'
@@ -1983,11 +2140,11 @@ async function updateBroker(
     // A timed-out request already has its answer, so the restore outcome has no answer to ride on:
     // it goes to the broker's stderr (its log), or an unsuccessful recovery would be silent.
     if (ctx.signal?.aborted === true) {
-      process.stderr.write(`gcb.update: request timed out; ${restoreNote}\n`)
+      process.stderr.write(`gcb.update: request timed out; ${clientNote}${restoreNote}\n`)
     }
     const failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
-    throw new BrokerFault(failure.code, `${failure.message}; ${restoreNote}`)
+    throw new BrokerFault(failure.code, `${failure.message}; ${clientNote}${restoreNote}`)
   }
 }
 
