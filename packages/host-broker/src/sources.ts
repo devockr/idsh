@@ -24,6 +24,7 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -1628,6 +1629,82 @@ async function editAllowlist(
  * which one it was; the container's own state is the last word, because a build that cannot start
  * is not a successful update.
  */
+/**
+ * Put the built client where dsh resolves it: <state>/cache/gcb-client/<version>, a `current`
+ * symlink, and <state>/bin/gcb. Best effort: a failure must not fail the sidecar update.
+ */
+async function stageClient(ctx: OpContext, image: string): Promise<string> {
+  const mount = (
+    await docker(
+      ctx,
+      [
+        'inspect',
+        '--type',
+        'container',
+        '--format',
+        '{{range .Mounts}}{{if eq .Destination "/home/app/.dsh"}}{{.Source}}{{end}}{{end}}',
+        ctx.container,
+      ],
+      'head',
+      { stdoutOnly: true, timeoutMs: GCB_QUERY_TIMEOUT_MS },
+    )
+  ).trim()
+  if (mount === '') {
+    throw new BrokerFault('unavailable', 'the deployment has no /home/app/.dsh mount to stage into')
+  }
+  const version = (
+    await docker(ctx, ['run', '--rm', '--entrypoint', 'gcb', image, '--version'], 'head', {
+      stdoutOnly: true,
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
+  ).trim()
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version)) {
+    throw new BrokerFault('unavailable', 'the client image did not report a version')
+  }
+  const root = path.join(mount, 'cache', 'gcb-client')
+  await mkdir(root, { recursive: true })
+  const uid = process.getuid?.() ?? 0
+  const gid = process.getgid?.() ?? 0
+  // Fixed shell text: the only interpolation is the version matched above. Run as the deployment
+  // user so the staged tree belongs to it.
+  const script = [
+    'set -e',
+    `mkdir -p "/out/${version}/lib/node_modules" "/out/${version}/bin"`,
+    `cp -a /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-core "/out/${version}/lib/node_modules/"`,
+    `ln -sf ../lib/node_modules/gcb-client/bin/gcb.js "/out/${version}/bin/gcb"`,
+    `chmod +x "/out/${version}/bin/gcb"`,
+  ].join('\n')
+  await docker(
+    ctx,
+    [
+      'run',
+      '--rm',
+      '--user',
+      `${String(uid)}:${String(gid)}`,
+      '-v',
+      `${root}:/out`,
+      '--entrypoint',
+      'sh',
+      image,
+      '-c',
+      script,
+    ],
+    'tail',
+    { timeoutMs: BUILD_TIMEOUT_MS },
+  )
+  const current = path.join(root, 'current')
+  const next = path.join(root, `current.${String(process.pid)}.tmp`)
+  await symlink(version, next)
+  await rename(next, current)
+  const bin = path.join(mount, 'bin')
+  await mkdir(bin, { recursive: true })
+  const link = path.join(bin, 'gcb')
+  const tmp = path.join(bin, `gcb.${String(process.pid)}.tmp`)
+  await symlink('../cache/gcb-client/current/bin/gcb', tmp)
+  await rename(tmp, link)
+  return version
+}
+
 async function updateBroker(
   ctx: OpContext,
   target: 'both' | 'container' | 'host',
@@ -1899,6 +1976,11 @@ async function updateBroker(
       }),
     )
     done.push(`client: ${clientImage}`)
+    try {
+      done.push(`client-bin: ${await stageClient(ctx, clientImage)}`)
+    } catch (error) {
+      done.push(`client-bin: failed — ${messageOf(error)}`)
+    }
   }
   await step('build', () =>
     docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
