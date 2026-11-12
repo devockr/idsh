@@ -573,6 +573,9 @@ function diskUsage(ctx: OpContext): Promise<string> {
 const MAX_LOG_LINES = 1000
 const DEFAULT_LOG_LINES = 100
 
+/** Docker names are not allowed to start with an option dash. */
+const DOCKER_CONTAINER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u
+
 /** The shape every `run` operation takes: one program, fixed argv. */
 function docker(
   ctx: OpContext,
@@ -3156,6 +3159,79 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['lines'])
       const lines = integer(args, 'lines', 1, MAX_PROC_LINES, DEFAULT_PROC_LINES)
       return procList(ctx, lines)
+    },
+  },
+  {
+    name: 'docker.ps',
+    summary: "The host's containers: names, images, state and status, read with docker ps.",
+    input: {
+      type: 'object',
+      properties: {
+        all: {
+          type: 'boolean',
+          description: 'Include stopped containers; default false (running only).',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['all'])
+      const all = args['all']
+      if (all !== undefined && typeof all !== 'boolean') {
+        throw new BrokerFault('bad-argument', 'all must be a boolean')
+      }
+      return docker(
+        ctx,
+        [
+          'ps',
+          ...(all === true ? ['--all'] : []),
+          '--format',
+          '{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}',
+        ],
+        'head',
+        { stdoutOnly: true },
+      )
+    },
+  },
+  {
+    name: 'docker.inspect',
+    summary: "One host container's state, health, restarts and image, projected to fixed fields.",
+    input: {
+      type: 'object',
+      properties: {
+        container: {
+          type: 'string',
+          description: 'Container name or id on the host.',
+        },
+      },
+      required: ['container'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['container'])
+      const container = text(args, 'container', MAX_PATTERN_CHARS)
+      if (container === undefined) {
+        throw new BrokerFault('bad-argument', 'container is required')
+      }
+      if (!DOCKER_CONTAINER_PATTERN.test(container)) {
+        throw new BrokerFault('bad-argument', 'container must be a name or id, not an option')
+      }
+      const line = (
+        await docker(
+          ctx,
+          [
+            'inspect',
+            '--type',
+            'container',
+            '--format',
+            'name={{.Name}} image={{.Config.Image}} id={{.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}} exit={{.State.ExitCode}} oom={{if .State.OOMKilled}}true{{else}}false{{end}} started={{.State.StartedAt}}',
+            container,
+          ],
+          'head',
+          { stdoutOnly: true },
+        )
+      ).trim()
+      return line.replace(/^name=\//u, 'name=')
     },
   },
   {

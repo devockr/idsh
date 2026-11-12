@@ -523,6 +523,8 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'broker.status',
         'broker.update',
         'proc.list',
+        'docker.ps',
+        'docker.inspect',
         'run',
         'disk.usage',
       ],
@@ -6268,5 +6270,54 @@ void test('gcb.update refuses a dirty checkout before it touches either broker',
     })
   } finally {
     await rig.close()
+  }
+})
+
+void test('docker.ps and docker.inspect are read-only projections', async () => {
+  const host = await fakeHost()
+  const dockerPath = path.join(host.root, 'docker')
+  const calls = path.join(host.root, 'docker-calls')
+  await writeFile(
+    dockerPath,
+    [
+      '#!/bin/sh',
+      `printf '%s\n' "$*" >> ${JSON.stringify(calls)}`,
+      'case "$1" in',
+      '  ps) printf "gcb\tcode-vaults/gcb-host:dev\trunning\tUp 2 hours\n" ;;',
+      '  inspect) echo "name=/gcb image=code-vaults/gcb-host:dev id=sha256:abc status=running health=healthy restarts=0 exit=0 oom=false started=2026-11-12T00:00:00Z" ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    dockerPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const ps = await connection.request({ op: 'docker.ps', args: { all: true } })
+    assert.equal(ps.ok, true, JSON.stringify(ps.error))
+    assert.match(ps.result ?? '', /^gcb\tcode-vaults\/gcb-host:dev\trunning\tUp 2 hours$/mu)
+    const inspect = await connection.request({
+      op: 'docker.inspect',
+      args: { container: 'gcb' },
+    })
+    assert.equal(inspect.ok, true, JSON.stringify(inspect.error))
+    assert.match(inspect.result ?? '', /^name=gcb image=code-vaults\/gcb-host:dev/u)
+    assert.match(await readFile(calls, 'utf8'), /ps --all --format/u)
+    assert.match(await readFile(calls, 'utf8'), /inspect --type container --format .*gcb$/mu)
+    // A name is not an option: the argv cannot grow a flag through `container`.
+    const bad = await connection.request({
+      op: 'docker.inspect',
+      args: { container: '-v' },
+    })
+    assert.equal(bad.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
   }
 })
