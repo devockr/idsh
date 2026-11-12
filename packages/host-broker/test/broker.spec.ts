@@ -4444,6 +4444,7 @@ async function gcbRig(
         stub.ps,
         `if [ -e ${JSON.stringify(replaced)} ]; then echo def456; else echo abc123; fi`,
       ),
+      arm('test -x /home/app/.dsh/bin/gcb', undefined, 'exit 1'),
       arm('gcb probe', stub.probe, 'exit 0'),
       arm('inspect --format {{.Image}}', stub.previousImage, 'echo oldimage'),
       arm('tag ', stub.tag, 'exit 0'),
