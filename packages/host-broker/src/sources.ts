@@ -1664,6 +1664,18 @@ async function stageClient(
   if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version)) {
     throw new BrokerFault('unavailable', 'the client image did not report a version')
   }
+  const imageId = (
+    await docker(ctx, ['image', 'inspect', '--format', '{{.Id}}', image], 'head', {
+      stdoutOnly: true,
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
+  ).trim()
+  if (!/^sha256:[0-9a-f]{64}$/u.test(imageId)) {
+    throw new BrokerFault('unavailable', 'the client image has no usable id')
+  }
+  // A dev rebuild keeps the package version but changes the image id; key the immutable tree by
+  // both, or the second build would be dropped as "already published".
+  const identity = `${version}-${imageId.slice('sha256:'.length, 'sha256:'.length + 12)}`
   const root = path.join(mount, 'cache', 'gcb-client')
   await mkdir(root, { recursive: true })
   const uid = process.getuid?.() ?? 0
@@ -1700,7 +1712,7 @@ async function stageClient(
     { timeoutMs: BUILD_TIMEOUT_MS },
   )
   // Publish only a completed directory; an already published version is never overwritten.
-  const versionDir = path.join(root, version)
+  const versionDir = path.join(root, identity)
   try {
     await rename(staged, versionDir)
   } catch (error) {
@@ -1724,7 +1736,7 @@ async function stageClient(
   const current = path.join(root, 'current')
   const previous = await readlink(current).catch(() => undefined)
   const next = path.join(root, `current.${String(process.pid)}.tmp`)
-  await symlink(version, next)
+  await symlink(identity, next)
   await rename(next, current)
   return { current, bin: link, previous, version }
 }
