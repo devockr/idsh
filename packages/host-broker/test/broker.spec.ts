@@ -523,6 +523,8 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'broker.status',
         'broker.update',
         'proc.list',
+        'docker.ps',
+        'docker.inspect',
         'run',
         'disk.usage',
       ],
