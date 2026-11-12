@@ -81,6 +81,8 @@ export interface OpContext {
   readonly ipPath: string
   /** The `ss` client `net.sockets` runs. */
   readonly ssPath: string
+  /** The `systemctl` client `service.status` runs. */
+  readonly systemctlPath: string
   /** The pnpm client `broker.update` runs. */
   readonly pnpmPath: string
   /** The npm client the published-package update runs. */
@@ -575,6 +577,9 @@ const DEFAULT_LOG_LINES = 100
 
 /** Docker names are not allowed to start with an option dash. */
 const DOCKER_CONTAINER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u
+
+/** Systemd unit names; no leading dash, no slash. */
+const SERVICE_UNIT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$/u
 
 /** The shape every `run` operation takes: one program, fixed argv. */
 function docker(
@@ -3159,6 +3164,42 @@ export const OPS: readonly OpDefinition[] = [
       rejectUnknown(args, ['lines'])
       const lines = integer(args, 'lines', 1, MAX_PROC_LINES, DEFAULT_PROC_LINES)
       return procList(ctx, lines)
+    },
+  },
+  {
+    name: 'service.status',
+    summary: "One host service's systemd state, projected to fixed fields.",
+    input: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'The unit name, e.g. sshd or sshd.service.',
+        },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['name'])
+      const name = text(args, 'name', MAX_PATTERN_CHARS)
+      if (name === undefined) {
+        throw new BrokerFault('bad-argument', 'name is required')
+      }
+      if (!SERVICE_UNIT_PATTERN.test(name)) {
+        throw new BrokerFault('bad-argument', 'name must be a unit name, not an option')
+      }
+      return runFixed(
+        ctx,
+        ctx.systemctlPath,
+        [
+          'show',
+          '--no-pager',
+          '--property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,ExecMainStatus',
+          name,
+        ],
+        { stdoutOnly: true, keep: 'head' },
+      )
     },
   },
   {

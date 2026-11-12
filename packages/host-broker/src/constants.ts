@@ -57,6 +57,16 @@ export const DEFAULT_IP = 'ip'
 /** Where `ip` usually lives; the broker takes the first that exists. */
 export const IP_CANDIDATES = ['/usr/bin/ip', '/usr/sbin/ip', '/sbin/ip', '/bin/ip'] as const
 
+/** The systemctl client `service.status` runs, unless the host says otherwise. */
+export const DEFAULT_SYSTEMCTL = 'systemctl'
+
+/** Where `systemctl` usually lives; the broker takes the first that exists. */
+export const SYSTEMCTL_CANDIDATES = [
+  '/usr/bin/systemctl',
+  '/bin/systemctl',
+  '/usr/sbin/systemctl',
+] as const
+
 /** The pnpm client `broker.update` runs, unless the host says otherwise. */
 export const DEFAULT_PNPM = 'pnpm'
 
