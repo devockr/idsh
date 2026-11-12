@@ -2703,16 +2703,26 @@ export const OPS: readonly OpDefinition[] = [
       // would refuse must not reach the person as a question they cannot answer usefully.
       optionalLog(args)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
+      // `deploy.main` builds main; a pinned sha is allowed, a PR is not.
       if (args['for'] === 'deploy.main') {
-        if (args['pr'] !== undefined || args['sha'] !== undefined) {
+        if (args['pr'] !== undefined) {
           throw new BrokerFault(
             'bad-argument',
-            'deploy.main resolves main; give pr or sha to deploy.build instead',
+            'deploy.main resolves main; give pr to deploy.build instead',
           )
         }
+        const pin = args['sha']
+        if (pin !== undefined && (typeof pin !== 'string' || !COMMIT_ID.test(pin))) {
+          throw new BrokerFault('bad-argument', 'sha must be a full 40-character commit sha')
+        }
         const main = await resolveMainSource(ctx, deadline)
-        return `main at ${main.sha}`
+        if (typeof pin === 'string' && pin !== main.sha) {
+          throw new BrokerFault(
+            'unavailable',
+            'main moved since the pin was taken; preview again before building',
+          )
+        }
+        return 'main'
       }
       // A base build takes no source: its root surface is main's, so a pr/sha would name an image
       // that does not contain it. The preview says main, exactly like a deploy.main preview.
@@ -2721,13 +2731,13 @@ export const OPS: readonly OpDefinition[] = [
         if (args['pr'] !== undefined || args['sha'] !== undefined) {
           throw new BrokerFault('bad-argument', 'target base builds main; do not pass pr or sha')
         }
-        const main = await resolveMainSource(ctx, deadline)
-        return `main at ${main.sha} (base build)`
+        await resolveMainSource(ctx, deadline)
+        return 'main (base build)'
       }
       // Anything else is `deploy.build`, which refuses a request without one of the two — the
       // preview refuses it too, so the person is never asked about a build that cannot start.
       const source = await resolveBuildSource(ctx, args, deadline)
-      return `${source.label} at ${source.sha}; main at ${source.mainSha}`
+      return `${source.label}; root files from main`
     },
   },
   {
@@ -3344,7 +3354,12 @@ async function resolveBuildSource(
         `the head of PR ${String(pr)} is not on an origin branch; fork PRs are not deployable`,
       )
     }
-    return { sha: resolved, mainSha: main, label: `PR #${String(pr)}` }
+    const branch = heads.find(entry => entry.sha === resolved)?.ref.replace(/^refs\/heads\//u, '')
+    return {
+      sha: resolved,
+      mainSha: main,
+      label: branch === undefined ? `PR #${String(pr)}` : `PR #${String(pr)} (${branch})`,
+    }
   }
   if (typeof sha !== 'string' || !SHA_PATTERN.test(sha)) {
     throw new BrokerFault('bad-argument', 'sha must be a hex commit id')
@@ -3359,7 +3374,12 @@ async function resolveBuildSource(
   if (matches.length > 1) {
     throw new BrokerFault('bad-argument', `sha ${sha} matches more than one origin branch`)
   }
-  return { sha: matches[0], mainSha: main, label: `sha ${sha}` }
+  const branch = heads.find(entry => entry.sha === matches[0])?.ref.replace(/^refs\/heads\//u, '')
+  return {
+    sha: matches[0] ?? '',
+    mainSha: main,
+    label: branch === undefined ? 'an origin branch' : `branch ${branch}`,
+  }
 }
 
 /** The tip of main, resolved like any other source. */
