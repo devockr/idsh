@@ -48,6 +48,13 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   repository's scripts, and neither is the image. Local helpers live outside the repository, in a
   `tasks/` directory inside that state directory; verification helpers stay on the machine that
   runs them.
+- **Runtime tools live under the state directory.** A tool installed at
+  `~/.dsh/cache/<tool>/<version>/` gets a `current` symlink to the version in use, and
+  `~/.dsh/bin` is on `PATH` for the unprivileged dsh process (set by `entrypoint.sh` after the
+  privilege drop, never for root startup commands): link `~/.dsh/bin/<tool>` to
+  `../cache/<tool>/current/bin/<tool>`, so replacing `current` takes effect on the next invocation
+  without rebuilding the image. Keep the link generic — one name per tool — instead of teaching
+  the image about a particular tool.
 - **The broker socket is the only GitHub credential route.** With `GIT_BROKER_SOCKET` naming a
   mounted socket, `entrypoint.sh` runs `gcb setup` as the deployment user before dsh: git then asks
   the host's credential broker at push time, and nothing in this container holds a token. Without
