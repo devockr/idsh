@@ -26,6 +26,8 @@ import {
   DEFAULT_PNPM,
   DRAIN_TIMEOUT_MS,
   DEFAULT_SS,
+  DEFAULT_SYSTEMCTL,
+  SYSTEMCTL_CANDIDATES,
   IP_CANDIDATES,
   SS_CANDIDATES,
   DIRECTORY_MODE,
@@ -83,6 +85,8 @@ export interface BrokerOptions {
   readonly ipPath?: string
   /** The `ss` client `net.sockets` runs. Default: the first of the usual locations that exists. */
   readonly ssPath?: string
+  /** The `systemctl` client `service.status` runs. Default: the first usual location that exists. */
+  readonly systemctlPath?: string
   /** The pnpm client `broker.update` runs. Default `pnpm`, resolved through the host's PATH. */
   readonly pnpmPath?: string
   /** The npm client the published-package update runs. Default `npm`. */
@@ -204,6 +208,8 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
   const gitPath = options.gitPath ?? DEFAULTS.gitPath
   const ipPath = options.ipPath ?? (await firstExisting(IP_CANDIDATES)) ?? DEFAULT_IP
   const ssPath = options.ssPath ?? (await firstExisting(SS_CANDIDATES)) ?? DEFAULT_SS
+  const systemctlPath =
+    options.systemctlPath ?? (await firstExisting(SYSTEMCTL_CANDIDATES)) ?? DEFAULT_SYSTEMCTL
   const checkout = await optionalPath(options.checkout, '--checkout', 'directory')
   const gcbCheckout = await optionalPath(options.gcbCheckout, '--gcb-checkout', 'directory')
   // Kept absent when it was not given: only `gcb.update`'s host half reads it, and it resolves the
@@ -259,6 +265,7 @@ export async function startBroker(options: BrokerOptions): Promise<RunningBroker
     gitPath,
     ipPath,
     ssPath,
+    systemctlPath,
     pnpmPath,
     npmPath,
     entryPath,

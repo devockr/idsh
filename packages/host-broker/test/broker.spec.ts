@@ -523,6 +523,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'broker.status',
         'broker.update',
         'proc.list',
+        'service.status',
         'docker.ps',
         'docker.inspect',
         'docker.logs',
@@ -6324,6 +6325,55 @@ void test('docker.ps and docker.inspect are read-only projections', async () => 
     const bad = await connection.request({
       op: 'docker.inspect',
       args: { container: '-v' },
+    })
+    assert.equal(bad.error?.code, 'bad-argument')
+  } finally {
+    connection.close()
+    await broker.close()
+  }
+})
+
+void test('service.status projects one systemd unit', async () => {
+  const host = await fakeHost()
+  const systemctlPath = path.join(host.root, 'systemctl')
+  const calls = path.join(host.root, 'systemctl-calls')
+  await writeFile(
+    systemctlPath,
+    [
+      '#!/bin/sh',
+      `printf '%s\n' "$*" >> ${JSON.stringify(calls)}`,
+      'printf "MainPID=10757\nExecMainStatus=0\nId=sshd.service\nLoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\n"',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
+  const broker = await startBroker({
+    socketPath: host.socketPath,
+    auditPath: host.auditPath,
+    logDir: host.logDir,
+    procDir: host.procDir,
+    systemctlPath,
+  })
+  const connection = client(host.socketPath)
+  try {
+    const answer = await connection.request({
+      op: 'service.status',
+      args: { name: 'sshd' },
+    })
+    assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.match(answer.result ?? '', /^ActiveState=active$/mu)
+    assert.match(answer.result ?? '', /^UnitFileState=enabled$/mu)
+    assert.match(await readFile(calls, 'utf8'), /show --no-pager --property=.* sshd$/mu)
+    // A well-formed literal escape reaches systemctl unchanged.
+    const escaped = await connection.request({
+      op: 'service.status',
+      args: { name: 'foo\\x2dbar' },
+    })
+    assert.equal(escaped.ok, true, JSON.stringify(escaped.error))
+    assert.match(await readFile(calls, 'utf8'), /foo\\x2dbar$/mu)
+    const bad = await connection.request({
+      op: 'service.status',
+      args: { name: '-v' },
     })
     assert.equal(bad.error?.code, 'bad-argument')
   } finally {
