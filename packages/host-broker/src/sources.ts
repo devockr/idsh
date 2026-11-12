@@ -37,6 +37,8 @@ import {
   FILE_MODE,
   GCB_HOST_POLL_MS,
   GCB_HOST_WAIT_MS,
+  AUTHORIZE_TIMEOUT_MS,
+  AUTHORIZE_MARGIN_MS,
   GCB_PULL_TIMEOUT_MS,
   MAX_ERROR_CHARS,
   MAX_EXEC_BUFFER_BYTES,
@@ -1989,6 +1991,101 @@ async function updateBroker(
   }
 }
 
+/* ---------------------------------------------------------- gcb.authorize */
+
+/**
+ * Authorize the credential broker as a person, on the host.
+ *
+ * Gcb-host 0.9.0 serializes this write with the daemon's own renewal through `user.refresh.lock`,
+ * so a running sidecar needs no stop; the lock directory must be mounted with the token. The
+ * device-flow code and the completion go to the same per-call log a build uses, so a job can follow
+ * it: the code is useful before the command returns, which a single request/answer cannot carry.
+ * The token itself is never read here; gcb writes it beside the configuration.
+ */
+async function authorizeBroker(ctx: OpContext, logId: string | undefined): Promise<string> {
+  const deployDir = await hostDeployDir(ctx, 'gcb.authorize')
+  const config = path.join(deployDir, 'config', 'broker.config.yml')
+  const configured = await stat(config).catch(() => null)
+  if (configured === null || !configured.isFile()) {
+    throw new BrokerFault('unavailable', `gcb.authorize: ${config} is not there`)
+  }
+  const uid = process.getuid?.()
+  if (uid !== undefined && configured.uid !== uid) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.authorize: ${config} is owned by uid ${String(configured.uid)}, not ${String(uid)}; chown the config and token to the deployment user first`,
+    )
+  }
+  const cli = path.join(deployDir, 'app', 'packages', 'host', 'bin', 'gcb.js')
+  const staged = await stat(cli).catch(() => null)
+  if (staged === null || !staged.isFile()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.authorize: ${cli} is not staged; run gcb.update (target host, or both) first`,
+    )
+  }
+  const lockModule = await stat(
+    path.join(deployDir, 'app', 'packages', 'host', 'src', 'token-lock.ts'),
+  ).catch(() => null)
+  if (lockModule === null || !lockModule.isFile()) {
+    throw new BrokerFault(
+      'unavailable',
+      'gcb.authorize: the staged gcb-host has no token lock; run gcb.update (target host, or both)',
+    )
+  }
+  const lock = path.join(deployDir, 'user.refresh.lock')
+  const lockState = await stat(lock).catch(() => null)
+  if (lockState === null || !lockState.isDirectory()) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.authorize: ${lock} is missing or not a directory; create it with mkdir -p and mount it with user.refresh (see docker-compose.broker.yml)`,
+    )
+  }
+  if (uid !== undefined && lockState.uid !== uid) {
+    throw new BrokerFault(
+      'unavailable',
+      `gcb.authorize: ${lock} is owned by uid ${String(lockState.uid)}, not ${String(uid)}; chown it to the deployment user`,
+    )
+  }
+  const logPath = path.join(ctx.stateDir, logId === undefined ? 'build.log' : `build-${logId}.log`)
+  const log = await openAppendLog(logPath)
+  try {
+    await log.chmod(FILE_MODE)
+    await log.write('authorize: starting the device flow\n')
+  } finally {
+    await log.close()
+  }
+  if (ctx.signal?.aborted === true) {
+    throw new BrokerFault('unavailable', 'gcb.authorize: the request was cancelled')
+  }
+  const target = path.join(deployDir, 'user.refresh')
+  try {
+    await runFixed(
+      ctx,
+      process.execPath,
+      [
+        '--conditions=development',
+        cli,
+        'authorize',
+        '--broker-container',
+        '--config',
+        config,
+        '--to',
+        target,
+      ],
+      { cwd: deployDir, logPath, timeoutMs: AUTHORIZE_TIMEOUT_MS },
+    )
+  } catch (error) {
+    // Keep the runner's code (a timeout is not "unavailable") and point at the log, so a
+    // deployment without the job registry still knows where the device-flow code went.
+    throw new BrokerFault(
+      error instanceof BrokerFault ? error.code : 'unavailable',
+      `gcb.authorize: ${messageOf(error)}; see ${logPath}`,
+    )
+  }
+  return `authorized the credential broker; the device-flow code is in ${logPath}`
+}
+
 /* ------------------------------------------------------------------ gcb.update (host half) */
 
 /**
@@ -2625,6 +2722,40 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
 
+  {
+    name: 'gcb.authorize',
+    summary:
+      'Authorize the credential broker as a person: run the device flow on the host and let gcb replace the token under its lock.',
+    confirm: true,
+    serial: true,
+    // The child timer, plus room for the answer to be written after it fires.
+    timeoutMs: AUTHORIZE_TIMEOUT_MS + AUTHORIZE_MARGIN_MS,
+    // The staged tree is what the operation runs; the checkout is not required. Without this the
+    // confirmation is asked before the broker can say the tree is missing.
+    available: ctx => {
+      try {
+        const dir = ctx.gcbDeployDir ?? defaultDeployDir()
+        return existsSync(path.join(dir, 'app', 'packages', 'host', 'bin', 'gcb.js'))
+      } catch {
+        return false
+      }
+    },
+    input: {
+      type: 'object',
+      properties: {
+        log: {
+          type: 'string',
+          pattern: '^[\\w-]{1,64}$',
+          description: 'The log id a job follows; the broker picks one when omitted.',
+        },
+      },
+      additionalProperties: false,
+    },
+    run(args, ctx) {
+      rejectUnknown(args, ['log'])
+      return authorizeBroker(ctx, optionalLog(args))
+    },
+  },
   {
     name: 'gcb.update',
     summary:

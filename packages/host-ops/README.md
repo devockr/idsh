@@ -53,7 +53,7 @@ the deployment's to mount; this package names nothing else.
 
 ## Long deploys as jobs
 
-`deploy.build` and `deploy.main` take minutes, so with the job registry the deployment
+`deploy.build`, `deploy.main` and `gcb.authorize` take minutes, so with the job registry the deployment
 provides (`ctx.get('jobs')`) the tool starts a `deploy` job and answers with its id at once:
 the broker keeps building, the job pulls the broker's `build-<log>.log` into its output
 ring, and the UI streams it while `job_output` reads it.

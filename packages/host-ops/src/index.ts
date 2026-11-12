@@ -26,10 +26,13 @@ const asAnswer = (value: unknown): BrokerAnswer => {
 /** A little longer than the broker's own deadline, so its answer, not ours, is the verdict. */
 const OP_TIMEOUT_SLACK_MS = 5000
 
-/** Operations whose log a job can follow: a build writes one, an update does not. */
+/**
+ * Operations whose log a job can follow: a build or an authorization writes one, an update does
+ * not.
+ */
 let logSequence = 0
 
-const FOLLOWS_BUILD_LOG = new Set(['deploy.build', 'deploy.main'])
+const FOLLOWS_BUILD_LOG = new Set(['deploy.build', 'deploy.main', 'gcb.authorize'])
 
 /** The option that approves a destructive operation. */
 const CONFIRM_OPTION = 'Run'

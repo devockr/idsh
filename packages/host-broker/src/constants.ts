@@ -102,6 +102,12 @@ export const RECREATE_POLL_MS = 2_000
  */
 export const GCB_HOST_WAIT_MS = 300_000
 
+/** 16 minutes: GitHub's 15-minute device-flow window plus a margin. */
+export const AUTHORIZE_TIMEOUT_MS = 960_000
+
+/** Room for the answer to be written after the device-flow timer fires. */
+export const AUTHORIZE_MARGIN_MS = 10_000
+
 /** How often that wait looks at the pid file and the staged export. */
 export const GCB_HOST_POLL_MS = 2_000
 

@@ -23,6 +23,16 @@
 #     read_only: false       # the broker rotates the token on every exchange
 #     bind:
 #       create_host_path: false
+#   - type: bind
+#     source: ${GCB_DEPLOY_DIR:-${HOME}/.broker-host}/user.refresh.lock
+#     target: /etc/git-cred-broker/user.refresh.lock
+#     read_only: false       # gcb 0.9.0 serializes renewal and authorize here
+#     bind:
+#       create_host_path: false
+#
+# Create that lock directory first (mkdir -p ~/.broker-host/user.refresh.lock), and recreate the
+# sidecar after adding the mount: a container created before it has no writable user.refresh.lock
+# (its root filesystem is read-only), and every renewal would fail.
 services:
   dsh:
     environment:
