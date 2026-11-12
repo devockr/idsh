@@ -2730,6 +2730,16 @@ export const OPS: readonly OpDefinition[] = [
     serial: true,
     // The child timer, plus room for the answer to be written after it fires.
     timeoutMs: AUTHORIZE_TIMEOUT_MS + AUTHORIZE_MARGIN_MS,
+    // The staged tree is what the operation runs; the checkout is not required. Without this the
+    // confirmation is asked before the broker can say the tree is missing.
+    available: ctx => {
+      try {
+        const dir = ctx.gcbDeployDir ?? defaultDeployDir()
+        return existsSync(path.join(dir, 'app', 'packages', 'host', 'bin', 'gcb.js'))
+      } catch {
+        return false
+      }
+    },
     input: {
       type: 'object',
       properties: {
