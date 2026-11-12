@@ -2112,9 +2112,17 @@ async function updateBroker(
     const stagedBin = '/home/app/.dsh/bin/gcb'
     const hasStaged = await docker(ctx, ['exec', ctx.container, 'test', '-x', stagedBin], 'head', {
       timeoutMs: GCB_QUERY_TIMEOUT_MS,
-    })
-      .then(() => true)
-      .catch(() => false)
+    }).then(
+      () => true,
+      (error: unknown) => {
+        // `test` exits 1 when the path is absent; anything else (a timeout, a dead docker) is a
+        // failure to answer, not an answer of "no staged client".
+        if (/(?:^|\s)exited with 1(?:\s|$)/u.test(messageOf(error))) {
+          return false
+        }
+        throw error
+      },
+    )
     const client = hasStaged ? stagedBin : 'gcb'
     await step('probe', () =>
       docker(ctx, ['exec', ctx.container, client, 'probe', '--repo', repo], 'head', {
