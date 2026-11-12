@@ -1,5 +1,84 @@
 # @idsh/host-broker
 
+## 0.5.0
+
+### Minor Changes
+
+- [#122](https://github.com/devockr/idsh/pull/122) [`1f3014c`](https://github.com/devockr/idsh/commit/1f3014cd334cb42486fc8cad1256c2292caba466) Thanks [@JounQin](https://github.com/JounQin)! - `deploy.build` takes `target: 'base' | 'dev'` (default `dev`). `base` rebuilds `devockr/idsh:base`
+  from `main` only — it refuses `pr`/`sha`, because the root surface those builds use is main's and the
+  base stage reads nothing else — carries the `idsh.keep=1` label so a host prune keeps it, and leaves
+  the `:dev` tag, the rollback record and the sweep alone. A following `dev` build uses that base.
+
+- [#129](https://github.com/devockr/idsh/pull/129) [`0087528`](https://github.com/devockr/idsh/commit/00875286225f5cc5adee574222b471fe4cc7a6b9) Thanks [@JounQin](https://github.com/JounQin)! - `deploy.versions` also probes the running sidecar (`gcb-host`) beside the client and the staged
+  host app, so the three gcb versions are distinguishable in one read.
+
+- [#128](https://github.com/devockr/idsh/pull/128) [`9c2600c`](https://github.com/devockr/idsh/commit/9c2600c47acc07431a7c7dd85275253524882d54) Thanks [@JounQin](https://github.com/JounQin)! - `deploy.versions` now also reports the staged gcb host version beside the client probe, so
+  `gcb: …` is not mistaken for the version the sidecar or the staged tree runs.
+
+- [#119](https://github.com/devockr/idsh/pull/119) [`f61c056`](https://github.com/devockr/idsh/commit/f61c0562124a5aa7d910e035bf69b095481c5fd8) Thanks [@JounQin](https://github.com/JounQin)! - `gcb.allow` edits one credential-broker allowlist entry from the session, through the staged gcb host
+  CLI's typed `config allow add|remove`: the file is written by gcb's atomic replace, so the daemon
+  reloads without a restart, and the entry must be an exact `owner/name` (no glob or URL). The host
+  defaults to `github.com`; the operation is offered when the broker was started with `--gcb-host`,
+  because it runs `<deploy-dir>/app/packages/host/bin/gcb.js` and edits
+  `<deploy-dir>/config/broker.config.yml`.
+
+- [#125](https://github.com/devockr/idsh/pull/125) [`f32df58`](https://github.com/devockr/idsh/commit/f32df58930453ffbaf45f3325ea5e52f87b22a37) Thanks [@JounQin](https://github.com/JounQin)! - `gcb.authorize` runs the credential broker's device flow on the host, with the device-flow code
+  streamed into a followable job log and confirmation required. With gcb-host 0.9.0 the replacement is
+  serialized with the daemon through `user.refresh.lock`, so a running sidecar needs no stop. A flow
+  that fails before the replacement leaves the previous token in place; a timeout can fire after the
+  replacement has already happened, in which case the new token is already installed.
+
+- [#118](https://github.com/devockr/idsh/pull/118) [`cdb8c40`](https://github.com/devockr/idsh/commit/cdb8c405ce2809a817298c6d938629316f0592bd) Thanks [@JounQin](https://github.com/JounQin)! - `gcb.update` can rebuild the credential broker's client image from the same checkout. The daemon and
+  the client were built from different places, so a deployment whose container bakes `gcb-client` (the
+  dev image does) kept the old client after the daemon moved; with `--gcb-client-image <tag>` the
+  operation builds both targets from the pulled commit, the client **before** the daemon image, so a
+  client failure cannot leave the tag the service runs replaced. After a later failure the operation
+  attempts to restore the tag when it recorded a running image — reported when it succeeds, and when
+  the restore itself fails, with the image it was meant to go back to; with no recorded image, or a
+  failed restore, the new tag stays. A client tag equal to the broker image is refused by canonical reference
+  (`docker.io`/`library/` and an implied `latest` included), because the two builds would share a
+  tag. Rebuilding idsh's dev image from the new client is `deploy.build` + `deploy.recreate`.
+
+- [#115](https://github.com/devockr/idsh/pull/115) [`c6b5bfa`](https://github.com/devockr/idsh/commit/c6b5bfa1775b77fd10b6c28c07cbfc507b550986) Thanks [@JounQin](https://github.com/JounQin)! - `gcb.update` now updates **both halves** of the credential broker from one commit, instead of leaving
+  the host-supervised one silently behind.
+  
+  A host broker runs a staged export of the commit in `app.ref`; the containerised one is rebuilt from
+  the checkout. With `--gcb-host`, `gcb.update` refuses a dirty checkout (the two would otherwise run
+  different code while both calling themselves updated), pins the host broker to the commit it built,
+  restarts it, and only answers once the new pid reports that commit — or fails with the log to read.
+  The container half is unchanged and still optional: a host-only deployment passes `--gcb-host` and no
+  compose files. A checkout with local changes is refused before the pull, whichever half is being updated, so the
+  image or the pin always names the commit that was built. The pull is the one network step and does not rewrite the checkout's remote: git uses its
+  configuration, so ssh, HTTPS and the proxy behave exactly as they do for a manual pull. It is not
+  interactive (`GIT_TERMINAL_PROMPT=0`, and `BatchMode` when the operator has not configured an ssh
+  command) and bounded (60 s), because nobody is at a terminal and a network that answers nothing must
+  fail rather than hold the request open.
+  
+  An update is two-phase because the two halves are separate processes: if the container recreate or
+  probe fails after the host half has been pinned, the halves run different commits until `gcb.update`
+  is run again. The failure answer says which half moved, and `target` (`container` or `host`) updates
+  just that half — so the retry does not rebuild the half that already moved. It still pulls the
+  latest commit, so it is for the case where the halves are being moved to that commit; if upstream
+  advanced between the failure and the retry, a bare re-run is what converges both.
+
+- [#132](https://github.com/devockr/idsh/pull/132) [`980405c`](https://github.com/devockr/idsh/commit/980405cf02edb08d4a5e94107eff1d4d02c8aec1) Thanks [@JounQin](https://github.com/JounQin)! - `deploy.main` accepts the main `sha` the preview showed and refuses a main that has moved since,
+  instead of silently building a different commit.
+
+- [#131](https://github.com/devockr/idsh/pull/131) [`a825e63`](https://github.com/devockr/idsh/commit/a825e635e815104433b52af050eb1d75f7bc7417) Thanks [@JounQin](https://github.com/JounQin)! - `gcb.update` stages the client it builds under the deployment state
+  (`cache/gcb-client/<version>`, a `current` symlink, and `bin/gcb`), so a client-only update reaches a
+  running dsh without rebuilding the image or recreating the container.
+
+### Patch Changes
+
+- [#120](https://github.com/devockr/idsh/pull/120) [`f85d5e1`](https://github.com/devockr/idsh/commit/f85d5e10afe77c827fdaf600edd0fd6540be63f0) Thanks [@JounQin](https://github.com/JounQin)! - The audit log is opened nonblocking and bounded, and refuses anything that is not a regular file,
+  so a FIFO cannot hang the request that writes it. A record is appended, never rewritten: a failed
+  append fails the request and leaves earlier records (including ones another broker appended)
+  untouched.
+
+- [#121](https://github.com/devockr/idsh/pull/121) [`1cc16d7`](https://github.com/devockr/idsh/commit/1cc16d736bbe860fbe9bca43d85cfe05b4e62c14) Thanks [@JounQin](https://github.com/JounQin)! - `gcb.update` no longer depends on the checkout's current branch: it fetches `origin` and detaches at
+  `origin/main` before building, so a checkout left on a deleted branch updates instead of failing with
+  `no such ref was fetched`.
+
 ## 0.4.0
 
 ### Minor Changes
