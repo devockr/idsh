@@ -8,6 +8,7 @@
   ],
   "commit": false,
   "access": "public",
+  "format": "oxfmt",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
   "privatePackages": {
