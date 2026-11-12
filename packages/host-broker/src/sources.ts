@@ -2105,10 +2105,22 @@ async function updateBroker(
     // State is not reachability: the probe asks the broker through the client the deployment uses, so
     // "updated" means "a push would be issued a credential". It mints a token, so it gets its own
     // budget rather than the ten-second default.
+    // Probe the client dsh actually resolves: the absolute staged path when one was published,
+    // otherwise the baked client. `docker exec` does not inherit the entrypoint's PATH.
     await step('probe', () =>
-      docker(ctx, ['exec', ctx.container, 'gcb', 'probe', '--repo', repo], 'head', {
-        timeoutMs: PROBE_TIMEOUT_MS,
-      }),
+      docker(
+        ctx,
+        [
+          'exec',
+          ctx.container,
+          stagedClient === undefined ? 'gcb' : '/home/app/.dsh/bin/gcb',
+          'probe',
+          '--repo',
+          repo,
+        ],
+        'head',
+        { timeoutMs: PROBE_TIMEOUT_MS },
+      ),
     )
     done.push(`probe: ${repo} allowed`)
     return done.join('; ')
