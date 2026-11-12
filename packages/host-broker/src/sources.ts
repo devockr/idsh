@@ -578,8 +578,9 @@ const DEFAULT_LOG_LINES = 100
 /** Docker names are not allowed to start with an option dash. */
 const DOCKER_CONTAINER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u
 
-/** Systemd unit names; no leading dash, no slash. */
-const SERVICE_UNIT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$/u
+/** Systemd unit names; no leading dash/slash, with validated literal \xNN escapes. */
+const SERVICE_UNIT_PATTERN = /^(?:[A-Za-z0-9_.@:-]|\\x[0-9A-Fa-f]{2})+$/u
+const MAX_SERVICE_UNIT_CHARS = 128
 
 /** The shape every `run` operation takes: one program, fixed argv. */
 function docker(
@@ -3186,7 +3187,12 @@ export const OPS: readonly OpDefinition[] = [
       if (name === undefined) {
         throw new BrokerFault('bad-argument', 'name is required')
       }
-      if (!SERVICE_UNIT_PATTERN.test(name)) {
+      if (
+        name.length > MAX_SERVICE_UNIT_CHARS ||
+        name.startsWith('-') ||
+        name.includes('/') ||
+        !SERVICE_UNIT_PATTERN.test(name)
+      ) {
         throw new BrokerFault('bad-argument', 'name must be a unit name, not an option')
       }
       return runFixed(

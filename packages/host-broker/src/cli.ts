@@ -25,6 +25,7 @@ The host side of @idsh/host-ops. Run it as the deployment's user, from the host'
   --git <path>           The git client deploy.build runs (default git)
   --ip <path>            The ip client net.status runs (default: the usual locations)
   --ss <path>            The ss client net.sockets runs (default: the usual locations)
+  --systemctl <path>     The systemctl client service.status runs (default: the usual locations)
   --pnpm <path>          The pnpm client broker.update runs (default pnpm)
   --npm <path>           The npm client broker.update runs (default npm)
   --checkout <dir>       The checkout holding docker-compose.yml and docker-compose.dev.yml
@@ -92,6 +93,7 @@ function optionsFrom(
     ...(text('git') === undefined ? {} : { gitPath: text('git') }),
     ...(text('ip') === undefined ? {} : { ipPath: text('ip') }),
     ...(text('ss') === undefined ? {} : { ssPath: text('ss') }),
+    ...(text('systemctl') === undefined ? {} : { systemctlPath: text('systemctl') }),
     ...(text('pnpm') === undefined ? {} : { pnpmPath: text('pnpm') }),
     ...(text('npm') === undefined ? {} : { npmPath: text('npm') }),
     ...(text('checkout') === undefined ? {} : { checkout: text('checkout') }),
@@ -127,6 +129,7 @@ async function main(): Promise<void> {
       git: { type: 'string' },
       ip: { type: 'string' },
       ss: { type: 'string' },
+      systemctl: { type: 'string' },
       pnpm: { type: 'string' },
       npm: { type: 'string' },
       checkout: { type: 'string' },

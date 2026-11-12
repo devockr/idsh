@@ -6364,6 +6364,13 @@ void test('service.status projects one systemd unit', async () => {
     assert.match(answer.result ?? '', /^ActiveState=active$/mu)
     assert.match(answer.result ?? '', /^UnitFileState=enabled$/mu)
     assert.match(await readFile(calls, 'utf8'), /show --no-pager --property=.* sshd$/mu)
+    // A well-formed literal escape reaches systemctl unchanged.
+    const escaped = await connection.request({
+      op: 'service.status',
+      args: { name: 'foo\\x2dbar' },
+    })
+    assert.equal(escaped.ok, true, JSON.stringify(escaped.error))
+    assert.match(await readFile(calls, 'utf8'), /foo\\x2dbar$/mu)
     const bad = await connection.request({
       op: 'service.status',
       args: { name: '-v' },
