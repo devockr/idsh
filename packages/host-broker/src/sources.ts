@@ -2785,7 +2785,11 @@ export const OPS: readonly OpDefinition[] = [
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       // A base build's only inputs are main's root surface; the answer names what was built rather
       // than a source whose files are not in the image.
-      const pinned = takePin('deploy.build', args)
+      const pin = takePin('deploy.build', args)
+      if (pin.kind === 'expired') {
+        throw new BrokerFault('unavailable', 'the preview expired; preview again before building')
+      }
+      const pinned = pin.kind === 'ok' ? pin.source : undefined
       const main =
         target === 'base' ? (pinned ?? (await resolveMainSource(ctx, deadline))) : undefined
       const source =
@@ -2833,7 +2837,12 @@ export const OPS: readonly OpDefinition[] = [
       }
       const checkout = requireCheckout(ctx)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      const pinned = typeof pin === 'string' ? undefined : takePin('deploy.main', args)
+      const resolvedPin =
+        typeof pin === 'string' ? { kind: 'none' as const } : takePin('deploy.main', args)
+      if (resolvedPin.kind === 'expired') {
+        throw new BrokerFault('unavailable', 'the preview expired; preview again before building')
+      }
+      const pinned = resolvedPin.kind === 'ok' ? resolvedPin.source : undefined
       const source = pinned ?? (await resolveMainSource(ctx, deadline))
       if (typeof pin === 'string' && pin !== source.sha) {
         throw new BrokerFault(
@@ -3324,17 +3333,16 @@ function rememberPin(
   SOURCE_PINS.set(pinKey(op, args), { ...source, at: Date.now() })
 }
 
-function takePin(
-  op: 'deploy.build' | 'deploy.main',
-  args: Record<string, unknown>,
-): BuildSource | undefined {
+type PinResult = { kind: 'none' } | { kind: 'ok'; source: BuildSource } | { kind: 'expired' }
+
+function takePin(op: 'deploy.build' | 'deploy.main', args: Record<string, unknown>): PinResult {
   const key = pinKey(op, args)
   const hit = SOURCE_PINS.get(key)
   if (hit === undefined) {
-    return undefined
+    return { kind: 'none' }
   }
   SOURCE_PINS.delete(key)
-  return Date.now() - hit.at > SOURCE_PIN_TTL_MS ? undefined : hit
+  return Date.now() - hit.at > SOURCE_PIN_TTL_MS ? { kind: 'expired' } : { kind: 'ok', source: hit }
 }
 
 function findMain(heads: Array<{ sha: string; ref: string }>): string {
