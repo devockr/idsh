@@ -2459,7 +2459,7 @@ export const OPS: readonly OpDefinition[] = [
         const manifest = JSON.parse(
           await readFile(path.join(dir, 'app', 'packages', 'host', 'package.json'), 'utf8'),
         ) as { version?: unknown }
-        if (typeof manifest.version === 'string') {
+        if (typeof manifest.version === 'string' && /^\S{1,64}$/u.test(manifest.version)) {
           staged = manifest.version
         }
       } catch {

@@ -941,6 +941,11 @@ void test('deploy.versions reads the state and the versions inside the container
     ].join('\n'),
     { mode: 0o755 },
   )
+  await mkdir(path.join(host.root, 'app', 'packages', 'host'), { recursive: true })
+  await writeFile(
+    path.join(host.root, 'app', 'packages', 'host', 'package.json'),
+    JSON.stringify({ version: '0.9.0' }),
+  )
   const broker = await startBroker({
     socketPath: host.socketPath,
     auditPath: host.auditPath,
@@ -948,6 +953,7 @@ void test('deploy.versions reads the state and the versions inside the container
     procDir: host.procDir,
     container: 'web',
     dockerPath,
+    gcbDeployDir: host.root,
   })
   const connection = client(host.socketPath)
   try {
@@ -961,6 +967,7 @@ void test('deploy.versions reads the state and the versions inside the container
     // stdout only: a warning on stderr is not part of the parsed value.
     assert.doesNotMatch(answer.result ?? '', /WARNING/u)
     assert.match(answer.result ?? '', /^gcb: 0\.4\.0$/mu)
+    assert.match(answer.result ?? '', /^gcb-staged: 0\.9\.0$/mu)
     // No argument is accepted; a missing binary is covered by the test below.
     const args = await connection.request({ op: 'deploy.versions', args: { container: 'x' } })
     assert.equal(args.error?.code, 'bad-argument')
@@ -994,11 +1001,13 @@ void test('deploy.versions names an unavailable probe and still answers', async 
     procDir: host.procDir,
     container: 'web',
     dockerPath,
+    gcbDeployDir: host.root,
   })
   const connection = client(host.socketPath)
   try {
     const answer = await connection.request({ op: 'deploy.versions', args: {} })
     assert.equal(answer.ok, true, JSON.stringify(answer.error))
+    assert.doesNotMatch(answer.result ?? '', /^gcb-staged:/mu)
     assert.match(answer.result ?? '', /^dsh: 0\.2\.1-rc\.5$/mu)
     // The cause is the last line of the failure, as runFixed keeps it for docker.
     assert.match(answer.result ?? '', /^gcb: unavailable — the cause is here$/mu)
