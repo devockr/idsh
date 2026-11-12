@@ -1520,6 +1520,9 @@ const GCB_PRELUDE_STEPS = 3
  */
 const GCB_BUILD_STEPS = 3
 
+/** `stageClient` runs three docker probes and one copy before it publishes the client. */
+const GCB_STAGE_QUERIES = 3
+
 /** What `gcb host status` said about the daemon this deployment runs. */
 type HostStatusResult =
   | { config: string }
@@ -3026,11 +3029,13 @@ export const OPS: readonly OpDefinition[] = [
       'Update the credential broker from its checkout: rebuild and recreate its container, and pin the host-supervised broker to the same commit.',
     confirm: true,
     serial: true,
-    // The operation's own deadline has to outlast every step it runs: a pull, a build and a
-    // recreate at the build budget, the probe, and the four local queries, or a slow link turns a
-    // working update into a timeout halfway through it.
+    // The operation's own deadline has to outlast every step it runs: a pull, a build, a client
+    // copy and a recreate at the build budget, three client-staging probes, the probe and the local
+    // queries, or a slow link turns a working update into a timeout halfway through it.
     timeoutMs:
       GCB_BUILD_STEPS * BUILD_TIMEOUT_MS +
+      BUILD_TIMEOUT_MS +
+      GCB_STAGE_QUERIES * STAGE_QUERY_TIMEOUT_MS +
       PROBE_TIMEOUT_MS +
       GCB_QUERIES * GCB_QUERY_TIMEOUT_MS +
       GCB_PRELUDE_STEPS * GCB_QUERY_TIMEOUT_MS +

@@ -43,6 +43,10 @@ const COMMIT_CHARS = 40
 const FLUSH_MS = 700
 /** The probe's bound, and the bound of each local query, as `gcb.update` declares them. */
 const GCB_PROBE_MS = 60_000
+/** The staging probes' own bound. */
+const GCB_STAGE_QUERY_MS = 60_000
+/** Three probes: mount, version, image id. */
+const GCB_STAGE_QUERIES = 3
 /** The bounded pull and the host-broker wait, both part of the declared budget. */
 const GCB_PULL_MS = 60_000
 /** How often the host-half wait looks again; the barrier test relies on it. */
@@ -4875,6 +4879,8 @@ void test('gcb.update pulls, builds the one image and probes the deployment', as
     assert.equal(
       update.timeoutMs,
       3 * BUILD_TIMEOUT_MS +
+        BUILD_TIMEOUT_MS +
+        GCB_STAGE_QUERIES * GCB_STAGE_QUERY_MS +
         GCB_PROBE_MS +
         GCB_QUERY_COUNT * GCB_QUERY_MS +
         GCB_PRELUDE_STEPS * GCB_QUERY_MS +
