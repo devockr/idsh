@@ -1,5 +1,15 @@
 # @idsh/host-ops
 
+## 0.4.0
+
+### Minor Changes
+
+- [#125](https://github.com/devockr/idsh/pull/125) [`f32df58`](https://github.com/devockr/idsh/commit/f32df58930453ffbaf45f3325ea5e52f87b22a37) Thanks [@JounQin](https://github.com/JounQin)! - `gcb.authorize` runs the credential broker's device flow on the host, with the device-flow code
+  streamed into a followable job log and confirmation required. With gcb-host 0.9.0 the replacement is
+  serialized with the daemon through `user.refresh.lock`, so a running sidecar needs no stop. A flow
+  that fails before the replacement leaves the previous token in place; a timeout can fire after the
+  replacement has already happened, in which case the new token is already installed.
+
 ## 0.3.0
 
 ### Minor Changes

@@ -1,5 +1,22 @@
 # @idsh/image
 
+## 0.3.0
+
+### Minor Changes
+
+- [#130](https://github.com/devockr/idsh/pull/130) [`1b8a0d4`](https://github.com/devockr/idsh/commit/1b8a0d4f405337e1e93520db868af3f9e94642d0) Thanks [@JounQin](https://github.com/JounQin)! - Put `/home/app/.dsh/bin` first on `PATH`, so a tool staged under the state directory's
+  `cache/<tool>/<version>` (with a `current` symlink) can be updated without rebuilding the image.
+  `AGENTS.md` records the convention: link `.dsh/bin/<tool>` to `../cache/<tool>/current/bin/<tool>`.
+
+### Patch Changes
+
+- [#124](https://github.com/devockr/idsh/pull/124) [`3424077`](https://github.com/devockr/idsh/commit/3424077dc99f34523693b5168b5f426cd3af6b38) Thanks [@JounQin](https://github.com/JounQin)! - The entrypoint records the package-manager cache locations in user-level config — `cache` in
+  `.npmrc`, `cache-folder` for Yarn Classic, `globalFolder` for Yarn 2/4 and `storeDir` in
+  pnpm's `config.yaml` — inside the mounted state directory, so they survive a rebuild and a
+  project's own setting still wins. A deployment that copied the compose file should add
+  `COREPACK_NPM_REGISTRY` from the example, because `docker exec` does not inherit the entrypoint's
+  export.
+
 ## 0.2.1
 
 ### Patch Changes
