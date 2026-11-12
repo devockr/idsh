@@ -3341,8 +3341,13 @@ function takePin(op: 'deploy.build' | 'deploy.main', args: Record<string, unknow
   if (hit === undefined) {
     return { kind: 'none' }
   }
+  if (Date.now() - hit.at > SOURCE_PIN_TTL_MS) {
+    // Keep the marker: otherwise the next build would silently resolve a new source. Only a new
+    // preview replaces it.
+    return { kind: 'expired' }
+  }
   SOURCE_PINS.delete(key)
-  return Date.now() - hit.at > SOURCE_PIN_TTL_MS ? { kind: 'expired' } : { kind: 'ok', source: hit }
+  return { kind: 'ok', source: hit }
 }
 
 function findMain(heads: Array<{ sha: string; ref: string }>): string {
