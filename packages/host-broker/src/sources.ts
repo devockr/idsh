@@ -2703,16 +2703,27 @@ export const OPS: readonly OpDefinition[] = [
       // would refuse must not reach the person as a question they cannot answer usefully.
       optionalLog(args)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      // `deploy.main` builds main, and its question is about main, so nothing else is accepted.
+      // `deploy.main` builds main; a pinned sha is allowed, a PR is not.
       if (args['for'] === 'deploy.main') {
-        if (args['pr'] !== undefined || args['sha'] !== undefined) {
+        if (args['pr'] !== undefined) {
           throw new BrokerFault(
             'bad-argument',
-            'deploy.main resolves main; give pr or sha to deploy.build instead',
+            'deploy.main resolves main; give pr to deploy.build instead',
           )
         }
+        const pin = args['sha']
+        if (pin !== undefined && (typeof pin !== 'string' || !COMMIT_ID.test(pin))) {
+          throw new BrokerFault('bad-argument', 'sha must be a full 40-character commit sha')
+        }
         const main = await resolveMainSource(ctx, deadline)
-        return `main at ${main.sha}`
+        if (typeof pin === 'string' && pin !== main.sha) {
+          throw new BrokerFault(
+            'unavailable',
+            'main moved since the pin was taken; preview again before building',
+          )
+        }
+        rememberPin('deploy.main', args, main)
+        return 'main'
       }
       // A base build takes no source: its root surface is main's, so a pr/sha would name an image
       // that does not contain it. The preview says main, exactly like a deploy.main preview.
@@ -2722,12 +2733,14 @@ export const OPS: readonly OpDefinition[] = [
           throw new BrokerFault('bad-argument', 'target base builds main; do not pass pr or sha')
         }
         const main = await resolveMainSource(ctx, deadline)
-        return `main at ${main.sha} (base build)`
+        rememberPin('deploy.build', args, main)
+        return 'main (base build)'
       }
       // Anything else is `deploy.build`, which refuses a request without one of the two — the
       // preview refuses it too, so the person is never asked about a build that cannot start.
       const source = await resolveBuildSource(ctx, args, deadline)
-      return `${source.label} at ${source.sha}; main at ${source.mainSha}`
+      rememberPin('deploy.build', args, source)
+      return `${source.label}; root files from main`
     },
   },
   {
@@ -2772,11 +2785,18 @@ export const OPS: readonly OpDefinition[] = [
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       // A base build's only inputs are main's root surface; the answer names what was built rather
       // than a source whose files are not in the image.
-      const main = target === 'base' ? await resolveMainSource(ctx, deadline) : undefined
+      const pin = takePin('deploy.build', args)
+      if (pin.kind === 'expired') {
+        throw new BrokerFault('unavailable', 'the preview expired; preview again before building')
+      }
+      const pinned = pin.kind === 'ok' ? pin.source : undefined
+      const main =
+        target === 'base' ? (pinned ?? (await resolveMainSource(ctx, deadline))) : undefined
       const source =
-        main === undefined
+        pinned ??
+        (main === undefined
           ? await resolveBuildSource(ctx, args, deadline)
-          : { label: 'main', sha: main.sha, mainSha: main.sha }
+          : { label: 'main', sha: main.sha, mainSha: main.sha })
       const mainSha = source.mainSha
       const { previous, failed } = await buildInto(ctx, source, deadline, log, target)
       return target === 'base'
@@ -2787,7 +2807,8 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'deploy.main',
-    summary: 'Build the tip of main as :dev, then recreate the container from it.',
+    summary:
+      'Build the tip of main as :dev, then recreate the container from it; pass the sha the preview showed to refuse a moved main.',
     confirm: true,
     preview: 'deploy.source',
     serial: true,
@@ -2799,15 +2820,36 @@ export const OPS: readonly OpDefinition[] = [
           type: 'string',
           description: 'Log id this build writes as build-<log>.log; the client follows it.',
         },
+        sha: {
+          type: 'string',
+          description:
+            'The main sha the preview showed; a main that has moved since is refused instead of built.',
+        },
       },
       additionalProperties: false,
     },
     async run(args, ctx) {
-      rejectUnknown(args, ['log'])
+      rejectUnknown(args, ['log', 'sha'])
       const log = optionalLog(args)
+      const pin = args['sha']
+      if (pin !== undefined && (typeof pin !== 'string' || !/^[0-9a-f]{40}$/u.test(pin))) {
+        throw new BrokerFault('bad-argument', 'sha must be a full 40-character commit sha')
+      }
       const checkout = requireCheckout(ctx)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      const source = await resolveMainSource(ctx, deadline)
+      const resolvedPin =
+        typeof pin === 'string' ? { kind: 'none' as const } : takePin('deploy.main', args)
+      if (resolvedPin.kind === 'expired') {
+        throw new BrokerFault('unavailable', 'the preview expired; preview again before building')
+      }
+      const pinned = resolvedPin.kind === 'ok' ? resolvedPin.source : undefined
+      const source = pinned ?? (await resolveMainSource(ctx, deadline))
+      if (typeof pin === 'string' && pin !== source.sha) {
+        throw new BrokerFault(
+          'unavailable',
+          'main moved since the preview; preview again before building',
+        )
+      }
       const { previous, failed } = await buildInto(ctx, source, deadline, log)
       const before = await existingContainerId(ctx)
       const expectImage = (await imageId(ctx, BUILD_IMAGE, ctx.execTimeoutMs)) || undefined
@@ -3269,6 +3311,45 @@ interface BuildSource {
   readonly label: string
 }
 
+/** How long a preview's resolution remains the commitment its build uses. */
+const SOURCE_PIN_TTL_MS = 600_000
+
+const SOURCE_PINS = new Map<string, BuildSource & { at: number }>()
+
+function pinKey(op: 'deploy.build' | 'deploy.main', args: Record<string, unknown>): string {
+  return JSON.stringify([
+    op,
+    args['pr'] ?? null,
+    args['sha'] ?? null,
+    op === 'deploy.main' ? 'dev' : (args['target'] ?? 'dev'),
+  ])
+}
+
+function rememberPin(
+  op: 'deploy.build' | 'deploy.main',
+  args: Record<string, unknown>,
+  source: BuildSource,
+): void {
+  SOURCE_PINS.set(pinKey(op, args), { ...source, at: Date.now() })
+}
+
+type PinResult = { kind: 'none' } | { kind: 'ok'; source: BuildSource } | { kind: 'expired' }
+
+function takePin(op: 'deploy.build' | 'deploy.main', args: Record<string, unknown>): PinResult {
+  const key = pinKey(op, args)
+  const hit = SOURCE_PINS.get(key)
+  if (hit === undefined) {
+    return { kind: 'none' }
+  }
+  if (Date.now() - hit.at > SOURCE_PIN_TTL_MS) {
+    // Keep the marker: otherwise the next build would silently resolve a new source. Only a new
+    // preview replaces it.
+    return { kind: 'expired' }
+  }
+  SOURCE_PINS.delete(key)
+  return { kind: 'ok', source: hit }
+}
+
 function findMain(heads: Array<{ sha: string; ref: string }>): string {
   const main = heads.find(entry => entry.ref === 'refs/heads/main')
   if (main === undefined) {
@@ -3328,7 +3409,12 @@ async function resolveBuildSource(
         `the head of PR ${String(pr)} is not on an origin branch; fork PRs are not deployable`,
       )
     }
-    return { sha: resolved, mainSha: main, label: `PR #${String(pr)}` }
+    const branch = heads.find(entry => entry.sha === resolved)?.ref.replace(/^refs\/heads\//u, '')
+    return {
+      sha: resolved,
+      mainSha: main,
+      label: branch === undefined ? `PR #${String(pr)}` : `PR #${String(pr)} (${branch})`,
+    }
   }
   if (typeof sha !== 'string' || !SHA_PATTERN.test(sha)) {
     throw new BrokerFault('bad-argument', 'sha must be a hex commit id')
@@ -3343,7 +3429,12 @@ async function resolveBuildSource(
   if (matches.length > 1) {
     throw new BrokerFault('bad-argument', `sha ${sha} matches more than one origin branch`)
   }
-  return { sha: matches[0], mainSha: main, label: `sha ${sha}` }
+  const branch = heads.find(entry => entry.sha === matches[0])?.ref.replace(/^refs\/heads\//u, '')
+  return {
+    sha: matches[0] ?? '',
+    mainSha: main,
+    label: branch === undefined ? 'an origin branch' : `branch ${branch}`,
+  }
 }
 
 /** The tip of main, resolved like any other source. */

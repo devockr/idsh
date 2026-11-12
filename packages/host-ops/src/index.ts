@@ -633,7 +633,11 @@ async function confirmed(
   // anything to show — an argument-free call is exactly the string `{}`, which reads like a
   // placeholder that failed to fill in — and a resolved source is a block of its own.
   const blocks = [`Run ${op.name} on the host?`]
-  const shown = JSON.stringify(args)
+  // `log` is the job log id and `sha` is a commit id: neither says anything useful to the person
+  // answering the question (the preview already names the branch).
+  const shown = JSON.stringify(
+    Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'log' && key !== 'sha')),
+  )
   if (shown !== '{}') {
     blocks.push(shown)
   }

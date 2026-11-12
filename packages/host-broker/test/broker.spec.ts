@@ -2346,7 +2346,7 @@ esac
     assert.equal(answer.ok, true)
     assert.match(
       answer.result ?? '',
-      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111[^;]*; previous image /u,
+      /^built PR #7 \(feat\) \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111[^;]*; previous image /u,
     )
     const git = await readFile(gitLog, 'utf8')
     assert.match(git, /ls-remote origin refs\/pull\/7\/head/u)
@@ -2675,7 +2675,7 @@ esac
       args: { sha: 'bbbbbbbb' },
     })
     assert.equal(answer.ok, true)
-    assert.match(answer.result ?? '', /^built sha bbbbbbbb/u)
+    assert.match(answer.result ?? '', /^built branch feat \(bbbbbbbb/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     assert.equal(rollback, 'sha256:prev\n')
   } finally {
@@ -5384,15 +5384,14 @@ esac
   try {
     const answered = await connection.request({ op: 'deploy.source', args: { pr: 82 } })
     assert.equal(answered.ok, true, JSON.stringify(answered.error))
-    assert.match(answered.result ?? '', /PR #82 at bbbbbbb22/u)
-    assert.match(answered.result ?? '', /main at aaaaaaaa1/u)
+    assert.match(answered.result ?? '', /^PR #82 \(feat\); root files from main$/u)
     // `deploy.main` builds main, and its preview answers with main alone.
     const main = await connection.request({
       op: 'deploy.source',
       args: { for: 'deploy.main' },
     })
     assert.equal(main.ok, true, JSON.stringify(main.error))
-    assert.equal(main.result, 'main at aaaaaaaa11111111111111111111111111111111')
+    assert.equal(main.result, 'main')
     // A preview resolves refs and nothing else: docker was never called.
     assert.equal(await readFile(dockerLog, 'utf8').catch(() => ''), '')
     // A request that names a source is not a request for main, however it is labelled.
@@ -5401,7 +5400,7 @@ esac
       args: { for: 'deploy.main', pr: 82 },
     })
     assert.equal(mixed.ok, false)
-    assert.match(mixed.error?.message ?? '', /give pr or sha to deploy\.build instead/u)
+    assert.match(mixed.error?.message ?? '', /give pr to deploy\.build instead/u)
     // The whole request is checked, not only the part the preview uses: a `log` the build would
     // refuse must not reach the person as a question.
     const badLog = await connection.request({
