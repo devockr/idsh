@@ -1,5 +1,24 @@
 # @idsh/host-broker
 
+## 0.6.0
+
+### Minor Changes
+
+- [#137](https://github.com/devockr/idsh/pull/137) [`c08440e`](https://github.com/devockr/idsh/commit/c08440effa1284a0559918fc4309a5363a5f06ae) Thanks [@JounQin](https://github.com/JounQin)! - Add `docker.logs`: the bounded tail of a host container's stdout and stderr, read with the fixed
+  `docker logs --tail` invocation and the same container-name validation as `docker.inspect`.
+
+- [#133](https://github.com/devockr/idsh/pull/133) [`fa5b46a`](https://github.com/devockr/idsh/commit/fa5b46aff5f24395b69afe357a56b5c3d72f6ae6) Thanks [@JounQin](https://github.com/JounQin)! - Add `docker.ps` and `docker.inspect`: read-only projections of the host's containers (`ps` output, and
+  one container's state, health, restarts, exit, OOM and image), with no exec and no arbitrary flags.
+
+- [#138](https://github.com/devockr/idsh/pull/138) [`b01e09d`](https://github.com/devockr/idsh/commit/b01e09df2452a94d8428bf617dc18b97a2de8dd5) Thanks [@JounQin](https://github.com/JounQin)! - Add `service.status`: one systemd unit projected to `Id`, load/active/sub state, unit-file state,
+  main PID and exit status, through a fixed `systemctl show --property=…` invocation.
+
+### Patch Changes
+
+- [#139](https://github.com/devockr/idsh/pull/139) [`a2b55c6`](https://github.com/devockr/idsh/commit/a2b55c66b9a70850bce3dae067aedfc1e1f051ba) Thanks [@JounQin](https://github.com/JounQin)! - Give the client-staging probes their own 60 s bound instead of the 10 s local-query bound; a cold
+  `docker run --entrypoint gcb <client> --version` on a NAS image store exceeds 10 s and made
+  `client-bin` fail after a successful client build.
+
 ## 0.5.0
 
 ### Minor Changes
