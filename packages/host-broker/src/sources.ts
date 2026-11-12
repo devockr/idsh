@@ -2385,7 +2385,7 @@ export const OPS: readonly OpDefinition[] = [
   {
     name: 'deploy.versions',
     summary:
-      'What the deployment is running — its state and image, and the dsh and gcb versions inside it.',
+      'What the deployment is running — its state and image, the dsh and gcb versions inside it, and the staged host version.',
     input: { type: 'object', properties: {}, additionalProperties: false },
     // Four docker calls in sequence, so they get their own budget rather than the 10 s default.
     timeoutMs: VERSIONS_TIMEOUT_MS,
@@ -2451,7 +2451,25 @@ export const OPS: readonly OpDefinition[] = [
           probes.push(`${name}: unavailable — ${last}`)
         }
       }
-      return [`${ctx.container}: ${state.trim()}`, ...probes].join('\n')
+      // The sidecar and the staged host app can be a release apart; name the staged version
+      // beside the client probe so one number is not read as the other.
+      let staged: string | undefined
+      try {
+        const dir = ctx.gcbDeployDir ?? defaultDeployDir()
+        const manifest = JSON.parse(
+          await readFile(path.join(dir, 'app', 'packages', 'host', 'package.json'), 'utf8'),
+        ) as { version?: unknown }
+        if (typeof manifest.version === 'string') {
+          staged = manifest.version
+        }
+      } catch {
+        staged = undefined
+      }
+      return [
+        `${ctx.container}: ${state.trim()}`,
+        ...probes,
+        ...(staged === undefined ? [] : [`gcb-staged: ${staged}`]),
+      ].join('\n')
     },
   },
   {
