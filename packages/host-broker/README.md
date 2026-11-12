@@ -102,7 +102,7 @@ request.
 | `broker.update`   | updates the broker where its own entry lives — pull and rebuild from `--checkout`, or install the published package under an npm prefix — then exits for its supervisor                                                                                     |
 | `deploy.status`   | the deployment container: image, creation time and state                                                                                                                                                                                                    |
 | `deploy.log`      | the tail of the deployment container log                                                                                                                                                                                                                    |
-| `deploy.versions` | read-only: the container state and image, the `dsh` and `gcb` versions inside it, and the staged gcb host version                                                                                                                                           |
+| `deploy.versions` | read-only: the container state and image, the `dsh` and `gcb` client versions, the sidecar and staged gcb host versions                                                                                                                                     |
 | `deploy.build`    | builds `:dev` from a PR head or an origin branch tip, keeping the previous image for rollback and reaping the `idsh.keep=1` images it made unnecessary; `target: base` rebuilds `devockr/idsh:base` from `main` instead (no rollback, no sweep)             |
 | `deploy.main`     | builds the tip of `main` as `:dev` and recreates the container from it in the same call                                                                                                                                                                     |
 | `deploy.source`   | resolves a build request — branch tip and `main` sha, or `main` alone — without building; the `preview` of `deploy.build` and `deploy.main`                                                                                                                 |
@@ -142,7 +142,9 @@ inherited one, and `dryRun: true` answers the policy verdict without executing.
 there instead.
 
 `deploy.versions` uses fixed probes — the broker deliberately exposes no arbitrary exec — which
-is why it answers versions rather than arbitrary paths inside the image.
+is why it answers versions rather than arbitrary paths inside the image. The sidecar probe goes
+through the configured compose files (`compose ps -q <service>` then `exec <id> gcb --version`), so
+it names the running broker, not the staged tree.
 
 `deploy.build` takes the six root-surface files from `main` and the rest from the requested commit,
 records the previous image id for `deploy.rollback`, and then removes every `idsh.keep=1` image that

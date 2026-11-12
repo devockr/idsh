@@ -2385,7 +2385,7 @@ export const OPS: readonly OpDefinition[] = [
   {
     name: 'deploy.versions',
     summary:
-      'What the deployment is running — its state and image, the dsh and gcb versions inside it, and the staged host version.',
+      'What the deployment is running — its state and image, the dsh, gcb client, sidecar and staged host versions.',
     input: { type: 'object', properties: {}, additionalProperties: false },
     // Four docker calls in sequence, so they get their own budget rather than the 10 s default.
     timeoutMs: VERSIONS_TIMEOUT_MS,
@@ -2464,6 +2464,41 @@ export const OPS: readonly OpDefinition[] = [
         }
       } catch {
         staged = undefined
+      }
+      // The sidecar is the other half: ask the container that compose runs, not the staged tree.
+      if (ctx.gcbCompose !== undefined && ctx.gcbCheckout !== undefined) {
+        try {
+          const uid = process.getuid?.()
+          const gid = process.getgid?.()
+          const compose = ['compose', ...ctx.gcbCompose.flatMap(file => ['-f', file])]
+          const env: NodeJS.ProcessEnv = {
+            ...(uid === undefined ? {} : { UID: String(uid) }),
+            ...(gid === undefined ? {} : { GID: String(gid) }),
+          }
+          const container = (
+            await docker(ctx, [...compose, 'ps', '-q', ctx.gcbService], 'head', {
+              cwd: ctx.gcbCheckout,
+              stdoutOnly: true,
+              env,
+              timeoutMs: budget(),
+            })
+          )
+            .trim()
+            .split('\n')[0]
+          if (container === '') {
+            probes.push('gcb-host: unavailable — no container')
+          } else {
+            const version = await docker(ctx, ['exec', container, 'gcb', '--version'], 'head', {
+              stdoutOnly: true,
+              timeoutMs: budget(),
+            })
+            probes.push(`gcb-host: ${version.trim()}`)
+          }
+        } catch (error) {
+          const message = messageOf(error).trim()
+          const last = message.split('\n').at(-1) ?? message
+          probes.push(`gcb-host: unavailable — ${last}`)
+        }
       }
       return [
         `${ctx.container}: ${state.trim()}`,
