@@ -2105,24 +2105,23 @@ async function updateBroker(
     // State is not reachability: the probe asks the broker through the client the deployment uses, so
     // "updated" means "a push would be issued a credential". It mints a token, so it gets its own
     // budget rather than the ten-second default.
-    // Probe the client dsh actually resolves: the absolute staged path when one was published,
-    // otherwise the baked client. `docker exec` does not inherit the entrypoint's PATH.
+    // Probe the client dsh actually resolves: the absolute staged path when the state has one,
+    // otherwise the baked client. `docker exec` does not inherit the entrypoint's PATH, so ask the
+    // container which path exists rather than trusting the staging result of this call (an older
+    // staged client can already be published).
+    const stagedBin = '/home/app/.dsh/bin/gcb'
+    const hasStaged = await docker(ctx, ['exec', ctx.container, 'test', '-x', stagedBin], 'head', {
+      timeoutMs: GCB_QUERY_TIMEOUT_MS,
+    })
+      .then(() => true)
+      .catch(() => false)
+    const client = hasStaged ? stagedBin : 'gcb'
     await step('probe', () =>
-      docker(
-        ctx,
-        [
-          'exec',
-          ctx.container,
-          stagedClient === undefined ? 'gcb' : '/home/app/.dsh/bin/gcb',
-          'probe',
-          '--repo',
-          repo,
-        ],
-        'head',
-        { timeoutMs: PROBE_TIMEOUT_MS },
-      ),
+      docker(ctx, ['exec', ctx.container, client, 'probe', '--repo', repo], 'head', {
+        timeoutMs: PROBE_TIMEOUT_MS,
+      }),
     )
-    done.push(`probe: ${repo} allowed`)
+    done.push(`probe: ${repo} allowed via ${client}`)
     return done.join('; ')
   } catch (error) {
     const clientNote = stagedClient === undefined ? '' : `${await restoreClient(stagedClient)}; `
