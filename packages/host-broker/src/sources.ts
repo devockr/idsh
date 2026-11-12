@@ -1665,14 +1665,18 @@ async function stageClient(ctx: OpContext, image: string): Promise<string> {
   await mkdir(root, { recursive: true })
   const uid = process.getuid?.() ?? 0
   const gid = process.getgid?.() ?? 0
-  // Fixed shell text: the only interpolation is the version matched above. Run as the deployment
-  // user so the staged tree belongs to it.
+  const stagedName = `.stage-${String(process.pid)}`
+  const staged = path.join(root, stagedName)
+  const containerStaged = `/out/${stagedName}`
+  await rm(staged, { recursive: true, force: true })
+  // Fixed shell text: the only interpolation is the version matched above and the numeric pid.
+  // Run as the deployment user so the staged tree belongs to it.
   const script = [
     'set -e',
-    `mkdir -p "/out/${version}/lib/node_modules" "/out/${version}/bin"`,
-    `cp -a /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-core "/out/${version}/lib/node_modules/"`,
-    `ln -sf ../lib/node_modules/gcb-client/bin/gcb.js "/out/${version}/bin/gcb"`,
-    `chmod +x "/out/${version}/bin/gcb"`,
+    `mkdir -p "${containerStaged}/lib/node_modules" "${containerStaged}/bin"`,
+    `cp -a /usr/local/lib/node_modules/gcb-client /usr/local/lib/node_modules/gcb-core "${containerStaged}/lib/node_modules/"`,
+    `ln -sf ../lib/node_modules/gcb-client/bin/gcb.js "${containerStaged}/bin/gcb"`,
+    `chmod +x "${containerStaged}/bin/gcb"`,
   ].join('\n')
   await docker(
     ctx,
@@ -1692,16 +1696,32 @@ async function stageClient(ctx: OpContext, image: string): Promise<string> {
     'tail',
     { timeoutMs: BUILD_TIMEOUT_MS },
   )
-  const current = path.join(root, 'current')
-  const next = path.join(root, `current.${String(process.pid)}.tmp`)
-  await symlink(version, next)
-  await rename(next, current)
+  // Publish only a completed directory; an already published version is never overwritten.
+  const versionDir = path.join(root, version)
+  try {
+    await rename(staged, versionDir)
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code === 'EEXIST' ||
+      (error as NodeJS.ErrnoException).code === 'ENOTEMPTY'
+    ) {
+      await rm(staged, { recursive: true, force: true })
+    } else {
+      throw error
+    }
+  }
+  // The executable link first: if this fails, current still names the old client.
   const bin = path.join(mount, 'bin')
   await mkdir(bin, { recursive: true })
   const link = path.join(bin, 'gcb')
   const tmp = path.join(bin, `gcb.${String(process.pid)}.tmp`)
   await symlink('../cache/gcb-client/current/bin/gcb', tmp)
   await rename(tmp, link)
+  // Only now publish: the directory and its executable are ready.
+  const current = path.join(root, 'current')
+  const next = path.join(root, `current.${String(process.pid)}.tmp`)
+  await symlink(version, next)
+  await rename(next, current)
   return version
 }
 
