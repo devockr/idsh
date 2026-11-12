@@ -2346,7 +2346,7 @@ esac
     assert.equal(answer.ok, true)
     assert.match(
       answer.result ?? '',
-      /^built PR #7 \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111[^;]*; previous image /u,
+      /^built PR #7 \(feat\) \(bbbbbbbb2222[^)]*\) as devockr\/idsh:dev; main aaaaaaaa1111[^;]*; previous image /u,
     )
     const git = await readFile(gitLog, 'utf8')
     assert.match(git, /ls-remote origin refs\/pull\/7\/head/u)
@@ -2675,7 +2675,7 @@ esac
       args: { sha: 'bbbbbbbb' },
     })
     assert.equal(answer.ok, true)
-    assert.match(answer.result ?? '', /^built sha bbbbbbbb/u)
+    assert.match(answer.result ?? '', /^built branch feat \(bbbbbbbb/u)
     const rollback = await readFile(path.join(host.root, 'rollback'), 'utf8')
     assert.equal(rollback, 'sha256:prev\n')
   } finally {

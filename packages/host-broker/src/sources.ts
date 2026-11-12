@@ -2722,6 +2722,7 @@ export const OPS: readonly OpDefinition[] = [
             'main moved since the pin was taken; preview again before building',
           )
         }
+        rememberPin('deploy.main', args, main)
         return 'main'
       }
       // A base build takes no source: its root surface is main's, so a pr/sha would name an image
@@ -2731,12 +2732,14 @@ export const OPS: readonly OpDefinition[] = [
         if (args['pr'] !== undefined || args['sha'] !== undefined) {
           throw new BrokerFault('bad-argument', 'target base builds main; do not pass pr or sha')
         }
-        await resolveMainSource(ctx, deadline)
+        const main = await resolveMainSource(ctx, deadline)
+        rememberPin('deploy.build', args, main)
         return 'main (base build)'
       }
       // Anything else is `deploy.build`, which refuses a request without one of the two — the
       // preview refuses it too, so the person is never asked about a build that cannot start.
       const source = await resolveBuildSource(ctx, args, deadline)
+      rememberPin('deploy.build', args, source)
       return `${source.label}; root files from main`
     },
   },
@@ -2782,11 +2785,14 @@ export const OPS: readonly OpDefinition[] = [
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       // A base build's only inputs are main's root surface; the answer names what was built rather
       // than a source whose files are not in the image.
-      const main = target === 'base' ? await resolveMainSource(ctx, deadline) : undefined
+      const pinned = takePin('deploy.build', args)
+      const main =
+        target === 'base' ? (pinned ?? (await resolveMainSource(ctx, deadline))) : undefined
       const source =
-        main === undefined
+        pinned ??
+        (main === undefined
           ? await resolveBuildSource(ctx, args, deadline)
-          : { label: 'main', sha: main.sha, mainSha: main.sha }
+          : { label: 'main', sha: main.sha, mainSha: main.sha })
       const mainSha = source.mainSha
       const { previous, failed } = await buildInto(ctx, source, deadline, log, target)
       return target === 'base'
@@ -2827,11 +2833,12 @@ export const OPS: readonly OpDefinition[] = [
       }
       const checkout = requireCheckout(ctx)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
-      const source = await resolveMainSource(ctx, deadline)
+      const pinned = typeof pin === 'string' ? undefined : takePin('deploy.main', args)
+      const source = pinned ?? (await resolveMainSource(ctx, deadline))
       if (typeof pin === 'string' && pin !== source.sha) {
         throw new BrokerFault(
           'unavailable',
-          `main moved from ${pin} to ${source.sha}; preview again before building`,
+          'main moved since the preview; preview again before building',
         )
       }
       const { previous, failed } = await buildInto(ctx, source, deadline, log)
@@ -3293,6 +3300,41 @@ interface BuildSource {
   /** `main` resolved at the same moment as the source, so the pin cannot drift. */
   readonly mainSha: string
   readonly label: string
+}
+
+/** How long a preview's resolution remains the commitment its build uses. */
+const SOURCE_PIN_TTL_MS = 600_000
+
+const SOURCE_PINS = new Map<string, BuildSource & { at: number }>()
+
+function pinKey(op: 'deploy.build' | 'deploy.main', args: Record<string, unknown>): string {
+  return JSON.stringify([
+    op,
+    args['pr'] ?? null,
+    args['sha'] ?? null,
+    op === 'deploy.main' ? 'dev' : (args['target'] ?? 'dev'),
+  ])
+}
+
+function rememberPin(
+  op: 'deploy.build' | 'deploy.main',
+  args: Record<string, unknown>,
+  source: BuildSource,
+): void {
+  SOURCE_PINS.set(pinKey(op, args), { ...source, at: Date.now() })
+}
+
+function takePin(
+  op: 'deploy.build' | 'deploy.main',
+  args: Record<string, unknown>,
+): BuildSource | undefined {
+  const key = pinKey(op, args)
+  const hit = SOURCE_PINS.get(key)
+  if (hit === undefined) {
+    return undefined
+  }
+  SOURCE_PINS.delete(key)
+  return Date.now() - hit.at > SOURCE_PIN_TTL_MS ? undefined : hit
 }
 
 function findMain(heads: Array<{ sha: string; ref: string }>): string {
