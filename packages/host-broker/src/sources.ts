@@ -1633,7 +1633,10 @@ async function editAllowlist(
  * Put the built client where dsh resolves it: <state>/cache/gcb-client/<version>, a `current`
  * symlink, and <state>/bin/gcb. Best effort: a failure must not fail the sidecar update.
  */
-async function stageClient(ctx: OpContext, image: string): Promise<string> {
+async function stageClient(
+  ctx: OpContext,
+  image: string,
+): Promise<{ current: string; bin: string; previous: string | undefined; version: string }> {
   const mount = (
     await docker(
       ctx,
@@ -1719,10 +1722,28 @@ async function stageClient(ctx: OpContext, image: string): Promise<string> {
   await rename(tmp, link)
   // Only now publish: the directory and its executable are ready.
   const current = path.join(root, 'current')
+  const previous = await readlink(current).catch(() => undefined)
   const next = path.join(root, `current.${String(process.pid)}.tmp`)
   await symlink(version, next)
   await rename(next, current)
-  return version
+  return { current, bin: link, previous, version }
+}
+
+/** Put the client publication back the way it was; best effort, its outcome rides on the failure. */
+async function restoreClient(staged: Awaited<ReturnType<typeof stageClient>>): Promise<string> {
+  try {
+    if (staged.previous === undefined) {
+      await rm(staged.current, { force: true })
+      await rm(staged.bin, { force: true })
+      return 'the staged client was removed again'
+    }
+    const next = `${staged.current}.${String(process.pid)}.tmp`
+    await symlink(staged.previous, next)
+    await rename(next, staged.current)
+    return `the staged client was restored to ${staged.previous}`
+  } catch (error) {
+    return `the staged client could not be restored: ${messageOf(error)}`
+  }
 }
 
 async function updateBroker(
@@ -1988,6 +2009,7 @@ async function updateBroker(
   // (idsh's dev image) would otherwise keep the old one after the daemon moves. It goes before the
   // daemon image so a client failure cannot leave the tag the service runs replaced — and before
   // the pin, for the same reason the daemon build is.
+  let stagedClient: Awaited<ReturnType<typeof stageClient>> | undefined
   if (clientImage !== undefined) {
     await step('build the client', () =>
       docker(ctx, ['build', '--target', 'client', '-t', clientImage, '.'], 'tail', {
@@ -1997,21 +2019,22 @@ async function updateBroker(
     )
     done.push(`client: ${clientImage}`)
     try {
-      done.push(`client-bin: ${await stageClient(ctx, clientImage)}`)
+      stagedClient = await stageClient(ctx, clientImage)
+      done.push(`client-bin: ${stagedClient.version}`)
     } catch (error) {
       done.push(`client-bin: failed — ${messageOf(error)}`)
     }
   }
-  await step('build', () =>
-    docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
-      cwd: checkout,
-      timeoutMs: BUILD_TIMEOUT_MS,
-    }),
-  )
-  done.push('build: ok')
   // The pin comes after a successful build: a build that fails must leave the host broker on the
   // commit it was running, or the two halves diverge in the very state this operation prevents.
   try {
+    await step('build', () =>
+      docker(ctx, ['build', '--target', 'host', '-t', image, '.'], 'tail', {
+        cwd: checkout,
+        timeoutMs: BUILD_TIMEOUT_MS,
+      }),
+    )
+    done.push('build: ok')
     if (hostUpdate) {
       done.push(
         `host: ${await step('pin the host broker', () => pinHostBroker(ctx, deployDir, sha))}`,
@@ -2078,6 +2101,7 @@ async function updateBroker(
     done.push(`probe: ${repo} allowed`)
     return done.join('; ')
   } catch (error) {
+    const clientNote = stagedClient === undefined ? '' : `${await restoreClient(stagedClient)}; `
     const restoreNote =
       previousImage === undefined || previousImage === ''
         ? 'no running image was recorded, so the tag was not restored'
@@ -2089,7 +2113,7 @@ async function updateBroker(
     }
     const failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
-    throw new BrokerFault(failure.code, `${failure.message}; ${restoreNote}`)
+    throw new BrokerFault(failure.code, `${failure.message}; ${clientNote}${restoreNote}`)
   }
 }
 
