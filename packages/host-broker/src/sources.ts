@@ -2787,7 +2787,8 @@ export const OPS: readonly OpDefinition[] = [
   },
   {
     name: 'deploy.main',
-    summary: 'Build the tip of main as :dev, then recreate the container from it.',
+    summary:
+      'Build the tip of main as :dev, then recreate the container from it; pass the sha the preview showed to refuse a moved main.',
     confirm: true,
     preview: 'deploy.source',
     serial: true,
@@ -2799,15 +2800,30 @@ export const OPS: readonly OpDefinition[] = [
           type: 'string',
           description: 'Log id this build writes as build-<log>.log; the client follows it.',
         },
+        sha: {
+          type: 'string',
+          description:
+            'The main sha the preview showed; a main that has moved since is refused instead of built.',
+        },
       },
       additionalProperties: false,
     },
     async run(args, ctx) {
-      rejectUnknown(args, ['log'])
+      rejectUnknown(args, ['log', 'sha'])
       const log = optionalLog(args)
+      const pin = args['sha']
+      if (pin !== undefined && (typeof pin !== 'string' || !/^[0-9a-f]{40}$/u.test(pin))) {
+        throw new BrokerFault('bad-argument', 'sha must be a full 40-character commit sha')
+      }
       const checkout = requireCheckout(ctx)
       const deadline = Date.now() + BUILD_TIMEOUT_MS
       const source = await resolveMainSource(ctx, deadline)
+      if (typeof pin === 'string' && pin !== source.sha) {
+        throw new BrokerFault(
+          'unavailable',
+          `main moved from ${pin} to ${source.sha}; preview again before building`,
+        )
+      }
       const { previous, failed } = await buildInto(ctx, source, deadline, log)
       const before = await existingContainerId(ctx)
       const expectImage = (await imageId(ctx, BUILD_IMAGE, ctx.execTimeoutMs)) || undefined
