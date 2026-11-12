@@ -2109,7 +2109,7 @@ async function updateBroker(
     // A timed-out request already has its answer, so the restore outcome has no answer to ride on:
     // it goes to the broker's stderr (its log), or an unsuccessful recovery would be silent.
     if (ctx.signal?.aborted === true) {
-      process.stderr.write(`gcb.update: request timed out; ${restoreNote}\n`)
+      process.stderr.write(`gcb.update: request timed out; ${clientNote}${restoreNote}\n`)
     }
     const failure =
       error instanceof BrokerFault ? error : new BrokerFault('unavailable', messageOf(error))
