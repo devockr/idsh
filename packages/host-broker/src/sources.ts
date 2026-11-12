@@ -2466,7 +2466,7 @@ export const OPS: readonly OpDefinition[] = [
         staged = undefined
       }
       // The sidecar is the other half: ask the container that compose runs, not the staged tree.
-      if (ctx.gcbCompose !== undefined && ctx.checkout !== undefined) {
+      if (ctx.gcbCompose !== undefined && ctx.gcbCheckout !== undefined) {
         try {
           const uid = process.getuid?.()
           const gid = process.getgid?.()
@@ -2477,7 +2477,7 @@ export const OPS: readonly OpDefinition[] = [
           }
           const container = (
             await docker(ctx, [...compose, 'ps', '-q', ctx.gcbService], 'head', {
-              cwd: ctx.checkout,
+              cwd: ctx.gcbCheckout,
               stdoutOnly: true,
               env,
               timeoutMs: budget(),
