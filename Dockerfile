@@ -1,7 +1,7 @@
 # glibc base (not Alpine): dsh 0.2.x depends on node-addon-require-builtin, whose
 # prebuilt binaries are published for linux-*-gnu only — there is no musl build,
 # so Alpine fails at boot with "No usable native binding found".
-FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS base
+FROM node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS base
 
 # Create the account dsh runs as. Its uid/gid here are placeholders only: the
 # real ones arrive at runtime as PUID/PGID and entrypoint.sh re-points this
@@ -110,7 +110,7 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com/
 # the dev image's apt install, ten minutes of it — for a change dev never uses. Dockerfile.dev
 # copies the client from the broker's own dev image instead.
 RUN --mount=type=cache,id=npm_cache,target=/root/.npm \
-  npm install -g --registry="$NPM_REGISTRY" gcb-client@0.6.0
+  npm install -g --registry="$NPM_REGISTRY" gcb-client@0.10.0
 
 RUN mkdir -p /opt/dsh/home \
   && export HOME=/opt/dsh/home \
