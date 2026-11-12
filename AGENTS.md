@@ -50,7 +50,8 @@ default `NPM_REGISTRY` to the same npmmirror, so naming a public mirror here lea
   runs them.
 - **Runtime tools live under the state directory.** A tool installed at
   `~/.dsh/cache/<tool>/<version>/` gets a `current` symlink to the version in use, and
-  `~/.dsh/bin` is first on `PATH`: link `~/.dsh/bin/<tool>` to
+  `~/.dsh/bin` is on `PATH` for the unprivileged dsh process (set by `entrypoint.sh` after the
+  privilege drop, never for root startup commands): link `~/.dsh/bin/<tool>` to
   `../cache/<tool>/current/bin/<tool>`, so replacing `current` takes effect on the next invocation
   without rebuilding the image. Keep the link generic — one name per tool — instead of teaching
   the image about a particular tool.

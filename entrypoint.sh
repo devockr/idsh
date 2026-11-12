@@ -286,7 +286,8 @@ fi
 # time. It runs as that user, before dsh, and only when the socket is really there —
 # a deployment without the mount keeps its old behaviour and no helper is configured.
 exec setpriv --reuid="$PUID" --regid="$PGID" --clear-groups \
-  sh -c 'if [ -n "${GIT_BROKER_SOCKET:-}" ]; then \
+  sh -c 'export PATH="/home/app/.dsh/bin:$PATH"; \
+         if [ -n "${GIT_BROKER_SOCKET:-}" ]; then \
            i=0; \
            while [ ! -S "$GIT_BROKER_SOCKET" ] && [ "$i" -lt 20 ]; do sleep 0.5; i=$((i + 1)); done; \
            if [ -S "$GIT_BROKER_SOCKET" ]; then \
