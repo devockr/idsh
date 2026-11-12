@@ -3235,6 +3235,39 @@ export const OPS: readonly OpDefinition[] = [
     },
   },
   {
+    name: 'docker.logs',
+    summary: 'The last lines a host container wrote, read with docker logs.',
+    keep: 'tail',
+    input: {
+      type: 'object',
+      properties: {
+        container: {
+          type: 'string',
+          description: 'Container name or id on the host.',
+        },
+        lines: {
+          type: 'integer',
+          description: `How many trailing lines to return, 1 to ${String(MAX_LOG_LINES)}. Default ${String(DEFAULT_LOG_LINES)}.`,
+        },
+      },
+      required: ['container'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      rejectUnknown(args, ['container', 'lines'])
+      const container = text(args, 'container', MAX_PATTERN_CHARS)
+      if (container === undefined) {
+        throw new BrokerFault('bad-argument', 'container is required')
+      }
+      if (!DOCKER_CONTAINER_PATTERN.test(container)) {
+        throw new BrokerFault('bad-argument', 'container must be a name or id, not an option')
+      }
+      const lines = integer(args, 'lines', 1, MAX_LOG_LINES, DEFAULT_LOG_LINES)
+      // No `stdoutOnly`: the container's stderr is part of its log, and runFixed merges it.
+      return docker(ctx, ['logs', '--tail', String(lines), container], 'tail')
+    },
+  },
+  {
     name: 'run',
     summary:
       'Run one declared, read-only binary on the host: an argv parsed against the declaration, never a shell.',

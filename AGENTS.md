@@ -358,7 +358,7 @@ Observe the running thing; do not reason from source.
 
 `ROADMAP.md` is the plan for the next version, and phase 1 is in progress: `packages/host-broker`
 holds the broker's first slice — the read sources (`log.tail`, `proc.read`, `proc.list`,
-`disk.usage`, `net.status`, `net.sockets`, `docker.ps`, `docker.inspect`) and the deploy
+`disk.usage`, `net.status`, `net.sockets`, `docker.ps`, `docker.inspect`, `docker.logs`) and the deploy
 operations (`deploy.status`, `deploy.log`, `deploy.versions`, `deploy.build` (whose `target: base`
 rebuilds `devockr/idsh:base` from main),
 `deploy.main`, `deploy.recreate`, `deploy.rollback`) — plus `run`, the one operation that takes an
