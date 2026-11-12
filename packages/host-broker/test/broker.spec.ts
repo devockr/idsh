@@ -525,6 +525,7 @@ void test('the broker answers, audits, and keeps its socket private', async () =
         'proc.list',
         'docker.ps',
         'docker.inspect',
+        'docker.logs',
         'run',
         'disk.usage',
       ],
@@ -6285,6 +6286,7 @@ void test('docker.ps and docker.inspect are read-only projections', async () => 
       'case "$1" in',
       '  ps) printf "gcb\tcode-vaults/gcb-host:dev\trunning\tUp 2 hours\n" ;;',
       '  inspect) echo "name=/gcb image=code-vaults/gcb-host:dev id=sha256:abc status=running health=healthy restarts=0 exit=0 oom=false started=2026-11-12T00:00:00Z" ;;',
+      '  logs) printf "stdout line\n"; printf "stderr line\n" >&2 ;;',
       'esac',
       '',
     ].join('\n'),
@@ -6308,6 +6310,14 @@ void test('docker.ps and docker.inspect are read-only projections', async () => 
     })
     assert.equal(inspect.ok, true, JSON.stringify(inspect.error))
     assert.match(inspect.result ?? '', /^name=gcb image=code-vaults\/gcb-host:dev/u)
+    const logs = await connection.request({
+      op: 'docker.logs',
+      args: { container: 'gcb', lines: 5 },
+    })
+    assert.equal(logs.ok, true, JSON.stringify(logs.error))
+    // Container stderr is log content, not a warning to hide.
+    assert.match(logs.result ?? '', /stdout line/u)
+    assert.match(logs.result ?? '', /stderr line/u)
     assert.match(await readFile(calls, 'utf8'), /ps --all --format/u)
     assert.match(await readFile(calls, 'utf8'), /inspect --type container --format .*gcb$/mu)
     // A name is not an option: the argv cannot grow a flag through `container`.
