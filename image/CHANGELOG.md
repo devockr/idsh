@@ -1,5 +1,12 @@
 # @idsh/image
 
+## 0.3.1
+
+### Patch Changes
+
+- [#142](https://github.com/devockr/idsh/pull/142) [`bad1d39`](https://github.com/devockr/idsh/commit/bad1d390de1927b93a6a40a0c8b03de9b333d442) Thanks [@renovate](https://github.com/apps/renovate)! - Allow the `@deepseek-ai/dsh` 0.2.2 prerelease line in the peer ranges (`^0.2.2-rc.0`), so the
+  plugins can be installed into an image running `dsh 0.2.2-rc.3`.
+
 ## 0.3.0
 
 ### Minor Changes
