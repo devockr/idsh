@@ -66,7 +66,7 @@ RUN --mount=type=cache,id=apt_cache,target=/var/cache/apt,sharing=locked \
 ARG NPM_REGISTRY=https://registry.npmmirror.com/
 
 RUN --mount=type=cache,id=npm_cache,target=/root/.npm \
-  npm install -g --registry="$NPM_REGISTRY" @deepseek-ai/dsh@0.2.1-rc.5 pnpm@12.18.0
+  npm install -g --registry="$NPM_REGISTRY" @deepseek-ai/dsh@0.2.2-rc.3 pnpm@12.21.0
 
 # This image used to patch dsh's installed JavaScript here: the loopback gate the
 # settings page hides behind, the touch CSS, the home-screen icon, and the composer's
@@ -110,7 +110,7 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com/
 # the dev image's apt install, ten minutes of it — for a change dev never uses. Dockerfile.dev
 # copies the client from the broker's own dev image instead.
 RUN --mount=type=cache,id=npm_cache,target=/root/.npm \
-  npm install -g --registry="$NPM_REGISTRY" gcb-client@0.11.2
+  npm install -g --registry="$NPM_REGISTRY" gcb-client@0.11.4
 
 RUN mkdir -p /opt/dsh/home \
   && export HOME=/opt/dsh/home \

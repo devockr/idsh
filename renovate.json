@@ -24,5 +24,14 @@
       ],
       "datasourceTemplate": "npm"
     }
+  ],
+  "packageRules": [
+    {
+      "description": "Consider every dist-tag of @deepseek-ai/dsh (not only latest), but only stable/rc/beta releases",
+      "matchPackageNames": ["@deepseek-ai/dsh"],
+      "respectLatest": false,
+      "ignoreUnstable": false,
+      "allowedVersions": "/^\\d+\\.\\d+\\.\\d+(?:-(?:rc|beta)\\.\\d+)?$/"
+    }
   ]
 }
