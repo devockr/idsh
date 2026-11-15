@@ -1,5 +1,6 @@
 ---
 "@idsh/host-ops": patch
+"@idsh/image": patch
 "@idsh/mobile": patch
 "@idsh/privileged-ui": patch
 ---
