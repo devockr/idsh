@@ -291,7 +291,7 @@ importers:
         specifier: ^4.0.4 || ^4.0.5-alpha.2
         version: 4.1.0
       '@deepseek-ai/dsh-tools':
-        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1
+        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-rc.0
         version: 0.2.1-rc.5(16852a7dac5cf0f2267aa6fd9d3c15fb)
 
   packages/mobile:
@@ -300,13 +300,13 @@ importers:
         specifier: ^4.0.4 || ^4.0.5-alpha.2
         version: 4.1.0
       '@deepseek-ai/dsh-api-gateway':
-        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1
+        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-rc.0
         version: 0.2.1-rc.5(@deepseek-ai/cordis@4.1.0)
       '@deepseek-ai/dsh-client-connection':
-        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1
+        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-rc.0
         version: 0.2.1-rc.5(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.1.0))
       '@deepseek-ai/dsh-client-modules':
-        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1
+        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-rc.0
         version: 0.2.1-rc.5(@deepseek-ai/cordis@4.1.0)
 
   packages/privileged-ui:
@@ -315,13 +315,13 @@ importers:
         specifier: ^4.0.4 || ^4.0.5-alpha.2
         version: 4.1.0
       '@deepseek-ai/dsh-api-gateway':
-        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1
+        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-rc.0
         version: 0.2.1-rc.5(@deepseek-ai/cordis@4.1.0)
       '@deepseek-ai/dsh-client-connection':
-        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1
+        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-rc.0
         version: 0.2.1-rc.5(@deepseek-ai/cordis@4.1.0)(@deepseek-ai/dsh-scope@0.2.1-rc.5(@deepseek-ai/cordis@4.1.0))
       '@deepseek-ai/dsh-client-modules':
-        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1
+        specifier: ^0.2.0-rc.1 || ^0.2.1-alpha.1 || ^0.2.2-rc.0
         version: 0.2.1-rc.5(@deepseek-ai/cordis@4.1.0)
 
   packages/remote-access: {}
